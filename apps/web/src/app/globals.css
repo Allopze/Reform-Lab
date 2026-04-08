@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+@theme {
+  --color-coral-50: #fef5f3;
+  --color-coral-100: #fde8e3;
+  --color-coral-200: #fcd5cc;
+  --color-coral-300: #f9b4a6;
+  --color-coral-400: #f28b72;
+  --color-coral-500: #e86f50;
+  --color-coral-600: #d45535;
+  --color-coral-700: #b24428;
+  --color-coral-800: #933b24;
+  --color-coral-900: #7a3524;
+
+  --color-sand-50: #faf9f7;
+  --color-sand-100: #f3f1ed;
+  --color-sand-200: #e8e4dc;
+  --color-sand-300: #d9d3c7;
+  --color-sand-400: #c4bbab;
+  --color-sand-500: #b0a593;
+  --color-sand-600: #9a8d7a;
+  --color-sand-700: #807464;
+  --color-sand-800: #6b6155;
+  --color-sand-900: #5a5249;
+
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, -apple-system,
+    sans-serif;
+}
+
+html {
+  background-color: #f8fafc;
+}
+
+body {
+  min-height: 100vh;
+  background-color: #f8fafc;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0,
+    transparent 23px,
+    rgba(214, 220, 228, 0.7) 23px,
+    rgba(214, 220, 228, 0.7) 24px
+  );
+  color: #231f20;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background-color: var(--color-coral-200);
+  color: var(--color-coral-900);
+}
+
+*:focus-visible {
+  outline: 2px solid var(--color-coral-400);
+  outline-offset: 2px;
+}
