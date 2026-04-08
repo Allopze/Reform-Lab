@@ -1,0 +1,70 @@
+services:
+  # Redis is optional. Remove or comment out if not needed.
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    profiles:
+      - redis
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      DATABASE_PATH: "/data/reform.db"
+      MIGRATIONS_PATH: "/app/migrations"
+      STORAGE_BASE_PATH: "/data"
+      CORS_ORIGIN: "http://localhost:3000"
+      LOG_LEVEL: "debug"
+      JWT_SECRET: "${JWT_SECRET:-change-me-in-production}"
+      ARTIFACT_TTL_HOURS: "${ARTIFACT_TTL_HOURS:-24}"
+      ARTIFACT_TTL_HOURS_PDF: "${ARTIFACT_TTL_HOURS_PDF:-48}"
+      ARTIFACT_TTL_HOURS_IMAGE: "${ARTIFACT_TTL_HOURS_IMAGE:-12}"
+      ARTIFACT_TTL_HOURS_DOCUMENT: "${ARTIFACT_TTL_HOURS_DOCUMENT:-24}"
+      ARTIFACT_TTL_HOURS_AUDIO: "${ARTIFACT_TTL_HOURS_AUDIO:-72}"
+      ARTIFACT_TTL_HOURS_VIDEO: "${ARTIFACT_TTL_HOURS_VIDEO:-96}"
+      FEATURE_DISABLE_CAPABILITIES: "${FEATURE_DISABLE_CAPABILITIES:-}"
+      FEATURE_DISABLE_ENGINES: "${FEATURE_DISABLE_ENGINES:-}"
+      # Uncomment to use Redis queue instead of in-process:
+      # REDIS_URL: "redis://redis:6379"
+    volumes:
+      - storage:/data
+
+  # Standalone worker — only needed when using Redis queue.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      DATABASE_PATH: "/data/reform.db"
+      MIGRATIONS_PATH: "/app/migrations"
+      REDIS_URL: "redis://redis:6379"
+      STORAGE_BASE_PATH: "/data"
+      LOG_LEVEL: "debug"
+      ARTIFACT_TTL_HOURS: "${ARTIFACT_TTL_HOURS:-24}"
+      ARTIFACT_TTL_HOURS_PDF: "${ARTIFACT_TTL_HOURS_PDF:-48}"
+      ARTIFACT_TTL_HOURS_IMAGE: "${ARTIFACT_TTL_HOURS_IMAGE:-12}"
+      ARTIFACT_TTL_HOURS_DOCUMENT: "${ARTIFACT_TTL_HOURS_DOCUMENT:-24}"
+      ARTIFACT_TTL_HOURS_AUDIO: "${ARTIFACT_TTL_HOURS_AUDIO:-72}"
+      ARTIFACT_TTL_HOURS_VIDEO: "${ARTIFACT_TTL_HOURS_VIDEO:-96}"
+      FEATURE_DISABLE_CAPABILITIES: "${FEATURE_DISABLE_CAPABILITIES:-}"
+      FEATURE_DISABLE_ENGINES: "${FEATURE_DISABLE_ENGINES:-}"
+    volumes:
+      - storage:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    profiles:
+      - redis
+
+volumes:
+  storage:

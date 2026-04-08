@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth } from "@/lib/auth-context";
 import {
   ChevronDown,
   FolderOpen,
@@ -19,7 +20,8 @@ interface HeaderProps {
 
 export default function Header({ toolbar }: HeaderProps) {
   const pathname = usePathname();
-  const userName = "Allopze";
+  const { user, logout } = useAuth();
+  const userName = user?.name ?? "Invitado";
   const userInitial = userName.slice(0, 1).toUpperCase();
   const menuItems = [
     {
@@ -27,11 +29,15 @@ export default function Header({ toolbar }: HeaderProps) {
       label: "Mis Archivos",
       icon: FolderOpen,
     },
-    {
-      href: "/admin",
-      label: "Panel Admin",
-      icon: Shield,
-    },
+    ...(user?.role === "admin"
+      ? [
+          {
+            href: "/admin",
+            label: "Panel Admin",
+            icon: Shield,
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -105,17 +111,24 @@ export default function Header({ toolbar }: HeaderProps) {
                 );
               })}
               <div className="border-t border-stone-200" />
-              <Link
-                href="/acceso"
-                className="flex w-full items-center gap-3 px-4 py-3 text-left text-[14px] font-medium text-[#ef4339] transition-colors duration-150 hover:bg-stone-50"
-              >
-                {pathname === "/acceso" ? (
-                  <LogIn size={18} strokeWidth={1.9} className="text-[#ef4339]" />
-                ) : (
+              {user ? (
+                <button
+                  type="button"
+                  onClick={logout}
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left text-[14px] font-medium text-[#ef4339] transition-colors duration-150 hover:bg-stone-50"
+                >
                   <LogOut size={18} strokeWidth={1.9} className="text-[#ef4339]" />
-                )}
-                {pathname === "/acceso" ? "Volver al acceso" : "Cerrar sesion"}
-              </Link>
+                  Cerrar sesion
+                </button>
+              ) : (
+                <Link
+                  href="/acceso"
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left text-[14px] font-medium text-[#ef4339] transition-colors duration-150 hover:bg-stone-50"
+                >
+                  <LogIn size={18} strokeWidth={1.9} className="text-[#ef4339]" />
+                  Iniciar sesion
+                </Link>
+              )}
             </div>
           </details>
         </div>

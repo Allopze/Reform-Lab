@@ -1,5 +1,12 @@
 import type { CategoryConfig, CategoryId } from "@/types";
 
+/**
+ * Category definitions for the conversion UI.
+ *
+ * IMPORTANT: `targetFormats` here are UI hints only (shown before a file is uploaded).
+ * After upload, the actual available formats come exclusively from the backend
+ * via GET /api/files/{fileId}/capabilities. Never use these for conversion logic.
+ */
 export const categories: CategoryConfig[] = [
   {
     id: "auto",
@@ -41,7 +48,7 @@ export const categories: CategoryConfig[] = [
     label: "Imágenes",
     icon: "image",
     title: "Transforma imágenes entre formatos sin perder claridad",
-    subtitle: "Convierte entre JPG, PNG, WEBP y más con un solo clic.",
+    subtitle: "Convierte entre JPG, PNG y más con un solo clic.",
     dropzoneText: "Suelta una imagen para convertirla",
     dropzoneHint: "JPG, PNG, WEBP, GIF, BMP, TIFF",
     supportLabel: "hasta 100 MB",
@@ -57,7 +64,6 @@ export const categories: CategoryConfig[] = [
     targetFormats: [
       { value: "png", label: "PNG" },
       { value: "jpg", label: "JPG" },
-      { value: "webp", label: "WEBP" },
       { value: "pdf", label: "PDF" },
     ],
     acceptedMimeTypes: "image/jpeg,image/png,image/webp,image/gif,image/bmp,image/tiff",
@@ -197,4 +203,23 @@ export function detectCategoryIdFromFile(file: File): Exclude<CategoryId, "auto"
 
 export function getCategoryById(id: CategoryId): CategoryConfig {
   return categories.find((c) => c.id === id) ?? categories[0];
+}
+
+export function categoryIdFromDetectedFamily(
+  family: string
+): Exclude<CategoryId, "auto"> | null {
+  switch (family) {
+    case "pdf":
+      return "pdf";
+    case "image":
+      return "images";
+    case "document":
+      return "documents";
+    case "audio":
+      return "audio";
+    case "video":
+      return "video";
+    default:
+      return null;
+  }
 }

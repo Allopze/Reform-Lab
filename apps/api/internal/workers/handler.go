@@ -1,0 +1,259 @@
+package workers
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/allopze/reform-lab/apps/api/internal/capabilities"
+	"github.com/allopze/reform-lab/apps/api/internal/domain"
+	"github.com/allopze/reform-lab/apps/api/internal/observability"
+	"github.com/allopze/reform-lab/apps/api/internal/orchestrator"
+	"github.com/allopze/reform-lab/apps/api/internal/queue"
+	"github.com/allopze/reform-lab/apps/api/internal/repository"
+	"github.com/allopze/reform-lab/apps/api/internal/storage"
+	"github.com/google/uuid"
+	"github.com/rs/zerolog"
+)
+
+// Handler processes conversion tasks by delegating to the appropriate engine.
+type Handler struct {
+	Registry            *Registry
+	Store               storage.Store
+	Artifacts           repository.ArtifactRepository
+	Audit               repository.AuditRepository
+	Orch                *orchestrator.Service
+	Logger              zerolog.Logger
+	Metrics             *observability.Metrics
+	ArtifactTTL         time.Duration
+	ArtifactTTLByFamily map[domain.FormatFamily]time.Duration
+}
+
+// ProcessPayload processes raw task payload bytes. Used by both in-process and Asynq adapters.
+func (h *Handler) ProcessPayload(ctx context.Context, _ string, data []byte) error {
+	var payload queue.TaskPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return fmt.Errorf("unmarshal payload: %w", err)
+	}
+
+	jobID, err := uuid.Parse(payload.JobID)
+	if err != nil {
+		return fmt.Errorf("parse job ID: %w", err)
+	}
+	var userID *uuid.UUID
+	if payload.UserID != "" {
+		parsedUserID, parseErr := uuid.Parse(payload.UserID)
+		if parseErr != nil {
+			return fmt.Errorf("parse user ID: %w", parseErr)
+		}
+		userID = &parsedUserID
+	}
+	fileID, err := uuid.Parse(payload.FileID)
+	if err != nil {
+		return fmt.Errorf("parse file ID: %w", err)
+	}
+
+	logger := h.Logger.With().
+		Str("job_id", payload.JobID).
+		Str("capability_id", payload.CapabilityID).
+		Logger()
+
+	// Mark job as running.
+	if err := h.Orch.MarkRunning(ctx, jobID); err != nil {
+		logger.Error().Err(err).Msg("failed to mark job running")
+		return err
+	}
+
+	start := time.Now()
+	capability := capabilities.ByID(payload.CapabilityID)
+	if capability == nil {
+		return h.fail(ctx, jobID, logger, "resolve capability", fmt.Errorf("capability definition not found"))
+	}
+	if !capabilities.DefaultFlags.Allows(*capability) {
+		return h.fail(ctx, jobID, logger, "feature flag", fmt.Errorf("capability disabled by feature flag"))
+	}
+
+	// Create temp dir for this job.
+	_ = h.Orch.UpdateProgress(ctx, jobID, 20) // preparing workspace
+	tempDir, err := h.Store.CreateTempDir(ctx, payload.JobID)
+	if err != nil {
+		return h.fail(ctx, jobID, logger, "create temp dir", err)
+	}
+	defer h.Store.CleanupTemp(ctx, payload.JobID)
+
+	// Find the engine.
+	_ = h.Orch.UpdateProgress(ctx, jobID, 30) // resolving engine
+	engine, err := h.Registry.Get(payload.CapabilityID)
+	if err != nil {
+		return h.fail(ctx, jobID, logger, "find engine", err)
+	}
+
+	// Execute conversion.
+	_ = h.Orch.UpdateProgress(ctx, jobID, 40) // converting
+	outputPath, err := engine.Execute(ctx, payload.InputPath, tempDir, payload.OutputFormat)
+	if err != nil {
+		return h.fail(ctx, jobID, logger, "execute conversion", err)
+	}
+
+	// Validate output exists and has content.
+	_ = h.Orch.UpdateProgress(ctx, jobID, 70) // validating output
+	info, err := os.Stat(outputPath)
+	if err != nil || info.Size() == 0 {
+		return h.fail(ctx, jobID, logger, "validate output", fmt.Errorf("output file missing or empty"))
+	}
+
+	// Persist artifact.
+	_ = h.Orch.UpdateProgress(ctx, jobID, 80) // saving artifact
+	artifactID := uuid.New()
+	outputFile, err := os.Open(outputPath)
+	if err != nil {
+		return h.fail(ctx, jobID, logger, "open output", err)
+	}
+	defer outputFile.Close()
+
+	fileName := fmt.Sprintf("converted.%s", payload.OutputFormat)
+	storagePath, err := h.Store.SaveArtifact(ctx, artifactID.String(), fileName, outputFile)
+	if err != nil {
+		return h.fail(ctx, jobID, logger, "save artifact", err)
+	}
+
+	now := time.Now().UTC()
+	artifact := domain.Artifact{
+		ID:          artifactID,
+		UserID:      userID,
+		JobID:       jobID,
+		FileID:      fileID,
+		FileName:    fileName,
+		MIMEType:    mimeForFormat(payload.OutputFormat),
+		Size:        info.Size(),
+		StoragePath: storagePath,
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(h.artifactTTL(payload.OutputFormat)),
+	}
+
+	if err := h.Artifacts.Create(ctx, &artifact); err != nil {
+		return h.fail(ctx, jobID, logger, "persist artifact record", err)
+	}
+
+	_ = h.Audit.Create(ctx, &domain.AuditEvent{
+		ID:        uuid.New(),
+		EventType: domain.AuditArtifactCreated,
+		FileID:    &fileID,
+		JobID:     &jobID,
+		Details: map[string]interface{}{
+			"artifactId": artifactID.String(),
+			"fileName":   fileName,
+			"size":       info.Size(),
+		},
+		CreatedAt: now,
+	})
+
+	// Mark succeeded.
+	_ = h.Orch.UpdateProgress(ctx, jobID, 95) // finalizing
+	if err := h.Orch.MarkSucceeded(ctx, jobID, artifactID); err != nil {
+		logger.Error().Err(err).Msg("failed to mark job succeeded")
+		return err
+	}
+
+	duration := time.Since(start).Seconds()
+	h.Metrics.JobsTotal.WithLabelValues(payload.CapabilityID, "succeeded").Inc()
+	h.Metrics.JobDuration.WithLabelValues(payload.CapabilityID).Observe(duration)
+	h.Metrics.ArtifactsTotal.Inc()
+
+	logger.Info().Float64("duration_sec", duration).Msg("conversion succeeded")
+	return nil
+}
+
+func (h *Handler) fail(ctx context.Context, jobID uuid.UUID, logger zerolog.Logger, step string, err error) error {
+	msg := classifyError(step, err)
+	logger.Error().Err(err).Str("step", step).Msg("conversion failed")
+	_ = h.Orch.MarkFailed(ctx, jobID, msg)
+	h.Metrics.JobsTotal.WithLabelValues("", "failed").Inc()
+	return fmt.Errorf("%s: %w", step, err)
+}
+
+// classifyError produces a user-friendly error message from a worker step and Go error.
+func classifyError(step string, err error) string {
+	errText := err.Error()
+	switch {
+	case step == "feature flag":
+		return "Capacidad deshabilitada temporalmente. Intenta más tarde."
+	case step == "find engine":
+		return "Motor de conversión no disponible. Intenta más tarde."
+	case step == "validate output":
+		return "La conversión no produjo un resultado válido."
+	case step == "create temp dir" || step == "save artifact":
+		return "Error de almacenamiento interno. Intenta más tarde."
+	case containsAny(errText, "signal: killed", "context deadline exceeded", "timeout"):
+		return "La conversión excedió el tiempo máximo permitido."
+	case containsAny(errText, "exit status"):
+		return fmt.Sprintf("El motor de conversión falló: %s", errText)
+	default:
+		return fmt.Sprintf("%s: %v", step, err)
+	}
+}
+
+func containsAny(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if len(s) >= len(sub) {
+			for i := 0; i <= len(s)-len(sub); i++ {
+				if s[i:i+len(sub)] == sub {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (h *Handler) artifactTTL(outputFormat string) time.Duration {
+	if ttl, ok := h.ArtifactTTLByFamily[familyForOutputFormat(outputFormat)]; ok && ttl > 0 {
+		return ttl
+	}
+	if h.ArtifactTTL > 0 {
+		return h.ArtifactTTL
+	}
+	return 24 * time.Hour
+}
+
+func familyForOutputFormat(format string) domain.FormatFamily {
+	switch format {
+	case "pdf":
+		return domain.FamilyPDF
+	case "jpg", "png", "webp", "gif", "zip":
+		return domain.FamilyImage
+	case "docx", "txt", "html":
+		return domain.FamilyDocument
+	case "mp3", "wav", "ogg":
+		return domain.FamilyAudio
+	case "mp4", "webm":
+		return domain.FamilyVideo
+	default:
+		return domain.FamilyDocument
+	}
+}
+
+func mimeForFormat(format string) string {
+	m := map[string]string{
+		"pdf":  "application/pdf",
+		"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"txt":  "text/plain",
+		"html": "text/html",
+		"jpg":  "image/jpeg",
+		"png":  "image/png",
+		"webp": "image/webp",
+		"gif":  "image/gif",
+		"mp3":  "audio/mpeg",
+		"wav":  "audio/wav",
+		"ogg":  "audio/ogg",
+		"mp4":  "video/mp4",
+		"webm": "video/webm",
+		"zip":  "application/zip",
+	}
+	if v, ok := m[format]; ok {
+		return v
+	}
+	return "application/octet-stream"
+}

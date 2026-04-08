@@ -26,9 +26,9 @@ export default function Benefits() {
         return (
           <div
             key={b.title}
-            className="flex flex-col items-center gap-2 rounded-xl border border-sand-200 bg-white p-4 text-center"
+            className="flex flex-col items-center gap-2 rounded-xl border border-stone-200 bg-white p-4 text-center"
           >
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sand-100 text-sand-600">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-stone-100 text-stone-600">
               <Icon size={18} strokeWidth={2} aria-hidden="true" />
             </div>
             <p className="text-sm font-medium text-gray-800">{b.title}</p>

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist } from "next/font/google";
+import { AuthProvider } from "@/lib/auth-context";
 import "./globals.css";
 
 const geist = Geist({
@@ -47,7 +48,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es" className={geist.variable}>
-      <body className="min-h-screen font-sans text-stone-950">{children}</body>
+      <body className="min-h-screen font-sans text-stone-950">
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }
