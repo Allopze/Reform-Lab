@@ -1,24 +1,7 @@
 "use client";
 
+import Image from "next/image";
 import { useCallback, useRef, useState } from "react";
-import {
-  FileText,
-  Image,
-  File,
-  Music,
-  Video,
-  Archive,
-} from "lucide-react";
-import type { LucideIcon } from "lucide-react";
-
-const categoryIconMap: Record<string, LucideIcon> = {
-  "file-text": FileText,
-  image: Image,
-  file: File,
-  music: Music,
-  video: Video,
-  archive: Archive,
-};
 
 interface DropzoneProps {
   text: string;
@@ -26,7 +9,6 @@ interface DropzoneProps {
   supportLabel: string;
   detailLabel: string;
   accept: string;
-  icon?: string;
   onFileSelected: (file: File) => void;
 }
 
@@ -36,7 +18,6 @@ export default function Dropzone({
   supportLabel,
   detailLabel,
   accept,
-  icon,
   onFileSelected,
 }: DropzoneProps) {
   const [isDragOver, setIsDragOver] = useState(false);
@@ -89,8 +70,6 @@ export default function Dropzone({
     [handleClick]
   );
 
-  const CategoryIcon = icon ? (categoryIconMap[icon] ?? File) : File;
-
   return (
     <div
       role="button"
@@ -103,11 +82,11 @@ export default function Dropzone({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={`
-        group relative flex min-h-[420px] flex-col cursor-pointer
+        group relative flex min-h-105 flex-col cursor-pointer
         items-center justify-center gap-6 rounded-[28px] border-[3px]
         border-dashed px-8 py-12 text-center
         transition-all duration-200
-        sm:min-h-[520px]
+        sm:min-h-130
         ${
           isDragOver
             ? "border-coral-300 bg-coral-50/50"
@@ -115,23 +94,14 @@ export default function Dropzone({
         }
       `}
     >
-      <div
-        className={`
-          flex h-32 w-32 items-center justify-center rounded-[30px]
-          bg-coral-500 text-white shadow-[0_16px_36px_-28px_rgba(232,111,80,0.65)]
-          transition-colors duration-200
-          ${
-            isDragOver
-              ? "bg-coral-400"
-              : "group-hover:bg-coral-500"
-          }
-        `}
-      >
-        <div className="flex flex-col items-center gap-1">
-          <CategoryIcon size={32} strokeWidth={1.7} aria-hidden="true" />
-          <span className="text-[22px] font-bold tracking-[-0.08em]">RL</span>
-        </div>
-      </div>
+      <Image
+        src="/favicon.svg"
+        alt="Reform Lab"
+        width={148}
+        height={148}
+        className="h-33 w-auto sm:h-37"
+        priority
+      />
 
       <div>
         <p className="text-[34px] font-semibold tracking-tight text-stone-900 sm:text-[38px]">

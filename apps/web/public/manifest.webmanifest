@@ -1,0 +1,21 @@
+{
+  "name": "Reform Lab",
+  "short_name": "Reform Lab",
+  "description": "Conversion de archivos inteligente con deteccion real de formato.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#f8fafc",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/logo-light.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

@@ -3,23 +3,25 @@
 import { categories } from "@/config/categories";
 import type { CategoryId } from "@/types";
 import {
+  Search,
   FileText,
+  Files,
   Image,
   File,
   Music,
   Video,
-  Archive,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useRef, useEffect, useCallback } from "react";
 
 const iconMap: Record<string, LucideIcon> = {
+  search: Search,
   "file-text": FileText,
+  files: Files,
   image: Image,
   file: File,
   music: Music,
   video: Video,
-  archive: Archive,
 };
 
 interface CategoryNavProps {
@@ -76,12 +78,15 @@ export default function CategoryNav({
       role="tablist"
       aria-label="Categorías de conversión"
       onKeyDown={handleKeyDown}
-      className="mx-auto flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-stone-200 bg-white px-1.5 py-1.5 shadow-[0_10px_22px_-20px_rgba(15,23,42,0.18)]"
+      className="flex w-full min-w-0 items-center gap-1 overflow-x-auto rounded-full border border-stone-200 bg-white px-1.5 py-1.5 shadow-[0_10px_22px_-20px_rgba(15,23,42,0.18)] md:justify-between"
       style={{ scrollbarWidth: "none" }}
     >
       {categories.map((cat) => {
         const Icon = iconMap[cat.icon] ?? File;
         const isActive = cat.id === activeCategory;
+        const iconSize = cat.id === "documents" ? 19 : 17;
+        const iconStrokeWidth = cat.id === "documents" ? 2.15 : 2;
+        const widthClass = cat.id === "documents" ? "md:flex-[1.16]" : "md:flex-1";
 
         return (
           <button
@@ -94,8 +99,8 @@ export default function CategoryNav({
             tabIndex={isActive ? 0 : -1}
             onClick={() => onChange(cat.id)}
             className={`
-              flex min-h-10 shrink-0 items-center gap-2 rounded-full px-4 py-2
-              text-[13px] font-medium whitespace-nowrap
+              flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-full px-3.5 py-2 md:min-w-0 ${widthClass}
+              text-[12px] font-medium leading-none whitespace-nowrap sm:text-[13px]
               transition-colors duration-150
               ${
                 isActive
@@ -104,7 +109,12 @@ export default function CategoryNav({
               }
             `}
           >
-            <Icon size={16} strokeWidth={2} aria-hidden="true" />
+            <Icon
+              size={iconSize}
+              strokeWidth={iconStrokeWidth}
+              aria-hidden="true"
+              className="shrink-0"
+            />
             {cat.label}
           </button>
         );

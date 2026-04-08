@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import { CheckCircle2 } from "lucide-react";
 import type { CategoryConfig, FileState } from "@/types";
+import { detectCategoryIdFromFile, getCategoryById } from "@/config/categories";
 import Dropzone from "./dropzone";
 import FormatSelector from "./format-selector";
 import FilePreview from "./file-preview";
@@ -12,24 +13,65 @@ interface ConversionCardProps {
 }
 
 export default function ConversionCard({ category }: ConversionCardProps) {
+  const isAutoCategory = category.id === "auto";
+  const [detectedCategoryId, setDetectedCategoryId] = useState<Exclude<CategoryConfig["id"], "auto"> | null>(null);
   const [fileState, setFileState] = useState<FileState>({ status: "idle" });
   const [outputFormat, setOutputFormat] = useState(
     category.targetFormats[0]?.value ?? ""
   );
-  const detailLabel = `Convierte a ${category.targetFormats
-    .map((format) => format.label)
-    .join(", ")}.`;
+  const detectedCategory = detectedCategoryId
+    ? getCategoryById(detectedCategoryId)
+    : null;
+  const effectiveCategory = isAutoCategory && detectedCategory
+    ? detectedCategory
+    : category;
+  const detailLabel = isAutoCategory
+    ? detectedCategory
+      ? `Detectamos ${detectedCategory.label.toLowerCase()} y habilitamos ${detectedCategory.targetFormats.map((format) => format.label).join(", ")}.`
+      : "Detecta el formato real del archivo y habilita solo conversiones compatibles."
+    : `Convierte a ${effectiveCategory.targetFormats
+        .map((format) => format.label)
+        .join(", ")}.`;
+  const availableTargetFormats = effectiveCategory.targetFormats;
+  const canChooseOutput = availableTargetFormats.length > 0;
 
   const handleFileSelected = useCallback(
     (file: File) => {
+      if (isAutoCategory) {
+        const nextCategoryId = detectCategoryIdFromFile(file);
+
+        if (!nextCategoryId) {
+          setDetectedCategoryId(null);
+          setOutputFormat("");
+          setFileState({
+            status: "error",
+            file,
+            outputFormat: "",
+            message:
+              "No pudimos detectar un formato compatible. Prueba con PDF, imágenes, documentos, audio o video.",
+          });
+          return;
+        }
+
+        const nextCategory = getCategoryById(nextCategoryId);
+        const nextOutputFormat = nextCategory.targetFormats[0]?.value ?? "";
+
+        setDetectedCategoryId(nextCategoryId);
+        setOutputFormat(nextOutputFormat);
+        setFileState({ status: "selected", file, outputFormat: nextOutputFormat });
+        return;
+      }
+
       setFileState({ status: "selected", file, outputFormat });
     },
-    [outputFormat]
+    [isAutoCategory, outputFormat]
   );
 
   const handleRemoveFile = useCallback(() => {
+    setDetectedCategoryId(null);
+    setOutputFormat(category.targetFormats[0]?.value ?? "");
     setFileState({ status: "idle" });
-  }, []);
+  }, [category.targetFormats]);
 
   const handleOutputFormatChange = useCallback(
     (value: string) => {
@@ -77,26 +119,44 @@ export default function ConversionCard({ category }: ConversionCardProps) {
 
   const isConverting = fileState.status === "converting";
   const isDone = fileState.status === "done";
-  const hasFile = fileState.status !== "idle";
+  const hasFile =
+    fileState.status === "selected" ||
+    fileState.status === "converting" ||
+    fileState.status === "done";
 
   return (
     <div
       role="tabpanel"
       id={`panel-${category.id}`}
       aria-labelledby={`tab-${category.id}`}
-      className="w-full mx-auto max-w-[860px]"
+      className="mx-auto w-full max-w-215"
     >
       <div className="rounded-[34px] border border-white/80 bg-white px-7 py-7 shadow-[0_24px_60px_-42px_rgba(15,23,42,0.24)] sm:px-8 sm:py-8">
         {fileState.status === "idle" ? (
           <Dropzone
-            text={category.dropzoneText}
-            hint={category.dropzoneHint}
-            supportLabel={category.supportLabel}
+            text={effectiveCategory.dropzoneText}
+            hint={effectiveCategory.dropzoneHint}
+            supportLabel={effectiveCategory.supportLabel}
             detailLabel={detailLabel}
-            accept={category.acceptedMimeTypes}
-            icon={category.icon}
+            accept={effectiveCategory.acceptedMimeTypes}
             onFileSelected={handleFileSelected}
           />
+        ) : fileState.status === "error" ? (
+          <div className="rounded-[28px] border border-rose-200 bg-rose-50 px-6 py-6 text-left">
+            <p className="text-base font-semibold text-rose-800">
+              Archivo no compatible con detección automática
+            </p>
+            <p className="mt-2 text-sm leading-6 text-rose-700">
+              {fileState.message}
+            </p>
+            <button
+              type="button"
+              onClick={handleRemoveFile}
+              className="mt-4 text-sm font-medium text-rose-800 underline underline-offset-2"
+            >
+              Probar otro archivo
+            </button>
+          </div>
         ) : (
           <FilePreview
             file={fileState.file}
@@ -105,15 +165,27 @@ export default function ConversionCard({ category }: ConversionCardProps) {
           />
         )}
 
-        <div className="mt-6">
-          <FormatSelector
-            label="Salida disponible"
-            options={category.targetFormats}
-            value={outputFormat}
-            onChange={handleOutputFormatChange}
-            id={`format-${category.id}`}
-          />
-        </div>
+        {isAutoCategory && detectedCategory ? (
+          <p className="mt-6 text-sm font-medium text-stone-500">
+            Formato detectado: <span className="text-stone-800">{detectedCategory.label}</span>
+          </p>
+        ) : null}
+
+        {canChooseOutput ? (
+          <div className="mt-6">
+            <FormatSelector
+              label="Salida disponible"
+              options={availableTargetFormats}
+              value={outputFormat}
+              onChange={handleOutputFormatChange}
+              id={`format-${category.id}`}
+            />
+          </div>
+        ) : (
+          <div className="mt-6 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-stone-500">
+            Sube un archivo y Reform Lab detectará el formato para mostrar las salidas compatibles.
+          </div>
+        )}
 
         {isConverting && (
           <div className="mt-5 rounded-2xl border border-stone-200 bg-white p-4">
@@ -165,7 +237,7 @@ export default function ConversionCard({ category }: ConversionCardProps) {
             ? "Convirtiendo…"
             : isDone
               ? "Completado"
-              : category.cta}
+                : effectiveCategory.cta}
         </button>
       </div>
     </div>

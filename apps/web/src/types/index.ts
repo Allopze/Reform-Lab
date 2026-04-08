@@ -1,10 +1,10 @@
 export type CategoryId =
+  | "auto"
   | "pdf"
   | "images"
   | "documents"
   | "audio"
-  | "video"
-  | "archives";
+  | "video";
 
 export interface FormatOption {
   value: string;
