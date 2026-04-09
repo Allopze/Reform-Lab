@@ -74,6 +74,7 @@ func main() {
 	auditRepo := repository.NewAuditRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	dashboardRepo := repository.NewDashboardRepository(db)
+	siteSettingRepo := repository.NewSiteSettingRepository(db)
 
 	// Auth
 	authSvc := auth.NewService(userRepo, cfg.JWTSecret)
@@ -139,6 +140,7 @@ func main() {
 		Audit:                    auditRepo,
 		Users:                    userRepo,
 		Dashboard:                dashboardRepo,
+		SiteSettings:             siteSettingRepo,
 		Orchestrator:             orch,
 		AuthService:              authSvc,
 		CORSOrigin:               cfg.CORSOrigin,

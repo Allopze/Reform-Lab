@@ -130,6 +130,7 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 	auditRepo := repository.NewAuditRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	dashboardRepo := repository.NewDashboardRepository(db)
+	siteSettingRepo := repository.NewSiteSettingRepository(db)
 
 	// Auth
 	authSvc := auth.NewService(userRepo, "test-secret-key-for-e2e-tests")
@@ -192,6 +193,7 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 		Audit:                    auditRepo,
 		Users:                    userRepo,
 		Dashboard:                dashboardRepo,
+		SiteSettings:             siteSettingRepo,
 		Orchestrator:             orch,
 		AuthService:              authSvc,
 		CORSOrigin:               "*",
@@ -248,6 +250,31 @@ func doPostClient(client *http.Client, url string, body interface{}, token strin
 		r = bytes.NewReader(b)
 	}
 	req, _ := http.NewRequest(http.MethodPost, url, r)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.AddCookie(&http.Cookie{Name: "reform_session", Value: token})
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, _ := client.Do(req)
+	data := decode(resp)
+	return resp, data
+}
+
+func doPut(url string, body interface{}, token string) (*http.Response, map[string]interface{}) {
+	return doPutClient(nil, url, body, token)
+}
+
+func doPutClient(client *http.Client, url string, body interface{}, token string) (*http.Response, map[string]interface{}) {
+	var r io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		r = bytes.NewReader(b)
+	}
+	req, _ := http.NewRequest(http.MethodPut, url, r)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -447,6 +474,49 @@ func TestE2E_AdminDetailedHealth(t *testing.T) {
 	featureFlags := data["featureFlags"].(map[string]interface{})
 	if disabledCaps, ok := featureFlags["disabledCapabilities"].([]interface{}); !ok || len(disabledCaps) != 0 {
 		t.Fatalf("expected no disabled capabilities by default, got %v", featureFlags["disabledCapabilities"])
+	}
+}
+
+func TestE2E_AdminCanUpdateFooterMessage(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	resp, data := doGet(env.server.URL+"/api/footer-message", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("public footer message: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	if data["message"] != handlers.DefaultFooterMessage {
+		t.Fatalf("unexpected default footer message: %v", data["message"])
+	}
+
+	resp, _ = doPut(env.server.URL+"/api/admin/footer-message", map[string]string{"message": "Nuevo footer"}, "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for anonymous footer update, got %d", resp.StatusCode)
+	}
+
+	adminClient := registerUserClient(t, env, "FooterAdmin", "footer-admin@test.com")
+	userClient := registerUserClient(t, env, "FooterUser", "footer-user@test.com")
+
+	resp, _ = doPutClient(userClient, env.server.URL+"/api/admin/footer-message", map[string]string{"message": "Nuevo footer"}, "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin footer update, got %d", resp.StatusCode)
+	}
+
+	nextMessage := "Operado por Reform Lab · Conversion segura y trazable"
+	resp, data = doPutClient(adminClient, env.server.URL+"/api/admin/footer-message", map[string]string{"message": nextMessage}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin footer update: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	if data["message"] != nextMessage {
+		t.Fatalf("expected updated footer message, got %v", data["message"])
+	}
+
+	resp, data = doGet(env.server.URL+"/api/footer-message", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("public footer message after update: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	if data["message"] != nextMessage {
+		t.Fatalf("expected public footer message %q, got %v", nextMessage, data["message"])
 	}
 }
 

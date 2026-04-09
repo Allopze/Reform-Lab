@@ -25,6 +25,7 @@ type Deps struct {
 	Audit                    repository.AuditRepository
 	Users                    repository.UserRepository
 	Dashboard                repository.DashboardRepository
+	SiteSettings             repository.SiteSettingRepository
 	Orchestrator             *orchestrator.Service
 	AuthService              *auth.Service
 	CORSOrigin               string
@@ -58,6 +59,8 @@ func NewRouter(d Deps) *chi.Mux {
 	// API routes
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", handlers.PublicHealth())
+		footer := &handlers.FooterHandler{Settings: d.SiteSettings}
+		r.Get("/footer-message", footer.Get)
 
 		// Auth routes (public)
 		authH := &handlers.AuthHandler{Auth: d.AuthService}
@@ -124,6 +127,7 @@ func NewRouter(d Deps) *chi.Mux {
 				r.Get("/admin/health", handlers.DetailedHealth(d.ArtifactTTLHours, d.ArtifactTTLByFamily))
 				r.Get("/admin/overview", dashboard.AdminOverview)
 				r.Get("/admin/engines", dashboard.AdminEngines)
+				r.Put("/admin/footer-message", footer.Update)
 			})
 		})
 	})

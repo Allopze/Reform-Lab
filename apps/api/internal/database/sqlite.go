@@ -35,7 +35,7 @@ func Open(dbPath string) (*sql.DB, error) {
 
 // Migrate runs all SQL migration files against the database.
 func Migrate(db *sql.DB, migrationsPath string) error {
-	migrations := []string{"001_initial.sql", "002_users.sql", "003_owner_roles.sql"}
+	migrations := []string{"001_initial.sql", "002_users.sql", "003_owner_roles.sql", "004_site_settings.sql"}
 	for _, name := range migrations {
 		data, err := os.ReadFile(filepath.Join(migrationsPath, name))
 		if err != nil {

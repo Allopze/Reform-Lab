@@ -1,4 +1,5 @@
 import { API_URL } from "./config";
+import { DEFAULT_FOOTER_MESSAGE } from "./footer-message";
 
 function headers(): HeadersInit {
   return {};
@@ -285,4 +286,34 @@ export async function getHealthInfo(): Promise<HealthInfo> {
   const data = await res.json();
   if (!res.ok) throw new Error("Failed to fetch service info");
   return data;
+}
+
+function normalizeFooterMessage(message: unknown): string {
+  if (typeof message !== "string") return DEFAULT_FOOTER_MESSAGE;
+  const trimmed = message.trim();
+  return trimmed || DEFAULT_FOOTER_MESSAGE;
+}
+
+export async function getFooterMessage(): Promise<string> {
+  const res = await fetch(`${API_URL}/api/footer-message`, {
+    headers: headers(),
+    credentials: "include",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to load footer message");
+  return normalizeFooterMessage((data as { message?: string }).message);
+}
+
+export async function updateFooterMessage(message: string): Promise<string> {
+  const res = await fetch(`${API_URL}/api/admin/footer-message`, {
+    method: "PUT",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ message }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((data as { error?: string }).error || "Failed to update footer message");
+  }
+  return normalizeFooterMessage((data as { message?: string }).message);
 }

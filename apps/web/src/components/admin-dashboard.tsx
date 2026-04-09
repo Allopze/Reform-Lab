@@ -2,8 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getAdminOverview, type AdminDashboardData } from "@/lib/api";
+import {
+  getAdminOverview,
+  getFooterMessage,
+  updateFooterMessage,
+  type AdminDashboardData,
+} from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import {
+  DEFAULT_FOOTER_MESSAGE,
+  emitFooterMessageUpdated,
+} from "@/lib/footer-message";
 
 const auditFilters = [
   { value: "all", label: "Todos" },
@@ -84,6 +93,11 @@ export default function AdminDashboard() {
   const [data, setData] = useState<AdminDashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [auditFilter, setAuditFilter] = useState<(typeof auditFilters)[number]["value"]>("all");
+  const [footerMessage, setFooterMessage] = useState(DEFAULT_FOOTER_MESSAGE);
+  const [footerDraft, setFooterDraft] = useState(DEFAULT_FOOTER_MESSAGE);
+  const [footerError, setFooterError] = useState<string | null>(null);
+  const [footerStatus, setFooterStatus] = useState<string | null>(null);
+  const [footerSaving, setFooterSaving] = useState(false);
 
   useEffect(() => {
     if (loading) return;
@@ -101,6 +115,15 @@ export default function AdminDashboard() {
       .catch((err) => {
         setError(err instanceof Error ? err.message : "No se pudo cargar el panel admin.");
       });
+
+    getFooterMessage()
+      .then((message) => {
+        setFooterMessage(message);
+        setFooterDraft(message);
+      })
+      .catch((err) => {
+        setFooterError(err instanceof Error ? err.message : "No se pudo cargar el footer actual.");
+      });
   }, [loading, router, user]);
 
   if (loading || (!data && !error)) {
@@ -117,6 +140,32 @@ export default function AdminDashboard() {
     auditFilter === "all"
       ? data.recentAudit
       : data.recentAudit.filter((event) => event.eventType === auditFilter);
+  const normalizedFooterDraft = footerDraft.trim();
+  const footerDirty = normalizedFooterDraft !== footerMessage;
+
+  async function handleFooterSave() {
+    if (!normalizedFooterDraft) {
+      setFooterError("El mensaje del footer no puede quedar vacio.");
+      setFooterStatus(null);
+      return;
+    }
+
+    setFooterSaving(true);
+    setFooterError(null);
+    setFooterStatus(null);
+
+    try {
+      const savedMessage = await updateFooterMessage(normalizedFooterDraft);
+      setFooterMessage(savedMessage);
+      setFooterDraft(savedMessage);
+      emitFooterMessageUpdated(savedMessage);
+      setFooterStatus("Mensaje del footer actualizado.");
+    } catch (err) {
+      setFooterError(err instanceof Error ? err.message : "No se pudo guardar el footer.");
+    } finally {
+      setFooterSaving(false);
+    }
+  }
 
   return (
     <div className="mt-6 space-y-6">
@@ -164,6 +213,53 @@ export default function AdminDashboard() {
         </section>
 
         <aside className="space-y-4">
+          <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
+            <h2 className="text-base font-semibold text-stone-900">Footer publico</h2>
+            <p className="mt-1 text-sm text-stone-500">
+              Edita el mensaje visible al pie de todas las pantallas publicas y privadas.
+            </p>
+
+            <label className="mt-4 block">
+              <span className="mb-1.5 block text-[13px] font-medium text-stone-600">Mensaje actual</span>
+              <textarea
+                value={footerDraft}
+                onChange={(event) => {
+                  setFooterDraft(event.target.value);
+                  if (footerError) setFooterError(null);
+                  if (footerStatus) setFooterStatus(null);
+                }}
+                rows={3}
+                maxLength={240}
+                className="min-h-24 w-full rounded-xl border border-stone-200 bg-stone-50/60 px-3.5 py-3 text-sm text-stone-900 placeholder:text-stone-400 transition-colors duration-150 focus:border-coral-400 focus:bg-white"
+                placeholder="Escribe el mensaje del footer"
+              />
+            </label>
+
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <p className="text-xs text-stone-500">{footerDraft.length}/240</p>
+              <button
+                type="button"
+                onClick={() => void handleFooterSave()}
+                disabled={footerSaving || !footerDirty || !normalizedFooterDraft}
+                className="inline-flex h-10 items-center rounded-lg bg-coral-500 px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-coral-600 disabled:cursor-not-allowed disabled:bg-coral-200"
+              >
+                {footerSaving ? "Guardando..." : "Guardar footer"}
+              </button>
+            </div>
+
+            {footerStatus ? (
+              <p className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                {footerStatus}
+              </p>
+            ) : null}
+
+            {footerError ? (
+              <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                {footerError}
+              </p>
+            ) : null}
+          </section>
+
           <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
             <h2 className="text-base font-semibold text-stone-900">Resumen operativo</h2>
             <div className="mt-4 space-y-3 text-sm text-stone-600">
