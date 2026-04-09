@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -57,7 +58,7 @@ func (h *FooterHandler) Update(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"message": message})
 }
 
-func (h *FooterHandler) currentMessage(ctx interface{ Done() <-chan struct{} }) (string, error) {
+func (h *FooterHandler) currentMessage(ctx context.Context) (string, error) {
 	message, ok, err := h.Settings.GetValue(ctx, footerMessageSettingKey)
 	if err != nil {
 		return "", err

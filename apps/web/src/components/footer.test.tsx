@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Footer from "./footer";
 import { getFooterMessage } from "@/lib/api";
@@ -45,7 +45,9 @@ describe("Footer", () => {
       expect(getFooterMessageMock).toHaveBeenCalledTimes(1);
     });
 
-    emitFooterMessageUpdated("Nuevo mensaje visible sin recargar la pagina");
+    await act(async () => {
+      emitFooterMessageUpdated("Nuevo mensaje visible sin recargar la pagina");
+    });
 
     expect(
       screen.getByText("Nuevo mensaje visible sin recargar la pagina")

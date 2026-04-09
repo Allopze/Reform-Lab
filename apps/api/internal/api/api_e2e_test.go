@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/allopze/reform-lab/apps/api/internal/api"
+	"github.com/allopze/reform-lab/apps/api/internal/api/handlers"
 	"github.com/allopze/reform-lab/apps/api/internal/auth"
 	"github.com/allopze/reform-lab/apps/api/internal/capabilities"
 	"github.com/allopze/reform-lab/apps/api/internal/database"
