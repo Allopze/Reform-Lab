@@ -3,8 +3,11 @@ package workers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/allopze/reform-lab/apps/api/internal/capabilities"
@@ -91,9 +94,15 @@ func (h *Handler) ProcessPayload(ctx context.Context, _ string, data []byte) err
 	}
 
 	// Execute conversion.
+	execCtx, stopWatching := h.newExecutionContext(ctx, jobID, logger)
+	defer stopWatching()
 	_ = h.Orch.UpdateProgress(ctx, jobID, 40) // converting
-	outputPath, err := engine.Execute(ctx, payload.InputPath, tempDir, payload.OutputFormat)
+	outputPath, err := engine.Execute(execCtx, payload.InputPath, tempDir, payload.OutputFormat)
 	if err != nil {
+		if errors.Is(err, context.Canceled) && h.isCancelled(ctx, jobID) {
+			logger.Info().Msg("job cancelled during engine execution")
+			return nil
+		}
 		return h.fail(ctx, jobID, logger, "execute conversion", err)
 	}
 
@@ -102,6 +111,10 @@ func (h *Handler) ProcessPayload(ctx context.Context, _ string, data []byte) err
 	info, err := os.Stat(outputPath)
 	if err != nil || info.Size() == 0 {
 		return h.fail(ctx, jobID, logger, "validate output", fmt.Errorf("output file missing or empty"))
+	}
+	if h.isCancelled(ctx, jobID) {
+		logger.Info().Msg("job cancelled before artifact persistence")
+		return nil
 	}
 
 	// Persist artifact.
@@ -113,7 +126,8 @@ func (h *Handler) ProcessPayload(ctx context.Context, _ string, data []byte) err
 	}
 	defer outputFile.Close()
 
-	fileName := fmt.Sprintf("converted.%s", payload.OutputFormat)
+	artifactFormat := outputArtifactFormat(outputPath, payload.OutputFormat)
+	fileName := outputArtifactFileName(outputPath, artifactFormat)
 	storagePath, err := h.Store.SaveArtifact(ctx, artifactID.String(), fileName, outputFile)
 	if err != nil {
 		return h.fail(ctx, jobID, logger, "save artifact", err)
@@ -126,15 +140,21 @@ func (h *Handler) ProcessPayload(ctx context.Context, _ string, data []byte) err
 		JobID:       jobID,
 		FileID:      fileID,
 		FileName:    fileName,
-		MIMEType:    mimeForFormat(payload.OutputFormat),
+		MIMEType:    mimeForFormat(artifactFormat),
 		Size:        info.Size(),
 		StoragePath: storagePath,
 		CreatedAt:   now,
-		ExpiresAt:   now.Add(h.artifactTTL(payload.OutputFormat)),
+		ExpiresAt:   now.Add(h.artifactTTL(artifactFormat)),
 	}
 
 	if err := h.Artifacts.Create(ctx, &artifact); err != nil {
 		return h.fail(ctx, jobID, logger, "persist artifact record", err)
+	}
+	if h.isCancelled(ctx, jobID) {
+		logger.Info().Str("artifact_id", artifactID.String()).Msg("job cancelled after artifact persistence; cleaning artifact")
+		_ = os.RemoveAll(filepath.Dir(storagePath))
+		_ = h.Artifacts.DeleteByID(ctx, artifactID)
+		return nil
 	}
 
 	_ = h.Audit.Create(ctx, &domain.AuditEvent{
@@ -189,10 +209,39 @@ func classifyError(step string, err error) string {
 	case containsAny(errText, "signal: killed", "context deadline exceeded", "timeout"):
 		return "La conversión excedió el tiempo máximo permitido."
 	case containsAny(errText, "exit status"):
-		return fmt.Sprintf("El motor de conversión falló: %s", errText)
+		return "El motor de conversión no pudo procesar este archivo."
 	default:
 		return fmt.Sprintf("%s: %v", step, err)
 	}
+}
+
+func (h *Handler) isCancelled(ctx context.Context, jobID uuid.UUID) bool {
+	job, err := h.Orch.GetJob(ctx, jobID)
+	if err != nil {
+		return false
+	}
+	return job.Status == domain.JobCancelled
+}
+
+func (h *Handler) newExecutionContext(parent context.Context, jobID uuid.UUID, logger zerolog.Logger) (context.Context, context.CancelFunc) {
+	execCtx, cancel := context.WithCancel(parent)
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-execCtx.Done():
+				return
+			case <-ticker.C:
+				if h.isCancelled(parent, jobID) {
+					logger.Info().Msg("job cancellation detected; stopping execution context")
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return execCtx, cancel
 }
 
 func containsAny(s string, substrs ...string) bool {
@@ -222,11 +271,11 @@ func familyForOutputFormat(format string) domain.FormatFamily {
 	switch format {
 	case "pdf":
 		return domain.FamilyPDF
-	case "jpg", "png", "webp", "gif", "zip":
+	case "jpg", "png", "webp", "gif", "zip", "avif":
 		return domain.FamilyImage
-	case "docx", "txt", "html":
+	case "docx", "txt", "html", "md", "json", "csv", "xlsx":
 		return domain.FamilyDocument
-	case "mp3", "wav", "ogg":
+	case "mp3", "wav", "ogg", "aac", "flac", "m4a", "opus":
 		return domain.FamilyAudio
 	case "mp4", "webm":
 		return domain.FamilyVideo
@@ -239,15 +288,24 @@ func mimeForFormat(format string) string {
 	m := map[string]string{
 		"pdf":  "application/pdf",
 		"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"json": "application/json",
+		"md":   "text/markdown",
 		"txt":  "text/plain",
+		"csv":  "text/csv",
 		"html": "text/html",
+		"xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 		"jpg":  "image/jpeg",
 		"png":  "image/png",
 		"webp": "image/webp",
+		"avif": "image/avif",
 		"gif":  "image/gif",
 		"mp3":  "audio/mpeg",
 		"wav":  "audio/wav",
 		"ogg":  "audio/ogg",
+		"aac":  "audio/aac",
+		"m4a":  "audio/mp4",
+		"flac": "audio/flac",
+		"opus": "audio/opus",
 		"mp4":  "video/mp4",
 		"webm": "video/webm",
 		"zip":  "application/zip",
@@ -256,4 +314,20 @@ func mimeForFormat(format string) string {
 		return v
 	}
 	return "application/octet-stream"
+}
+
+func outputArtifactFormat(outputPath, fallback string) string {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(outputPath)), ".")
+	if ext == "" {
+		return fallback
+	}
+	return ext
+}
+
+func outputArtifactFileName(outputPath, fallbackFormat string) string {
+	name := strings.TrimSpace(filepath.Base(outputPath))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return fmt.Sprintf("converted.%s", fallbackFormat)
+	}
+	return name
 }

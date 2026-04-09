@@ -115,29 +115,134 @@ No crear nuevos tipos si uno existente cubre bien el caso.
 
 ---
 
-## Capacidades sugeridas para una V1
+## Capacidades implementadas actualmente
+
+Estado alineado con la fuente de verdad del backend:
+
+- `apps/api/internal/capabilities/catalog.go`
+- `apps/api/internal/capabilities/resolver.go`
+- `apps/api/cmd/server/main.go`
+- `apps/api/cmd/worker/main.go`
+
+La visibilidad real de una capacidad sigue dependiendo de:
+
+- formato detectado real del archivo
+- límites de tamaño
+- protección del archivo
+- disponibilidad del engine en runtime
+- feature flags operativas
+
+Notas relevantes del comportamiento actual:
+
+- las operaciones `compress` y `preview` pueden mantener el mismo formato de salida
+- la restricción de formato igual aplica solo a `convert`
+- Markdown se habilita solo cuando la detección por contenido es suficientemente confiable
+- HTML detectado como `text/html` entra al flujo documental real sin depender de extensión
+- el OCR base actual usa Tesseract y, para PDF, rasteriza páginas antes de reconstruir texto, JSON o PDF searchable
+- cuando una salida multi-página o multi-slide termina en ZIP real, el artefacto se persiste con la extensión y MIME reales del archivo generado
+- `GET /api/jobs/{jobId}` expone el nombre, MIME y tamaño reales del artefacto cuando la conversión termina, para que frontend y dashboard no tengan que inferir ZIPs ni nombres finales
 
 ### PDF
-- PDF -> imágenes
-- PDF -> texto extraído
-- PDF -> texto plano
-- PDF -> versión comprimida
 
-### DOCX
-- DOCX -> PDF
-- DOCX -> TXT
+- PDF -> DOCX
+- PDF -> JPG
+- PDF -> PNG
+- PDF -> TXT extraído
+- PDF -> PDF comprimido
+- PDF -> HTML para preview
+- PDF -> OCR a TXT
+- PDF -> OCR a JSON por página
+- PDF -> PDF searchable tras OCR
+
+### Documentos y texto
+
+- DOCX/ODT/RTF -> PDF
+- DOCX/ODT/RTF -> TXT
+- ODT/RTF -> DOCX
 - DOCX -> HTML simple
+- DOCX -> Markdown
+- TXT -> PDF simple
+- HTML -> PDF
+- HTML -> TXT limpio
+- Markdown detectado por contenido -> HTML
+- Markdown detectado por contenido -> PDF simple
+- Markdown detectado por contenido -> DOCX
+- PPTX/ODP -> PDF
+- PPTX/ODP -> JPG por slide
+- PPTX/ODP -> PNG por slide
+- XLSX/ODS/CSV -> PDF
+- XLSX/ODS -> CSV
+- ODS/CSV -> XLSX
+- XLSX/ODS/CSV -> HTML
 
 ### Imagen
-- JPG/PNG -> WebP
-- imagen -> comprimida
-- imagen -> thumbnail
-- imagen -> OCR si se soporta explícitamente en el futuro
 
-### TXT / Markdown
-- TXT -> PDF simple
-- Markdown -> HTML
-- Markdown -> PDF simple
+- JPEG/PNG/WebP/GIF/BMP/TIFF -> PNG
+- PNG/WebP/GIF/BMP/TIFF -> JPG
+- JPEG/PNG -> WebP
+- JPEG/PNG -> AVIF
+- JPEG/PNG/WebP/GIF/BMP/TIFF -> PDF
+- HEIC/HEIF -> JPG
+- HEIC/HEIF -> PNG
+- HEIC/HEIF -> WebP
+- SVG -> PNG
+- SVG -> WebP
+- SVG -> PDF vectorial
+- JPEG -> versión comprimida
+- PNG -> versión comprimida
+- JPEG -> thumbnail JPG
+- PNG -> thumbnail PNG
+- imagen -> perfil web JPG 640px
+- imagen -> perfil web WebP 640px
+- imagen -> perfil web AVIF 640px
+- imagen -> perfil web JPG 1600px
+- imagen -> perfil web WebP 1600px
+- imagen -> perfil web AVIF 1600px
+- imagen -> OCR a TXT
+- imagen -> OCR a JSON con bloques, líneas y palabras
+
+### Audio
+
+- WAV/OGG/FLAC/AAC -> MP3
+- MP3/OGG/FLAC/AAC -> WAV
+- MP3/WAV/FLAC/AAC -> OGG
+- MP3/WAV/OGG/FLAC -> AAC
+- MP3/WAV/OGG/Opus/FLAC/AAC/M4A -> M4A
+- MP3/WAV/OGG/AAC -> FLAC
+- MP3/WAV/OGG/Opus/FLAC/AAC/M4A -> Opus
+- audio -> waveform PNG estático
+
+### Video
+
+- MOV/WEBM/AVI -> MP4
+- MP4/MOV/AVI -> WebM
+- MP4/MOV/WEBM/AVI -> GIF
+- MP4/MOV/WEBM/AVI -> audio MP3
+- MP4/MOV/WEBM/AVI -> audio WAV
+- MP4/MOV/WEBM/AVI -> audio AAC
+- MP4/MOV/WEBM/AVI -> audio M4A
+- MP4/MOV/WEBM/AVI -> audio FLAC
+- MP4/MOV/WEBM/AVI -> audio Opus
+- MP4/MOV/WEBM/AVI -> ZIP de thumbnails JPG
+- MP4/MOV/WEBM/AVI -> preview corto MP4
+- MP4/MOV/WEBM/AVI -> preview corto WebM
+- MP4/MOV/WEBM/AVI -> contact sheet JPG
+- MP4/MOV/WEBM/AVI -> waveform PNG estático del audio principal
+
+## Capacidades candidatas para siguientes iteraciones
+En esta pasada ya existen perfiles web de imagen, salidas HEIC/HEIF y SVG, audio/video a M4A/Opus y conversión base de presentaciones y hojas de cálculo.
+El corpus real ya cubre variantes complejas y corruptas para HEIF, presentaciones y hojas de cálculo, con validación local de `heif-convert` y `rsvg-convert`, smoke Docker reproducible y tests frontend para la UX crítica de ZIP/multipágina.
+El backlog inmediato queda concentrado en transcripción y subtitulado.
+
+### Audio y video
+
+- audio -> transcripción TXT o JSON si se incorpora STT
+- video -> transcripción TXT o JSON si se incorpora STT
+- video -> subtítulos SRT o VTT generados automáticamente
+
+### Imagen
+
+- presets web adicionales si producto necesita variantes más pequeñas o placeholders específicos
 
 ---
 

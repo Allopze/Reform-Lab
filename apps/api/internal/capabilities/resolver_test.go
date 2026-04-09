@@ -11,10 +11,19 @@ func allEnginesAvailable(t *testing.T) func() {
 	t.Helper()
 	p := &EngineProber{}
 	p.available = map[string]bool{
-		"go-image":    true,
-		"libreoffice": true,
-		"poppler":     true,
-		"ffmpeg":      true,
+		"go-image":            true,
+		"go-html":             true,
+		"libreoffice":         true,
+		"librsvg":             true,
+		"libreoffice-poppler": true,
+		"libheif":             true,
+		"ocr-pdf":             true,
+		"poppler":             true,
+		"poppler-html":        true,
+		"tesseract":           true,
+		"ffmpeg":              true,
+		"ghostscript":         true,
+		"goldmark":            true,
 	}
 	p.once.Do(func() {})
 	old := DefaultProber
@@ -38,7 +47,7 @@ func TestResolveReturnsCapsForPDF(t *testing.T) {
 		t.Fatal("expected at least one capability for PDF")
 	}
 	for _, c := range caps {
-		if c.TargetFormat == "pdf" {
+		if c.TargetFormat == "pdf" && c.OperationType == domain.OpConvert {
 			t.Fatalf("should not offer same-format conversion, got %s", c.ID)
 		}
 	}
@@ -53,8 +62,234 @@ func TestResolveReturnsCapsForImage(t *testing.T) {
 		t.Fatal("expected at least one capability for PNG image")
 	}
 	for _, c := range caps {
-		if c.TargetFormat == "png" {
+		if c.TargetFormat == "png" && c.OperationType == domain.OpConvert {
 			t.Fatalf("should not offer same-format conversion, got %s", c.ID)
+		}
+	}
+}
+
+func TestResolveIncludesPDFCompress(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakePDFFile()
+	caps := Resolve(file)
+	for _, cap := range caps {
+		if cap.ID == "pdf-compress" {
+			return
+		}
+	}
+	t.Fatal("expected pdf-compress capability for PDF files")
+}
+
+func TestResolveIncludesImageSameFormatPreviewAndCompress(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakeImageFile("image/jpeg", "jpg")
+	caps := Resolve(file)
+	seen := map[string]bool{}
+	for _, cap := range caps {
+		seen[cap.ID] = true
+	}
+	for _, capabilityID := range []string{"image-compress-jpg", "image-thumbnail-jpg"} {
+		if !seen[capabilityID] {
+			t.Fatalf("expected %s to be available for JPG files", capabilityID)
+		}
+	}
+}
+
+func TestResolveIncludesMarkdownCapabilities(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakeTextFile("text/markdown", "md")
+	caps := Resolve(file)
+	seen := map[string]bool{}
+	for _, cap := range caps {
+		seen[cap.ID] = true
+	}
+	for _, capabilityID := range []string{"markdown-to-html", "markdown-to-pdf"} {
+		if !seen[capabilityID] {
+			t.Fatalf("expected %s to be available for Markdown files", capabilityID)
+		}
+	}
+}
+
+func TestResolveIncludesHTMLToPDFCapability(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakeDocumentFile("text/html", "html")
+	seen := map[string]bool{}
+	caps := Resolve(file)
+	for _, cap := range caps {
+		seen[cap.ID] = true
+	}
+	for _, capabilityID := range []string{"html-to-pdf", "html-to-txt"} {
+		if !seen[capabilityID] {
+			t.Fatalf("expected %s capability for HTML files", capabilityID)
+		}
+	}
+}
+
+func TestResolveIncludesDOCXToMarkdownCapability(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakeDocumentFile("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx")
+	caps := Resolve(file)
+	for _, cap := range caps {
+		if cap.ID == "docx-to-markdown" {
+			return
+		}
+	}
+	t.Fatal("expected docx-to-markdown capability for DOCX files")
+}
+
+func TestResolveIncludesVideoPreviewAndAudioExtraction(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakeVideoFile("video/mp4", "mp4")
+	caps := Resolve(file)
+	seen := map[string]bool{}
+	for _, cap := range caps {
+		seen[cap.ID] = true
+	}
+	for _, capabilityID := range []string{"video-to-mp3", "video-to-wav", "video-to-aac", "video-to-m4a", "video-to-flac", "video-to-opus", "video-to-thumbnails", "video-contact-sheet", "video-preview-mp4", "video-preview-webm", "video-waveform-png"} {
+		if !seen[capabilityID] {
+			t.Fatalf("expected %s to be available for MP4 files", capabilityID)
+		}
+	}
+}
+
+func TestResolveIncludesPDFOCRCapabilities(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakePDFFile()
+	caps := Resolve(file)
+	seen := map[string]bool{}
+	for _, cap := range caps {
+		seen[cap.ID] = true
+	}
+	for _, capabilityID := range []string{"pdf-ocr-to-txt", "pdf-ocr-to-json", "pdf-ocr-searchable-pdf"} {
+		if !seen[capabilityID] {
+			t.Fatalf("expected %s to be available for PDF files", capabilityID)
+		}
+	}
+}
+
+func TestResolveIncludesImageOCRCapabilities(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakeImageFile("image/png", "png")
+	caps := Resolve(file)
+	seen := map[string]bool{}
+	for _, cap := range caps {
+		seen[cap.ID] = true
+	}
+	for _, capabilityID := range []string{"image-ocr-to-txt", "image-ocr-to-json"} {
+		if !seen[capabilityID] {
+			t.Fatalf("expected %s to be available for PNG files", capabilityID)
+		}
+	}
+}
+
+func TestResolveIncludesImageWebVariants(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakeImageFile("image/png", "png")
+	caps := Resolve(file)
+	seen := map[string]bool{}
+	for _, cap := range caps {
+		seen[cap.ID] = true
+	}
+	for _, capabilityID := range []string{"image-web-jpg-640", "image-web-webp-640", "image-web-avif-640", "image-web-jpg-1600", "image-web-webp-1600", "image-web-avif-1600"} {
+		if !seen[capabilityID] {
+			t.Fatalf("expected %s to be available for PNG files", capabilityID)
+		}
+	}
+}
+
+func TestResolveIncludesNewAudioCapabilities(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakeAudioFile("audio/wav", "wav")
+	caps := Resolve(file)
+	seen := map[string]bool{}
+	for _, cap := range caps {
+		seen[cap.ID] = true
+	}
+	for _, capabilityID := range []string{"audio-to-aac", "audio-to-m4a", "audio-to-flac", "audio-to-opus", "audio-waveform-png"} {
+		if !seen[capabilityID] {
+			t.Fatalf("expected %s to be available for WAV files", capabilityID)
+		}
+	}
+}
+
+func TestResolveIncludesHEIFAndSVGCapabilities(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	heifFile := fakeImageFile("image/heic", "heic")
+	heifCaps := Resolve(heifFile)
+	heifSeen := map[string]bool{}
+	for _, cap := range heifCaps {
+		heifSeen[cap.ID] = true
+	}
+	for _, capabilityID := range []string{"image-heic-to-jpg", "image-heic-to-png", "image-heic-to-webp"} {
+		if !heifSeen[capabilityID] {
+			t.Fatalf("expected %s to be available for HEIC files", capabilityID)
+		}
+	}
+
+	svgFile := fakeImageFile("image/svg+xml", "svg")
+	svgCaps := Resolve(svgFile)
+	svgSeen := map[string]bool{}
+	for _, cap := range svgCaps {
+		svgSeen[cap.ID] = true
+	}
+	for _, capabilityID := range []string{"image-svg-to-png", "image-svg-to-webp", "image-svg-to-pdf"} {
+		if !svgSeen[capabilityID] {
+			t.Fatalf("expected %s to be available for SVG files", capabilityID)
+		}
+	}
+}
+
+func TestResolveIncludesPresentationCapabilities(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakePresentationFile("application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx")
+	caps := Resolve(file)
+	seen := map[string]bool{}
+	for _, cap := range caps {
+		seen[cap.ID] = true
+	}
+	for _, capabilityID := range []string{"presentation-to-pdf", "presentation-to-jpg", "presentation-to-png"} {
+		if !seen[capabilityID] {
+			t.Fatalf("expected %s to be available for PPTX files", capabilityID)
+		}
+	}
+}
+
+func TestResolveIncludesSpreadsheetCapabilities(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	xlsxFile := fakeSpreadsheetFile("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx")
+	xlsxCaps := Resolve(xlsxFile)
+	xlsxSeen := map[string]bool{}
+	for _, cap := range xlsxCaps {
+		xlsxSeen[cap.ID] = true
+	}
+	for _, capabilityID := range []string{"spreadsheet-to-pdf", "spreadsheet-to-csv", "spreadsheet-to-html"} {
+		if !xlsxSeen[capabilityID] {
+			t.Fatalf("expected %s to be available for XLSX files", capabilityID)
+		}
+	}
+
+	csvFile := fakeSpreadsheetFile("text/csv", "csv")
+	csvCaps := Resolve(csvFile)
+	csvSeen := map[string]bool{}
+	for _, cap := range csvCaps {
+		csvSeen[cap.ID] = true
+	}
+	for _, capabilityID := range []string{"spreadsheet-to-pdf", "spreadsheet-to-xlsx", "spreadsheet-to-html"} {
+		if !csvSeen[capabilityID] {
+			t.Fatalf("expected %s to be available for CSV files", capabilityID)
 		}
 	}
 }
@@ -175,10 +410,10 @@ func TestIsEligibleSameFormat(t *testing.T) {
 	// pdf-to-pdf doesn't exist in catalog but we can check with a real cap
 	// where the file extension matches target. Let's use a PNG image with
 	// a "png" extension requesting img-png-to-png (which shouldn't exist).
-	// Instead, let's verify the same-format check works via Resolve.
+	// Instead, let's verify the same-format check only applies to convert.
 	caps := Resolve(file)
 	for _, c := range caps {
-		if c.TargetFormat == file.DetectedFormat.Extension {
+		if c.TargetFormat == file.DetectedFormat.Extension && c.OperationType == domain.OpConvert {
 			t.Fatalf("Resolve returned same-format cap: %s", c.ID)
 		}
 	}

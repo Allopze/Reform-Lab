@@ -26,3 +26,27 @@ func TestArtifactTTLUsesFamilyOverride(t *testing.T) {
 		t.Fatalf("expected fallback ttl 24h, got %v", got)
 	}
 }
+
+func TestOutputArtifactFormatUsesActualExtension(t *testing.T) {
+	if got := outputArtifactFormat("/tmp/pages.zip", "jpg"); got != "zip" {
+		t.Fatalf("expected zip output format, got %s", got)
+	}
+	if got := outputArtifactFormat("/tmp/converted", "pdf"); got != "pdf" {
+		t.Fatalf("expected fallback format, got %s", got)
+	}
+}
+
+func TestFormatHelpersCoverNewFormats(t *testing.T) {
+	if got := familyForOutputFormat("xlsx"); got != domain.FamilyDocument {
+		t.Fatalf("expected xlsx to map to document family, got %s", got)
+	}
+	if got := familyForOutputFormat("m4a"); got != domain.FamilyAudio {
+		t.Fatalf("expected m4a to map to audio family, got %s", got)
+	}
+	if got := mimeForFormat("opus"); got != "audio/opus" {
+		t.Fatalf("expected opus mime, got %s", got)
+	}
+	if got := mimeForFormat("csv"); got != "text/csv" {
+		t.Fatalf("expected csv mime, got %s", got)
+	}
+}

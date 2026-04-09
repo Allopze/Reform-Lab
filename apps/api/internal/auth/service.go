@@ -48,8 +48,8 @@ type RegisterInput struct {
 
 // AuthResult is returned on successful register or login.
 type AuthResult struct {
-	User  *domain.User `json:"user"`
-	Token string       `json:"token"`
+	User         *domain.User `json:"user"`
+	SessionToken string       `json:"-"`
 }
 
 // Register creates a new user account and returns a JWT.
@@ -94,7 +94,7 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*AuthResult, 
 		return nil, err
 	}
 
-	return &AuthResult{User: u, Token: token}, nil
+	return &AuthResult{User: u, SessionToken: token}, nil
 }
 
 // Login verifies credentials and returns a JWT.
@@ -116,7 +116,7 @@ func (s *Service) Login(ctx context.Context, email, password string) (*AuthResul
 		return nil, err
 	}
 
-	return &AuthResult{User: u, Token: token}, nil
+	return &AuthResult{User: u, SessionToken: token}, nil
 }
 
 // ValidateToken parses and validates a JWT, returning the user ID.

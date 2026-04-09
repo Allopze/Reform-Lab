@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/allopze/reform-lab/apps/api/internal/capabilities"
@@ -15,16 +16,20 @@ import (
 // JobHandler handles job-related endpoints.
 type JobHandler struct {
 	Orchestrator *orchestrator.Service
+	Artifacts    repository.ArtifactRepository
 	Files        repository.FileRepository
 	Store        storage.Store
 }
 
+type jobResponse struct {
+	*domain.Job
+	ArtifactFileName *string `json:"artifactFileName,omitempty"`
+	ArtifactMIMEType *string `json:"artifactMimeType,omitempty"`
+	ArtifactSize     *int64  `json:"artifactSize,omitempty"`
+}
+
 func (h *JobHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	u := currentUser(r)
-	if u == nil {
-		respondError(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
+	u := currentUser(r) // may be nil for anonymous users
 
 	jobID, err := uuid.Parse(chi.URLParam(r, "jobId"))
 	if err != nil {
@@ -42,16 +47,12 @@ func (h *JobHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondJSON(w, http.StatusOK, job)
+	respondJSON(w, http.StatusOK, h.buildJobResponse(r, job))
 }
 
 // Cancel handles POST /api/jobs/{jobId}/cancel.
 func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
-	u := currentUser(r)
-	if u == nil {
-		respondError(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
+	u := currentUser(r) // may be nil for anonymous users
 
 	jobID, err := uuid.Parse(chi.URLParam(r, "jobId"))
 	if err != nil {
@@ -79,11 +80,7 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 
 // Retry handles POST /api/jobs/{jobId}/retry.
 func (h *JobHandler) Retry(w http.ResponseWriter, r *http.Request) {
-	u := currentUser(r)
-	if u == nil {
-		respondError(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
+	u := currentUser(r) // may be nil for anonymous users
 
 	jobID, err := uuid.Parse(chi.URLParam(r, "jobId"))
 	if err != nil {
@@ -123,9 +120,30 @@ func (h *JobHandler) Retry(w http.ResponseWriter, r *http.Request) {
 
 	retryJob, err := h.Orchestrator.RetryFailedJob(r.Context(), job, *capability, h.Store.OriginalPath(job.FileID.String()))
 	if err != nil {
+		if errors.Is(err, domain.ErrTooManyActiveJobs) {
+			respondError(w, http.StatusTooManyRequests, "too many active jobs for this user")
+			return
+		}
 		respondError(w, http.StatusConflict, "failed to retry job")
 		return
 	}
 
 	respondJSON(w, http.StatusCreated, retryJob)
+}
+
+func (h *JobHandler) buildJobResponse(r *http.Request, job *domain.Job) *jobResponse {
+	response := &jobResponse{Job: job}
+	if job == nil || job.ArtifactID == nil || h.Artifacts == nil {
+		return response
+	}
+
+	artifact, err := h.Artifacts.GetByID(r.Context(), *job.ArtifactID)
+	if err != nil {
+		return response
+	}
+
+	response.ArtifactFileName = &artifact.FileName
+	response.ArtifactMIMEType = &artifact.MIMEType
+	response.ArtifactSize = &artifact.Size
+	return response
 }

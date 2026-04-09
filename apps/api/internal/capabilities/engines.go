@@ -8,10 +8,19 @@ import (
 // engineBinaries maps engine names (as declared in Capability.Engine) to the
 // binary that must be available on $PATH for the engine to work.
 var engineBinaries = map[string][]string{
-	"libreoffice": {"libreoffice"},
-	"poppler":     {"pdftoppm", "pdftotext"},
-	"ffmpeg":      {"ffmpeg"},
-	"go-image":    {}, // pure Go — always available
+	"libreoffice":         {"libreoffice"},
+	"poppler":             {"pdftoppm", "pdftotext"},
+	"poppler-html":        {"pdftohtml"},
+	"ocr-pdf":             {"pdftoppm", "tesseract", "gs"},
+	"ffmpeg":              {"ffmpeg"},
+	"ghostscript":         {"gs"},
+	"libheif":             {"heif-convert", "ffmpeg"},
+	"librsvg":             {"rsvg-convert"},
+	"libreoffice-poppler": {"libreoffice", "pdftoppm"},
+	"goldmark":            {},
+	"go-html":             {},
+	"go-image":            {}, // pure Go — always available
+	"tesseract":           {"tesseract"},
 }
 
 // EngineProber caches which engines are available at process startup.

@@ -1,13 +1,17 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/allopze/reform-lab/apps/api/internal/domain"
+	"github.com/google/uuid"
 )
 
 func TestRateLimitAllowsWithinBurst(t *testing.T) {
-	handler := RateLimit(10, 5)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := RateLimit(10, 5, false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -24,7 +28,7 @@ func TestRateLimitAllowsWithinBurst(t *testing.T) {
 }
 
 func TestRateLimitRejectsExcess(t *testing.T) {
-	handler := RateLimit(1, 1)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := RateLimit(1, 1, false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -51,7 +55,7 @@ func TestRateLimitRejectsExcess(t *testing.T) {
 }
 
 func TestRateLimitPerIPIsolation(t *testing.T) {
-	handler := RateLimit(1, 1)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := RateLimit(1, 1, false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -84,7 +88,7 @@ func TestRateLimitPerIPIsolation(t *testing.T) {
 }
 
 func TestRateLimitRespectsXForwardedFor(t *testing.T) {
-	handler := RateLimit(1, 1)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := RateLimit(1, 1, true)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -109,6 +113,30 @@ func TestRateLimitRespectsXForwardedFor(t *testing.T) {
 	}
 }
 
+func TestRateLimitIgnoresForwardedForWhenProxyHeadersDisabled(t *testing.T) {
+	handler := RateLimit(1, 1, false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	first := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-Forwarded-For", "203.0.113.50")
+	handler.ServeHTTP(first, req)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first request: expected 200, got %d", first.Code)
+	}
+
+	second := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-Forwarded-For", "198.51.100.10")
+	handler.ServeHTTP(second, req)
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected remote addr to be used when proxy headers are disabled, got %d", second.Code)
+	}
+}
+
 func TestSecurityHeaders(t *testing.T) {
 	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -128,5 +156,111 @@ func TestSecurityHeaders(t *testing.T) {
 		if got != want {
 			t.Errorf("header %s: expected %q, got %q", header, want, got)
 		}
+	}
+}
+
+func TestAuthenticatedUserRateLimitIsPerUser(t *testing.T) {
+	handler := AuthenticatedUserRateLimit(60, 1)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	userA := &domain.User{ID: uuid.New(), Role: domain.RoleUser}
+	userB := &domain.User{ID: uuid.New(), Role: domain.RoleUser}
+
+	first := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/conversions", nil)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey{}, userA))
+	handler.ServeHTTP(first, req)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first request: expected 200, got %d", first.Code)
+	}
+
+	second := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/conversions", nil)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey{}, userA))
+	handler.ServeHTTP(second, req)
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request for same user: expected 429, got %d", second.Code)
+	}
+
+	third := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/conversions", nil)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey{}, userB))
+	handler.ServeHTTP(third, req)
+	if third.Code != http.StatusOK {
+		t.Fatalf("first request for different user: expected 200, got %d", third.Code)
+	}
+	if third.Header().Get("Retry-After") != "" {
+		t.Fatal("did not expect Retry-After on allowed request")
+	}
+}
+
+func TestAuthenticatedUserRateLimitRequiresUserContext(t *testing.T) {
+	handler := AuthenticatedUserRateLimit(60, 1)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/files", nil))
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without authenticated user, got %d", rr.Code)
+	}
+}
+
+func TestUserOrIPRateLimitFallsBackToIPForAnonymous(t *testing.T) {
+	handler := UserOrIPRateLimit(60, 1, false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	first := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/files", nil)
+	req.RemoteAddr = "10.0.0.50:1234"
+	handler.ServeHTTP(first, req)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first anonymous request: expected 200, got %d", first.Code)
+	}
+
+	second := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/files", nil)
+	req.RemoteAddr = "10.0.0.50:1234"
+	handler.ServeHTTP(second, req)
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("second anonymous request: expected 429, got %d", second.Code)
+	}
+}
+
+func TestUserOrIPRateLimitPrefersUserIDOverIP(t *testing.T) {
+	handler := UserOrIPRateLimit(60, 1, false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	userA := &domain.User{ID: uuid.New(), Role: domain.RoleUser}
+	userB := &domain.User{ID: uuid.New(), Role: domain.RoleUser}
+
+	first := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/conversions", nil)
+	req.RemoteAddr = "10.0.0.60:1234"
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey{}, userA))
+	handler.ServeHTTP(first, req)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first request for user A: expected 200, got %d", first.Code)
+	}
+
+	second := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/conversions", nil)
+	req.RemoteAddr = "10.0.0.60:1234"
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey{}, userB))
+	handler.ServeHTTP(second, req)
+	if second.Code != http.StatusOK {
+		t.Fatalf("first request for user B on same IP: expected 200, got %d", second.Code)
+	}
+
+	third := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/conversions", nil)
+	req.RemoteAddr = "10.0.0.60:1234"
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey{}, userA))
+	handler.ServeHTTP(third, req)
+	if third.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request for user A: expected 429, got %d", third.Code)
 	}
 }

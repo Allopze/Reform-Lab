@@ -14,13 +14,22 @@ type TaskHandler func(ctx context.Context, taskType string, payload []byte) erro
 type InProcessQueue struct {
 	handler TaskHandler
 	wg      sync.WaitGroup
+	sem     chan struct{}
 }
 
 // NewInProcessQueue creates a queue that dispatches tasks to handler in goroutines.
 // If handler is nil, tasks are accepted but silently dropped (useful if the server
 // includes an embedded worker).
 func NewInProcessQueue(handler TaskHandler) *InProcessQueue {
-	return &InProcessQueue{handler: handler}
+	return NewInProcessQueueWithLimit(handler, 2)
+}
+
+// NewInProcessQueueWithLimit creates an in-process queue with bounded concurrency.
+func NewInProcessQueueWithLimit(handler TaskHandler, maxConcurrent int) *InProcessQueue {
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
+	return &InProcessQueue{handler: handler, sem: make(chan struct{}, maxConcurrent)}
 }
 
 func (q *InProcessQueue) Enqueue(ctx context.Context, taskType string, payload TaskPayload, opts TaskOptions) error {
@@ -34,8 +43,10 @@ func (q *InProcessQueue) Enqueue(ctx context.Context, taskType string, payload T
 	}
 
 	q.wg.Add(1)
+	q.sem <- struct{}{}
 	go func() {
 		defer q.wg.Done()
+		defer func() { <-q.sem }()
 		taskCtx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 		defer cancel()
 		_ = q.handler(taskCtx, taskType, data)

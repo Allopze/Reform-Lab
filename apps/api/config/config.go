@@ -14,18 +14,29 @@ import (
 
 // Config holds all application configuration loaded from environment variables.
 type Config struct {
-	Port                 int
-	DatabasePath         string
-	MigrationsPath       string
-	RedisURL             string // empty = use in-process queue (no Redis needed)
-	StorageBasePath      string
-	CORSOrigin           string
-	LogLevel             string
-	JWTSecret            string
-	ArtifactTTLHours     int // how many hours artifacts are retained before cleanup
-	ArtifactTTLByFamily  map[domain.FormatFamily]int
-	DisabledCapabilities []string
-	DisabledEngines      []string
+	Port                     int
+	DatabasePath             string
+	MigrationsPath           string
+	RedisURL                 string // empty = use in-process queue (no Redis needed)
+	StorageBasePath          string
+	CORSOrigin               string
+	LogLevel                 string
+	JWTSecret                string
+	ExposeMetrics            bool
+	TrustProxyHeaders        bool
+	InProcessConcurrency     int
+	WorkerConcurrency        int
+	UserUploadsPerMinute     int
+	UserUploadBurst          int
+	UserConversionsPerMinute int
+	UserConversionBurst      int
+	MaxActiveJobsPerUser     int
+	ArtifactTTLHours         int // how many hours artifacts are retained before cleanup
+	OriginalTTLHours         int
+	TempTTLHours             int
+	ArtifactTTLByFamily      map[domain.FormatFamily]int
+	DisabledCapabilities     []string
+	DisabledEngines          []string
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -71,9 +82,19 @@ func Load() (*Config, error) {
 	}
 
 	jwtSecret := os.Getenv("JWT_SECRET")
-	if jwtSecret == "" {
-		jwtSecret = "dev-secret-change-me"
+	if err := validateJWTSecret(jwtSecret); err != nil {
+		return nil, err
 	}
+
+	exposeMetrics := lookupBoolEnv("EXPOSE_METRICS", false)
+	trustProxyHeaders := lookupBoolEnv("TRUST_PROXY_HEADERS", false)
+	inProcessConcurrency := lookupPositiveIntEnv("IN_PROCESS_WORKER_CONCURRENCY", 2)
+	workerConcurrency := lookupPositiveIntEnv("WORKER_CONCURRENCY", 2)
+	userUploadsPerMinute := lookupPositiveIntEnv("USER_UPLOADS_PER_MINUTE", 12)
+	userUploadBurst := lookupPositiveIntEnv("USER_UPLOAD_BURST", 4)
+	userConversionsPerMinute := lookupPositiveIntEnv("USER_CONVERSIONS_PER_MINUTE", 6)
+	userConversionBurst := lookupPositiveIntEnv("USER_CONVERSION_BURST", 3)
+	maxActiveJobsPerUser := lookupPositiveIntEnv("MAX_ACTIVE_JOBS_PER_USER", 3)
 
 	artifactTTL := 24
 	if v := os.Getenv("ARTIFACT_TTL_HOURS"); v != "" {
@@ -81,6 +102,8 @@ func Load() (*Config, error) {
 			artifactTTL = n
 		}
 	}
+	originalTTL := lookupPositiveIntEnv("ORIGINAL_RETENTION_HOURS", 24)
+	tempTTL := lookupPositiveIntEnv("TEMP_RETENTION_HOURS", 6)
 
 	artifactTTLByFamily := map[domain.FormatFamily]int{
 		domain.FamilyPDF:      lookupPositiveIntEnv("ARTIFACT_TTL_HOURS_PDF", artifactTTL),
@@ -94,18 +117,29 @@ func Load() (*Config, error) {
 	disabledEngines := parseCSVEnv("FEATURE_DISABLE_ENGINES")
 
 	return &Config{
-		Port:                 port,
-		DatabasePath:         dbPath,
-		MigrationsPath:       migrationsPath,
-		RedisURL:             redisURL,
-		StorageBasePath:      storagePath,
-		CORSOrigin:           corsOrigin,
-		LogLevel:             logLevel,
-		JWTSecret:            jwtSecret,
-		ArtifactTTLHours:     artifactTTL,
-		ArtifactTTLByFamily:  artifactTTLByFamily,
-		DisabledCapabilities: disabledCapabilities,
-		DisabledEngines:      disabledEngines,
+		Port:                     port,
+		DatabasePath:             dbPath,
+		MigrationsPath:           migrationsPath,
+		RedisURL:                 redisURL,
+		StorageBasePath:          storagePath,
+		CORSOrigin:               corsOrigin,
+		LogLevel:                 logLevel,
+		JWTSecret:                jwtSecret,
+		ExposeMetrics:            exposeMetrics,
+		TrustProxyHeaders:        trustProxyHeaders,
+		InProcessConcurrency:     inProcessConcurrency,
+		WorkerConcurrency:        workerConcurrency,
+		UserUploadsPerMinute:     userUploadsPerMinute,
+		UserUploadBurst:          userUploadBurst,
+		UserConversionsPerMinute: userConversionsPerMinute,
+		UserConversionBurst:      userConversionBurst,
+		MaxActiveJobsPerUser:     maxActiveJobsPerUser,
+		ArtifactTTLHours:         artifactTTL,
+		OriginalTTLHours:         originalTTL,
+		TempTTLHours:             tempTTL,
+		ArtifactTTLByFamily:      artifactTTLByFamily,
+		DisabledCapabilities:     disabledCapabilities,
+		DisabledEngines:          disabledEngines,
 	}, nil
 }
 
@@ -141,6 +175,32 @@ func lookupPositiveIntEnv(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func lookupBoolEnv(key string, fallback bool) bool {
+	if v := strings.TrimSpace(strings.ToLower(os.Getenv(key))); v != "" {
+		switch v {
+		case "1", "true", "yes", "on":
+			return true
+		case "0", "false", "no", "off":
+			return false
+		}
+	}
+	return fallback
+}
+
+func validateJWTSecret(secret string) error {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return fmt.Errorf("JWT_SECRET is required")
+	}
+	if secret == "dev-secret-change-me" || secret == "change-me-in-production" {
+		return fmt.Errorf("JWT_SECRET must not use the development placeholder")
+	}
+	if len(secret) < 32 {
+		return fmt.Errorf("JWT_SECRET must be at least 32 characters")
+	}
+	return nil
 }
 
 func parseCSVEnv(key string) []string {

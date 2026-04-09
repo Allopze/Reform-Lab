@@ -13,6 +13,8 @@ var maxSizeByFamily = map[domain.FormatFamily]int64{
 	domain.FamilyVideo:    500 * 1024 * 1024, // 500 MB
 }
 
+const maxImagePixels = 40_000_000
+
 // ValidateFile checks that a file meets ingestion requirements.
 // It returns a classified domain error on failure.
 func ValidateFile(size int64, format domain.DetectedFormat, meta domain.FileMetadata) error {
@@ -31,6 +33,12 @@ func ValidateFile(size int64, format domain.DetectedFormat, meta domain.FileMeta
 
 	if size > maxSize {
 		return domain.ErrLimitExceeded
+	}
+
+	if meta.Width != nil && meta.Height != nil {
+		if int64(*meta.Width)*int64(*meta.Height) > maxImagePixels {
+			return domain.ErrLimitExceeded
+		}
 	}
 
 	if meta.IsProtected {

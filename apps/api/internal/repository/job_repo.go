@@ -15,6 +15,7 @@ type JobRepository interface {
 	Create(ctx context.Context, j *domain.Job) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Job, error)
 	Update(ctx context.Context, j *domain.Job) error
+	CountActiveByUser(ctx context.Context, userID uuid.UUID) (int, error)
 	ExpireArtifact(ctx context.Context, artifactID uuid.UUID, expiredAt time.Time) error
 }
 
@@ -93,6 +94,20 @@ func (r *sqliteJobRepo) Update(ctx context.Context, j *domain.Job) error {
 		fmtTimePtr(j.StartedAt), fmtTimePtr(j.CompletedAt), j.ID.String(),
 	)
 	return err
+}
+
+func (r *sqliteJobRepo) CountActiveByUser(ctx context.Context, userID uuid.UUID) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*)
+		 FROM jobs
+		 WHERE user_id = ? AND status IN (?, ?)`,
+		userID.String(), string(domain.JobQueued), string(domain.JobRunning),
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count active jobs for user %s: %w", userID, err)
+	}
+	return count, nil
 }
 
 func (r *sqliteJobRepo) ExpireArtifact(ctx context.Context, artifactID uuid.UUID, expiredAt time.Time) error {

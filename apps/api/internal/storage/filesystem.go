@@ -28,6 +28,11 @@ func NewFilesystem(basePath string) (*Filesystem, error) {
 	return &Filesystem{basePath: basePath}, nil
 }
 
+// BasePath returns the root path used by the filesystem-backed store.
+func (fs *Filesystem) BasePath() string {
+	return fs.basePath
+}
+
 func (fs *Filesystem) SaveOriginal(_ context.Context, fileID string, r io.Reader) (string, error) {
 	dir := filepath.Join(fs.basePath, "originals", fileID)
 	if err := os.MkdirAll(dir, 0o750); err != nil {

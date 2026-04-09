@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import Link from "next/link";
 import { CheckCircle2 } from "lucide-react";
 import type { CategoryConfig, FileState } from "@/types";
 import { categoryIdFromDetectedFamily, getCategoryById } from "@/config/categories";
@@ -14,7 +13,6 @@ import {
   cancelJob,
   type Capability,
 } from "@/lib/api";
-import { useAuth } from "@/lib/auth-context";
 import Dropzone from "./dropzone";
 import FormatSelector from "./format-selector";
 import FilePreview from "./file-preview";
@@ -23,8 +21,19 @@ interface ConversionCardProps {
   category: CategoryConfig;
 }
 
+function isArchiveArtifact(artifactFileName?: string, artifactMimeType?: string) {
+  if (artifactMimeType === "application/zip") return true;
+  return artifactFileName?.toLowerCase().endsWith(".zip") ?? false;
+}
+
+function artifactLabel(fileState: Extract<FileState, { status: "done" }>) {
+  return (
+    fileState.artifactFileName ||
+    `${fileState.file.name}.${fileState.outputFormat}`
+  );
+}
+
 export default function ConversionCard({ category }: ConversionCardProps) {
-  const { user, loading: authLoading } = useAuth();
   const isAutoCategory = category.id === "auto";
   const [detectedCategoryId, setDetectedCategoryId] = useState<Exclude<CategoryConfig["id"], "auto"> | null>(null);
   const [fileState, setFileState] = useState<FileState>({ status: "idle" });
@@ -156,7 +165,11 @@ export default function ConversionCard({ category }: ConversionCardProps) {
       pollingRef.current = setInterval(async () => {
         pollCount++;
         if (pollCount > maxPolls) {
-          if (pollingRef.current) clearInterval(pollingRef.current);
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+          setActiveJobId(null);
           setFileState({
             status: "error",
             file: fileState.file,
@@ -170,24 +183,40 @@ export default function ConversionCard({ category }: ConversionCardProps) {
           const updated = await getJob(job.id);
 
           if (updated.status === "succeeded" && updated.artifactId) {
-            if (pollingRef.current) clearInterval(pollingRef.current);
+            if (pollingRef.current) {
+              clearInterval(pollingRef.current);
+              pollingRef.current = null;
+            }
+            setActiveJobId(null);
             setFileState({
               status: "done",
               file: fileState.file,
               outputFormat,
               artifactId: updated.artifactId,
+              artifactFileName: updated.artifactFileName,
+              artifactMimeType: updated.artifactMimeType,
+              artifactSize: updated.artifactSize,
             });
           } else if (updated.status === "failed") {
-            if (pollingRef.current) clearInterval(pollingRef.current);
+            if (pollingRef.current) {
+              clearInterval(pollingRef.current);
+              pollingRef.current = null;
+            }
+            setActiveJobId(null);
             setFileState({
               status: "error",
               file: fileState.file,
               outputFormat,
               message: updated.error || "La conversión falló.",
-            });          } else if (updated.status === "cancelled") {
-            if (pollingRef.current) clearInterval(pollingRef.current);
+            });
+          } else if (updated.status === "cancelled") {
+            if (pollingRef.current) {
+              clearInterval(pollingRef.current);
+              pollingRef.current = null;
+            }
             setActiveJobId(null);
-            setFileState({ status: "idle" });          } else {
+            setFileState({ status: "idle" });
+          } else {
             setFileState({
               status: "converting",
               file: fileState.file,
@@ -196,7 +225,11 @@ export default function ConversionCard({ category }: ConversionCardProps) {
             });
           }
         } catch {
-          if (pollingRef.current) clearInterval(pollingRef.current);
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+          setActiveJobId(null);
           setFileState({
             status: "error",
             file: fileState.file,
@@ -222,7 +255,7 @@ export default function ConversionCard({ category }: ConversionCardProps) {
       setDownloadError(null);
       await downloadArtifact(
         fileState.artifactId,
-        `${fileState.file.name}.${fileState.outputFormat}`
+        fileState.artifactFileName || `${fileState.file.name}.${fileState.outputFormat}`
       );
     } catch (err) {
       setDownloadError(
@@ -245,41 +278,16 @@ export default function ConversionCard({ category }: ConversionCardProps) {
 
   const isConverting = fileState.status === "converting";
   const isDone = fileState.status === "done";
+  const doneArtifactName =
+    fileState.status === "done" ? artifactLabel(fileState) : null;
+  const doneIsArchive =
+    fileState.status === "done"
+      ? isArchiveArtifact(fileState.artifactFileName, fileState.artifactMimeType)
+      : false;
   const hasFile =
     fileState.status === "selected" ||
     fileState.status === "converting" ||
     fileState.status === "done";
-
-  if (!authLoading && !user) {
-    return (
-      <div
-        role="tabpanel"
-        id={`panel-${category.id}`}
-        aria-labelledby={`tab-${category.id}`}
-        className="mx-auto w-full max-w-215"
-      >
-        <div className="rounded-[34px] border border-white/80 bg-white px-7 py-8 shadow-[0_24px_60px_-42px_rgba(15,23,42,0.24)] sm:px-8 sm:py-10">
-          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-coral-600">
-            Acceso requerido
-          </p>
-          <h2 className="mt-3 text-2xl font-semibold tracking-[-0.02em] text-stone-900">
-            Inicia sesion para convertir y guardar tus artefactos.
-          </h2>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-stone-500">
-            Las conversiones ahora estan ligadas a tu cuenta para proteger archivos, historial y descargas.
-          </p>
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Link
-              href="/acceso"
-              className="inline-flex h-11 items-center justify-center rounded-2xl bg-coral-500 px-5 text-sm font-medium text-white transition-colors duration-150 hover:bg-coral-600"
-            >
-              Entrar o crear cuenta
-            </Link>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div
@@ -385,10 +393,17 @@ export default function ConversionCard({ category }: ConversionCardProps) {
 
         {isDone && fileState.status === "done" && (
           <div className="mt-5 flex flex-col gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 sm:flex-row sm:items-center sm:justify-between">
-            <p className="flex items-center gap-2 text-sm font-medium text-emerald-800">
-              <CheckCircle2 size={16} strokeWidth={2} />
-              Conversión completada
-            </p>
+            <div>
+              <p className="flex items-center gap-2 text-sm font-medium text-emerald-800">
+                <CheckCircle2 size={16} strokeWidth={2} />
+                Conversión completada
+              </p>
+              <p className="mt-1 text-sm text-emerald-900/80">
+                {doneIsArchive
+                  ? `La salida incluye varios archivos y se agrupó como ${doneArtifactName}.`
+                  : `Artefacto listo: ${doneArtifactName}.`}
+              </p>
+            </div>
             <div className="flex items-center gap-3">
               <a
                 href="#"
@@ -398,7 +413,7 @@ export default function ConversionCard({ category }: ConversionCardProps) {
                 }}
                 className="text-sm font-medium text-emerald-700 underline underline-offset-2 hover:text-emerald-900"
               >
-                Descargar
+                {doneIsArchive ? "Descargar ZIP" : "Descargar archivo"}
               </a>
               <button
                 type="button"

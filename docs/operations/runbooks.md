@@ -23,6 +23,15 @@ Es una guía para actuar sin improvisar.
 
 ---
 
+## Smoke de runtime
+
+- existe un smoke reproducible en `apps/api/scripts/docker-e2e-smoke.sh`
+- el smoke valida `HEIF -> PNG`, `SVG -> PDF`, `PPTX -> JPG ZIP` y `XLSX -> CSV` contra la stack real de Docker Compose
+- el script espera `/api/health`, crea usuarios aislados por escenario y evita confundir cuotas anti-abuso con fallos funcionales
+- usar un `JWT_SECRET` válido y suficientemente largo al ejecutarlo fuera de un entorno ya configurado
+
+---
+
 ## Incidente: la cola crece sin bajar
 
 ### Síntomas

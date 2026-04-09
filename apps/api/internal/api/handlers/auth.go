@@ -11,6 +11,9 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
 )
 
+const sessionCookieName = "reform_session"
+const sessionCookieMaxAgeSeconds = 72 * 60 * 60
+
 // AuthHandler handles POST /api/auth/register and /api/auth/login.
 type AuthHandler struct {
 	Auth *auth.Service
@@ -64,6 +67,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeSessionCookie(w, r, result.SessionToken)
 	respondJSON(w, http.StatusCreated, result)
 }
 
@@ -92,7 +96,14 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeSessionCookie(w, r, result.SessionToken)
 	respondJSON(w, http.StatusOK, result)
+}
+
+// Logout clears the current session cookie.
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	clearSessionCookie(w, r)
+	respondJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
 
 // Me handles GET /api/auth/me — returns current user from context.
@@ -103,4 +114,35 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, u)
+}
+
+func writeSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   requestUsesHTTPS(r),
+		MaxAge:   sessionCookieMaxAgeSeconds,
+	})
+}
+
+func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   requestUsesHTTPS(r),
+		MaxAge:   -1,
+	})
+}
+
+func requestUsesHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
 }

@@ -55,7 +55,7 @@ export default function AccessShell() {
         </div>
       </div>
 
-      <main className="flex flex-1 items-center justify-center px-5 pb-12 sm:px-8">
+      <main className="flex flex-1 items-start justify-center px-5 pb-10 pt-5 sm:px-8 sm:pb-12 sm:pt-7">
         <AuthPanel mode={mode} onModeChange={setMode} />
       </main>
     </>

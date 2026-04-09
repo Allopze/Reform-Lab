@@ -20,4 +20,6 @@ var (
 	ErrUserNotFound       = errors.New("user not found")
 	ErrForbidden          = errors.New("forbidden")
 	ErrArtifactExpired    = errors.New("artifact expired")
+	ErrQuotaExceeded      = errors.New("quota exceeded")
+	ErrTooManyActiveJobs  = errors.New("too many active jobs")
 )

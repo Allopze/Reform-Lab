@@ -13,22 +13,42 @@ import (
 
 // Service manages job lifecycle: creation, status updates, and queuing.
 type Service struct {
-	jobs  repository.JobRepository
-	audit repository.AuditRepository
-	q     queue.JobQueue
+	jobs                 repository.JobRepository
+	audit                repository.AuditRepository
+	q                    queue.JobQueue
+	maxActiveJobsPerUser int
+}
+
+type Option func(*Service)
+
+func WithMaxActiveJobsPerUser(limit int) Option {
+	return func(s *Service) {
+		s.maxActiveJobsPerUser = limit
+	}
 }
 
 // NewService creates an orchestrator service.
-func NewService(jobs repository.JobRepository, audit repository.AuditRepository, q queue.JobQueue) *Service {
-	return &Service{jobs: jobs, audit: audit, q: q}
+func NewService(jobs repository.JobRepository, audit repository.AuditRepository, q queue.JobQueue, opts ...Option) *Service {
+	svc := &Service{jobs: jobs, audit: audit, q: q}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(svc)
+		}
+	}
+	return svc
 }
 
 // CreateAndEnqueue persists a new job and enqueues it for processing.
-func (s *Service) CreateAndEnqueue(ctx context.Context, userID uuid.UUID, fileID uuid.UUID, cap domain.Capability, inputPath string) (*domain.Job, error) {
+// userID may be nil for system-owned work outside the public API.
+func (s *Service) CreateAndEnqueue(ctx context.Context, userID *uuid.UUID, fileID uuid.UUID, cap domain.Capability, inputPath string) (*domain.Job, error) {
+	if err := s.enforceActiveJobLimit(ctx, userID); err != nil {
+		return nil, err
+	}
+
 	now := time.Now().UTC()
 	job := domain.Job{
 		ID:           uuid.New(),
-		UserID:       &userID,
+		UserID:       userID,
 		FileID:       fileID,
 		CapabilityID: cap.ID,
 		OutputFormat: cap.TargetFormat,
@@ -41,10 +61,14 @@ func (s *Service) CreateAndEnqueue(ctx context.Context, userID uuid.UUID, fileID
 		return nil, fmt.Errorf("persist job: %w", err)
 	}
 
+	var userIDStr string
+	if userID != nil {
+		userIDStr = userID.String()
+	}
 	taskType := fmt.Sprintf("conversion:%s", cap.ID)
 	payload := queue.TaskPayload{
 		JobID:        job.ID.String(),
-		UserID:       userID.String(),
+		UserID:       userIDStr,
 		FileID:       fileID.String(),
 		CapabilityID: cap.ID,
 		InputPath:    inputPath,
@@ -76,6 +100,20 @@ func (s *Service) CreateAndEnqueue(ctx context.Context, userID uuid.UUID, fileID
 	})
 
 	return &job, nil
+}
+
+func (s *Service) enforceActiveJobLimit(ctx context.Context, userID *uuid.UUID) error {
+	if userID == nil || s.maxActiveJobsPerUser <= 0 {
+		return nil
+	}
+	count, err := s.jobs.CountActiveByUser(ctx, *userID)
+	if err != nil {
+		return fmt.Errorf("count active jobs: %w", err)
+	}
+	if count >= s.maxActiveJobsPerUser {
+		return domain.ErrTooManyActiveJobs
+	}
+	return nil
 }
 
 // GetJob returns a job by ID.
@@ -126,14 +164,11 @@ func (s *Service) RetryFailedJob(ctx context.Context, sourceJob *domain.Job, cap
 	if sourceJob == nil {
 		return nil, fmt.Errorf("source job is required")
 	}
-	if sourceJob.UserID == nil {
-		return nil, fmt.Errorf("source job has no owner")
-	}
 	if sourceJob.Status != domain.JobFailed {
 		return nil, fmt.Errorf("%w: retry only allowed for failed jobs", domain.ErrInvalidTransition)
 	}
 
-	retryJob, err := s.CreateAndEnqueue(ctx, *sourceJob.UserID, sourceJob.FileID, cap, inputPath)
+	retryJob, err := s.CreateAndEnqueue(ctx, sourceJob.UserID, sourceJob.FileID, cap, inputPath)
 	if err != nil {
 		return nil, err
 	}

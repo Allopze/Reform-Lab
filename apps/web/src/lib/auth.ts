@@ -11,7 +11,6 @@ export interface AuthUser {
 
 export interface AuthResult {
   user: AuthUser;
-  token: string;
 }
 
 export interface RegisterPayload {
@@ -30,6 +29,7 @@ async function request<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify(body),
   });
 
@@ -50,17 +50,9 @@ export function login(payload: LoginPayload): Promise<AuthResult> {
   return request<AuthResult>("/api/auth/login", payload);
 }
 
-const TOKEN_KEY = "reform_token";
-
-export function saveToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(TOKEN_KEY);
-}
-
-export function clearToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
+export async function logout(): Promise<void> {
+  await fetch(`${API_URL}/api/auth/logout`, {
+    method: "POST",
+    credentials: "include",
+  });
 }

@@ -14,27 +14,27 @@ import (
 
 type userContextKey struct{}
 
+const sessionCookieName = "reform_session"
+
 // UserFromContext retrieves the authenticated user from request context.
 func UserFromContext(ctx context.Context) *domain.User {
 	u, _ := ctx.Value(userContextKey{}).(*domain.User)
 	return u
 }
 
-// Auth returns middleware that validates a Bearer JWT and injects the user into context.
-// If the token is missing or invalid, the request is rejected with 401.
+// Auth returns middleware that validates the session cookie and injects the user into context.
+// If the session is missing or invalid, the request is rejected with 401.
 func Auth(authSvc *auth.Service, users repository.UserRepository) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			header := r.Header.Get("Authorization")
-			if header == "" || !strings.HasPrefix(header, "Bearer ") {
-				respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing or invalid authorization header"})
+			tokenStr := extractToken(r)
+			if tokenStr == "" {
+				respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing session cookie"})
 				return
 			}
-
-			tokenStr := strings.TrimPrefix(header, "Bearer ")
 			claims, err := authSvc.ValidateToken(tokenStr)
 			if err != nil {
-				respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
+				respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid session"})
 				return
 			}
 
@@ -54,6 +54,35 @@ func Auth(authSvc *auth.Service, users repository.UserRepository) func(http.Hand
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// OptionalAuth returns middleware that injects the user into context if a valid
+// session cookie is present, but allows the request to proceed without authentication.
+// Anonymous requests continue with a nil user in context.
+func OptionalAuth(authSvc *auth.Service, users repository.UserRepository) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if tokenStr := extractToken(r); tokenStr != "" {
+				if claims, err := authSvc.ValidateToken(tokenStr); err == nil {
+					if userID, err := uuid.Parse(claims.Subject); err == nil {
+						if u, err := users.GetByID(r.Context(), userID); err == nil {
+							ctx := context.WithValue(r.Context(), userContextKey{}, u)
+							next.ServeHTTP(w, r.WithContext(ctx))
+							return
+						}
+					}
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func extractToken(r *http.Request) string {
+	if cookie, err := r.Cookie(sessionCookieName); err == nil {
+		return strings.TrimSpace(cookie.Value)
+	}
+	return ""
 }
 
 func RequireAdmin(next http.Handler) http.Handler {

@@ -14,19 +14,33 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/server ./cmd/server
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV HOME=/tmp/reform-home
 
 RUN apt-get update && \
 		apt-get install -y --no-install-recommends \
 			ca-certificates \
 			tzdata \
+			ghostscript \
 			poppler-utils \
+			librsvg2-bin \
 			libreoffice-core \
+			libreoffice-calc \
+			libreoffice-impress \
 			libreoffice-writer \
 			ffmpeg \
-		&& rm -rf /var/lib/apt/lists/*
+			libheif-examples \
+			tesseract-ocr \
+			tesseract-ocr-spa \
+		&& rm -rf /var/lib/apt/lists/* \
+		&& groupadd --system app \
+		&& useradd --system --gid app --create-home --home-dir /home/app app \
+		&& mkdir -p /data /tmp/reform-home /app \
+		&& chown -R app:app /app /data /tmp/reform-home /home/app
 WORKDIR /app
 COPY --from=builder /bin/server /app/server
 COPY migrations/ /app/migrations/
+
+USER app
 
 EXPOSE 8080
 ENTRYPOINT ["/app/server"]

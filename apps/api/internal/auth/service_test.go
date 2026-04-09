@@ -79,7 +79,7 @@ func TestRegisterFirstUserBecomesAdmin(t *testing.T) {
 	if storedSecond.Role != domain.RoleUser {
 		t.Fatalf("expected persisted second user to be user, got %q", storedSecond.Role)
 	}
-	if first.Token == "" || second.Token == "" {
+	if first.SessionToken == "" || second.SessionToken == "" {
 		t.Fatal("expected both registrations to issue tokens")
 	}
 }

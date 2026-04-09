@@ -10,7 +10,7 @@ import (
 )
 
 // ipLimiter holds a rate.Limiter and the last time it was seen.
-type ipLimiter struct {
+type rateLimiterEntry struct {
 	limiter  *rate.Limiter
 	lastSeen time.Time
 }
@@ -18,35 +18,79 @@ type ipLimiter struct {
 // RateLimit applies a per-IP token-bucket rate limiter.
 // rps is requests per second per IP; burst is the maximum burst size per IP.
 // Stale entries are cleaned up every 3 minutes.
-func RateLimit(rps float64, burst int) func(http.Handler) http.Handler {
+func RateLimit(rps float64, burst int, trustProxyHeaders bool) func(http.Handler) http.Handler {
+	return keyedRateLimit(rps, burst, func(r *http.Request) (string, bool) {
+		return realIP(r, trustProxyHeaders), true
+	}, nil, "rate limit exceeded")
+}
+
+// AuthenticatedUserRateLimit applies a token-bucket quota keyed by authenticated user ID.
+// perMinute is the sustained quota per minute; burst controls how many immediate requests are allowed.
+func AuthenticatedUserRateLimit(perMinute, burst int) func(http.Handler) http.Handler {
+	if perMinute <= 0 || burst <= 0 {
+		return func(next http.Handler) http.Handler { return next }
+	}
+	return keyedRateLimit(float64(perMinute)/60.0, burst, func(r *http.Request) (string, bool) {
+		u := UserFromContext(r.Context())
+		if u == nil {
+			return "", false
+		}
+		return u.ID.String(), true
+	}, func(w http.ResponseWriter) {
+		respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+	}, "user quota exceeded")
+}
+
+// UserOrIPRateLimit applies a quota keyed by authenticated user ID when present,
+// and falls back to client IP for anonymous requests.
+func UserOrIPRateLimit(perMinute, burst int, trustProxyHeaders bool) func(http.Handler) http.Handler {
+	if perMinute <= 0 || burst <= 0 {
+		return func(next http.Handler) http.Handler { return next }
+	}
+	return keyedRateLimit(float64(perMinute)/60.0, burst, func(r *http.Request) (string, bool) {
+		u := UserFromContext(r.Context())
+		if u != nil {
+			return "user:" + u.ID.String(), true
+		}
+		return "ip:" + realIP(r, trustProxyHeaders), true
+	}, nil, "user quota exceeded")
+}
+
+func keyedRateLimit(
+	rps float64,
+	burst int,
+	keyFn func(*http.Request) (string, bool),
+	onMissing func(http.ResponseWriter),
+	errorMessage string,
+) func(http.Handler) http.Handler {
 	var mu sync.Mutex
-	limiters := make(map[string]*ipLimiter)
+	limiters := make(map[string]*rateLimiterEntry)
 
 	// Background cleanup of stale entries.
 	go func() {
 		for {
 			time.Sleep(3 * time.Minute)
 			mu.Lock()
-			for ip, entry := range limiters {
+			for key, entry := range limiters {
 				if time.Since(entry.lastSeen) > 5*time.Minute {
-					delete(limiters, ip)
+					delete(limiters, key)
 				}
 			}
 			mu.Unlock()
 		}
 	}()
 
-	getLimiter := func(ip string) *rate.Limiter {
+	getLimiter := func(key string) *rate.Limiter {
 		mu.Lock()
 		defer mu.Unlock()
 
-		entry, exists := limiters[ip]
+		entry, exists := limiters[key]
 		if !exists {
-			entry = &ipLimiter{
+			entry = &rateLimiterEntry{
 				limiter:  rate.NewLimiter(rate.Limit(rps), burst),
 				lastSeen: time.Now(),
 			}
-			limiters[ip] = entry
+			limiters[key] = entry
 		}
 		entry.lastSeen = time.Now()
 		return entry.limiter
@@ -54,12 +98,21 @@ func RateLimit(rps float64, burst int) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := realIP(r)
-			limiter := getLimiter(ip)
+			key, ok := keyFn(r)
+			if !ok {
+				if onMissing != nil {
+					onMissing(w)
+					return
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			limiter := getLimiter(key)
 			if !limiter.Allow() {
 				w.Header().Set("Retry-After", "1")
 				respondJSON(w, http.StatusTooManyRequests, map[string]string{
-					"error": "rate limit exceeded",
+					"error": errorMessage,
 				})
 				return
 			}
@@ -70,24 +123,37 @@ func RateLimit(rps float64, burst int) func(http.Handler) http.Handler {
 
 // realIP extracts the client IP from the request, preferring
 // X-Forwarded-For and X-Real-IP headers when behind a reverse proxy.
-func realIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Take the first IP in the comma-separated list.
-		for i := 0; i < len(xff); i++ {
-			if xff[i] == ',' {
-				return xff[:i]
+func realIP(r *http.Request, trustProxyHeaders bool) string {
+	if trustProxyHeaders {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			for i := 0; i < len(xff); i++ {
+				if xff[i] == ',' {
+					return trimSpaces(xff[:i])
+				}
 			}
+			return trimSpaces(xff)
 		}
-		return xff
-	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			return trimSpaces(xri)
+		}
 	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
 	return ip
+}
+
+func trimSpaces(value string) string {
+	start := 0
+	for start < len(value) && (value[start] == ' ' || value[start] == '\t') {
+		start++
+	}
+	end := len(value)
+	for end > start && (value[end-1] == ' ' || value[end-1] == '\t') {
+		end--
+	}
+	return value[start:end]
 }
 
 // MaxBodySize limits the request body to n bytes.

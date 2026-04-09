@@ -7,8 +7,17 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/capabilities"
 )
 
-// Health returns a health check handler with service policy information.
-func Health(artifactTTLHours int, artifactTTLByFamily map[string]int) http.HandlerFunc {
+// PublicHealth returns a minimal public health check.
+func PublicHealth() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"status": "ok",
+		})
+	}
+}
+
+// DetailedHealth returns service policy and operational snapshots for admins.
+func DetailedHealth(artifactTTLHours int, artifactTTLByFamily map[string]int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusOK, map[string]interface{}{
 			"status": "ok",

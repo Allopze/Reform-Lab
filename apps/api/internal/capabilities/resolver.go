@@ -17,8 +17,7 @@ func Resolve(file domain.OriginalFile) []domain.Capability {
 			continue
 		}
 
-		// Exclude converting to the same format as the source.
-		if cap.TargetFormat == file.DetectedFormat.Extension {
+		if rejectsSameFormat(file, cap) {
 			continue
 		}
 
@@ -62,7 +61,7 @@ func IsEligible(file domain.OriginalFile, capabilityID string) (*domain.Capabili
 		return nil, domain.ErrCapabilityIneligible
 	}
 
-	if cap.TargetFormat == file.DetectedFormat.Extension {
+	if rejectsSameFormat(file, *cap) {
 		return nil, domain.ErrCapabilityIneligible
 	}
 
@@ -75,4 +74,11 @@ func IsEligible(file domain.OriginalFile, capabilityID string) (*domain.Capabili
 	}
 
 	return cap, nil
+}
+
+func rejectsSameFormat(file domain.OriginalFile, cap domain.Capability) bool {
+	if cap.OperationType != domain.OpConvert {
+		return false
+	}
+	return cap.TargetFormat == file.DetectedFormat.Extension
 }

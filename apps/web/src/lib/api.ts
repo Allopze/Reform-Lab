@@ -1,11 +1,7 @@
 import { API_URL } from "./config";
-import { getToken } from "./auth";
 
 function headers(): HeadersInit {
-  const h: HeadersInit = {};
-  const token = getToken();
-  if (token) h["Authorization"] = `Bearer ${token}`;
-  return h;
+  return {};
 }
 
 // ── Upload ──
@@ -29,6 +25,7 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
   const res = await fetch(`${API_URL}/api/files`, {
     method: "POST",
     headers: headers(),
+    credentials: "include",
     body: form,
   });
 
@@ -50,6 +47,7 @@ export interface Capability {
 export async function getCapabilities(fileId: string): Promise<Capability[]> {
   const res = await fetch(`${API_URL}/api/files/${fileId}/capabilities`, {
     headers: headers(),
+    credentials: "include",
   });
 
   const data = await res.json();
@@ -69,6 +67,9 @@ export interface Job {
   progress: number;
   error?: string;
   artifactId?: string;
+  artifactFileName?: string;
+  artifactMimeType?: string;
+  artifactSize?: number;
   startedAt?: string;
   completedAt?: string;
   createdAt: string;
@@ -78,6 +79,7 @@ export async function createConversion(fileId: string, capabilityId: string): Pr
   const res = await fetch(`${API_URL}/api/conversions`, {
     method: "POST",
     headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ fileId, capabilityId }),
   });
 
@@ -89,6 +91,7 @@ export async function createConversion(fileId: string, capabilityId: string): Pr
 export async function getJob(jobId: string): Promise<Job> {
   const res = await fetch(`${API_URL}/api/jobs/${jobId}`, {
     headers: headers(),
+    credentials: "include",
   });
 
   const data = await res.json();
@@ -169,6 +172,7 @@ export interface AdminDashboardData {
 export async function getMyDashboard(): Promise<UserDashboardData> {
   const res = await fetch(`${API_URL}/api/dashboard/me`, {
     headers: headers(),
+    credentials: "include",
   });
 
   const data = await res.json();
@@ -179,6 +183,7 @@ export async function getMyDashboard(): Promise<UserDashboardData> {
 export async function getAdminOverview(): Promise<AdminDashboardData> {
   const res = await fetch(`${API_URL}/api/admin/overview`, {
     headers: headers(),
+    credentials: "include",
   });
 
   const data = await res.json();
@@ -204,6 +209,7 @@ export async function downloadArtifact(
 ): Promise<void> {
   const res = await fetch(artifactDownloadUrl(artifactId), {
     headers: headers(),
+    credentials: "include",
   });
 
   if (!res.ok) {
@@ -237,6 +243,7 @@ export async function cancelJob(jobId: string): Promise<void> {
   const res = await fetch(`${API_URL}/api/jobs/${jobId}/cancel`, {
     method: "POST",
     headers: headers(),
+    credentials: "include",
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -248,6 +255,7 @@ export async function retryJob(jobId: string): Promise<Job> {
   const res = await fetch(`${API_URL}/api/jobs/${jobId}/retry`, {
     method: "POST",
     headers: headers(),
+    credentials: "include",
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -271,7 +279,9 @@ export interface HealthInfo {
 }
 
 export async function getHealthInfo(): Promise<HealthInfo> {
-  const res = await fetch(`${API_URL}/api/health`);
+  const res = await fetch(`${API_URL}/api/admin/health`, {
+    credentials: "include",
+  });
   const data = await res.json();
   if (!res.ok) throw new Error("Failed to fetch service info");
   return data;

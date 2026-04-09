@@ -11,11 +11,9 @@ import {
 } from "react";
 import {
   type AuthUser,
-  getToken,
-  saveToken,
-  clearToken,
   login as apiLogin,
   register as apiRegister,
+  logout as apiLogout,
   type LoginPayload,
   type RegisterPayload,
 } from "./auth";
@@ -37,42 +35,31 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ user: null, loading: true });
 
-  // On mount, check token and fetch user profile
+  // On mount, check session cookie and fetch user profile.
   useEffect(() => {
-    const token = getToken();
-    if (!token) {
-      setState({ user: null, loading: false });
-      return;
-    }
-
     fetch(`${API_URL}/api/auth/me`, {
-      headers: { Authorization: `Bearer ${token}` },
+      credentials: "include",
     })
       .then((res) => {
         if (!res.ok) throw new Error("invalid token");
         return res.json();
       })
       .then((user: AuthUser) => setState({ user, loading: false }))
-      .catch(() => {
-        clearToken();
-        setState({ user: null, loading: false });
-      });
+      .catch(() => setState({ user: null, loading: false }));
   }, []);
 
   const login = useCallback(async (payload: LoginPayload) => {
     const result = await apiLogin(payload);
-    saveToken(result.token);
     setState({ user: result.user, loading: false });
   }, []);
 
   const register = useCallback(async (payload: RegisterPayload) => {
     const result = await apiRegister(payload);
-    saveToken(result.token);
     setState({ user: result.user, loading: false });
   }, []);
 
   const logout = useCallback(() => {
-    clearToken();
+    void apiLogout();
     setState({ user: null, loading: false });
   }, []);
 

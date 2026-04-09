@@ -24,11 +24,15 @@ export default function Header({ toolbar }: HeaderProps) {
   const userName = user?.name ?? "Invitado";
   const userInitial = userName.slice(0, 1).toUpperCase();
   const menuItems = [
-    {
-      href: "/usuario",
-      label: "Mis Archivos",
-      icon: FolderOpen,
-    },
+    ...(user
+      ? [
+          {
+            href: "/usuario",
+            label: "Mis Archivos",
+            icon: FolderOpen,
+          },
+        ]
+      : []),
     ...(user?.role === "admin"
       ? [
           {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -21,24 +22,9 @@ func (e *ToImagesEngine) Execute(ctx context.Context, inputPath, outputDir, outp
 		ext = "jpg"
 	}
 
-	prefix := filepath.Join(outputDir, "page")
-
-	cmd := exec.CommandContext(ctx, "pdftoppm", flag, "-r", "150", inputPath, prefix)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("pdftoppm: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-
-	// Collect output files.
-	pattern := filepath.Join(outputDir, "page-*."+ext)
-	matches, err := filepath.Glob(pattern)
-	if err != nil || len(matches) == 0 {
-		// Try without dash (single page PDFs produce "page-1.png")
-		pattern = filepath.Join(outputDir, "page*."+ext)
-		matches, _ = filepath.Glob(pattern)
-	}
-
-	if len(matches) == 0 {
-		return "", fmt.Errorf("pdftoppm produced no output files")
+	matches, err := renderPDFPages(ctx, inputPath, outputDir, "page", flag, ext)
+	if err != nil {
+		return "", err
 	}
 
 	// Single page: return the image directly.
@@ -49,6 +35,26 @@ func (e *ToImagesEngine) Execute(ctx context.Context, inputPath, outputDir, outp
 	// Multi-page: create a ZIP.
 	zipPath := filepath.Join(outputDir, "pages.zip")
 	return zipPath, createZip(zipPath, matches)
+}
+
+func renderPDFPages(ctx context.Context, inputPath, outputDir, prefix, flag, ext string) ([]string, error) {
+	prefixPath := filepath.Join(outputDir, prefix)
+	cmd := exec.CommandContext(ctx, "pdftoppm", flag, "-r", "200", inputPath, prefixPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("pdftoppm: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+
+	pattern := filepath.Join(outputDir, prefix+"-*."+ext)
+	matches, err := filepath.Glob(pattern)
+	if err != nil || len(matches) == 0 {
+		pattern = filepath.Join(outputDir, prefix+"*."+ext)
+		matches, _ = filepath.Glob(pattern)
+	}
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("pdftoppm produced no output files")
+	}
+	sort.Strings(matches)
+	return matches, nil
 }
 
 func createZip(zipPath string, files []string) error {

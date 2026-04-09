@@ -13,7 +13,7 @@ type ToDocxEngine struct{}
 
 func (e *ToDocxEngine) Execute(ctx context.Context, inputPath, outputDir, _ string) (string, error) {
 	cmd := exec.CommandContext(ctx,
-		"libreoffice", "--headless", "--convert-to", "docx",
+		"libreoffice", "--headless", "--convert-to", "docx:Office Open XML Text",
 		"--outdir", outputDir, inputPath,
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {

@@ -8,13 +8,13 @@ import (
 	"strings"
 )
 
-// ConvertEngine converts between audio formats using FFmpeg.
+// ConvertEngine converts audio formats and can also extract audio tracks from video inputs.
 type ConvertEngine struct{}
 
 func (e *ConvertEngine) Execute(ctx context.Context, inputPath, outputDir, outputFormat string) (string, error) {
 	outputPath := filepath.Join(outputDir, "converted."+outputFormat)
 
-	args := []string{"-i", inputPath, "-y"}
+	args := []string{"-i", inputPath, "-y", "-vn"}
 
 	switch outputFormat {
 	case "mp3":
@@ -23,6 +23,14 @@ func (e *ConvertEngine) Execute(ctx context.Context, inputPath, outputDir, outpu
 		args = append(args, "-codec:a", "pcm_s16le")
 	case "ogg":
 		args = append(args, "-codec:a", "libvorbis", "-q:a", "4")
+	case "aac":
+		args = append(args, "-codec:a", "aac", "-b:a", "160k")
+	case "m4a":
+		args = append(args, "-codec:a", "aac", "-b:a", "160k", "-movflags", "+faststart", "-f", "ipod")
+	case "flac":
+		args = append(args, "-codec:a", "flac")
+	case "opus":
+		args = append(args, "-codec:a", "libopus", "-b:a", "128k", "-f", "opus")
 	default:
 		return "", fmt.Errorf("unsupported audio output format: %s", outputFormat)
 	}

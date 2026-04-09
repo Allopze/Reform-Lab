@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/allopze/reform-lab/apps/api/internal/capabilities"
@@ -27,11 +28,7 @@ type conversionRequest struct {
 }
 
 func (h *ConversionHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	u := currentUser(r)
-	if u == nil {
-		respondError(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
+	u := currentUser(r) // may be nil for anonymous users
 
 	var req conversionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -73,8 +70,12 @@ func (h *ConversionHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	inputPath := h.Store.OriginalPath(fileID.String())
 
-	job, err := h.Orchestrator.CreateAndEnqueue(r.Context(), u.ID, fileID, *cap, inputPath)
+	job, err := h.Orchestrator.CreateAndEnqueue(r.Context(), userIDPtr(u), fileID, *cap, inputPath)
 	if err != nil {
+		if errors.Is(err, domain.ErrTooManyActiveJobs) {
+			respondError(w, http.StatusTooManyRequests, "too many active jobs for this user")
+			return
+		}
 		h.Logger.Error().Err(err).Str("file_id", fileID.String()).Msg("failed to create job")
 		respondError(w, http.StatusInternalServerError, "failed to create conversion job")
 		return

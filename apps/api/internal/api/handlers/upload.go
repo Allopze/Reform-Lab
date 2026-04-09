@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"io"
 	"net/http"
 	"os"
@@ -31,11 +30,7 @@ type UploadHandler struct {
 }
 
 func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	u := currentUser(r)
-	if u == nil {
-		respondError(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
+	u := currentUser(r) // may be nil for anonymous uploads
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 
@@ -45,17 +40,30 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+	tempFile, err := os.CreateTemp("", "reform-upload-*")
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to stage uploaded file")
+		return
+	}
+	tempPath := tempFile.Name()
+	defer func() {
+		_ = tempFile.Close()
+		_ = os.Remove(tempPath)
+	}()
 
-	// Read file into buffer for detection (mimetype needs a reader).
-	var buf bytes.Buffer
-	size, err := io.Copy(&buf, file)
+	// Stream the upload into a temporary file so large bodies stay off-heap.
+	size, err := io.Copy(tempFile, file)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "failed to read uploaded file")
 		return
 	}
+	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to inspect uploaded file")
+		return
+	}
 
 	// Detect real format from content (never trust extension).
-	detected, err := ingestion.DetectFormat(bytes.NewReader(buf.Bytes()))
+	detected, err := ingestion.DetectFormat(tempFile)
 	if err != nil {
 		if err == domain.ErrFormatUnsupported {
 			respondError(w, http.StatusUnprocessableEntity, "format not supported")
@@ -70,16 +78,8 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	internalName := fileID.String()
 	originalName := security.SanitizeFileName(header.Filename)
 
-	// Persist original file to storage.
-	storagePath, err := h.Store.SaveOriginal(r.Context(), fileID.String(), bytes.NewReader(buf.Bytes()))
-	if err != nil {
-		h.Logger.Error().Err(err).Str("file_id", fileID.String()).Msg("save original failed")
-		respondError(w, http.StatusInternalServerError, "failed to save file")
-		return
-	}
-
-	// Extract metadata from the stored file.
-	meta := ingestion.ExtractMetadata(storagePath, detected)
+	// Extract metadata from the staged file before committing it to long-lived storage.
+	meta := ingestion.ExtractMetadata(tempPath, detected)
 
 	// Validate file against limits and policies.
 	if err := ingestion.ValidateFile(size, detected, meta); err != nil {
@@ -95,11 +95,23 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to prepare uploaded file")
+		return
+	}
+
+	// Persist original file to storage only after validation succeeds.
+	storagePath, err := h.Store.SaveOriginal(r.Context(), fileID.String(), tempFile)
+	if err != nil {
+		h.Logger.Error().Err(err).Str("file_id", fileID.String()).Msg("save original failed")
+		respondError(w, http.StatusInternalServerError, "failed to save file")
+		return
+	}
 
 	now := time.Now().UTC()
 	record := domain.OriginalFile{
 		ID:             fileID,
-		UserID:         &u.ID,
+		UserID:         userIDPtr(u),
 		InternalName:   internalName,
 		OriginalName:   originalName,
 		Size:           size,
@@ -120,16 +132,19 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Audit event
+	auditDetails := map[string]interface{}{
+		"originalName": originalName,
+		"mimeType":     detected.MIMEType,
+		"size":         size,
+	}
+	if u != nil {
+		auditDetails["userId"] = u.ID.String()
+	}
 	_ = h.Audit.Create(r.Context(), &domain.AuditEvent{
 		ID:        uuid.New(),
 		EventType: domain.AuditUpload,
 		FileID:    &fileID,
-		Details: map[string]interface{}{
-			"userId":       u.ID.String(),
-			"originalName": originalName,
-			"mimeType":     detected.MIMEType,
-			"size":         size,
-		},
+		Details:   auditDetails,
 		CreatedAt: now,
 	})
 

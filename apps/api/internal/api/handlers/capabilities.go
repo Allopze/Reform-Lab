@@ -23,11 +23,7 @@ type capabilityResponse struct {
 }
 
 func (h *CapabilitiesHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	u := currentUser(r)
-	if u == nil {
-		respondError(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
+	u := currentUser(r) // may be nil for anonymous users
 
 	fileID, err := uuid.Parse(chi.URLParam(r, "fileId"))
 	if err != nil {

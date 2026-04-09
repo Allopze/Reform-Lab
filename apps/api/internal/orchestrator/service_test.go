@@ -26,7 +26,7 @@ func newTestOrchestrator(t *testing.T) (*Service, repository.JobRepository) {
 
 	jobs := repository.NewJobRepository(db)
 	audit := repository.NewAuditRepository(db)
-	q := queue.NewInProcessQueue(nil) // nil handler: accepts tasks silently
+	q := queue.NewInProcessQueueWithLimit(nil, 1) // nil handler: accepts tasks silently
 
 	return NewService(jobs, audit, q), jobs
 }
@@ -48,7 +48,7 @@ func TestCreateAndEnqueue(t *testing.T) {
 
 	userID := uuid.New()
 	fileID := uuid.New()
-	job, err := svc.CreateAndEnqueue(ctx, userID, fileID, cap, "/tmp/fake.pdf")
+	job, err := svc.CreateAndEnqueue(ctx, &userID, fileID, cap, "/tmp/fake.pdf")
 	if err != nil {
 		t.Fatalf("CreateAndEnqueue: %v", err)
 	}
@@ -88,7 +88,8 @@ func TestJobLifecycleTransitions(t *testing.T) {
 		},
 	}
 
-	job, err := svc.CreateAndEnqueue(ctx, uuid.New(), uuid.New(), cap, "/tmp/fake.pdf")
+	tmpUID := uuid.New()
+	job, err := svc.CreateAndEnqueue(ctx, &tmpUID, uuid.New(), cap, "/tmp/fake.pdf")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -131,7 +132,8 @@ func TestJobLifecycleFailure(t *testing.T) {
 		},
 	}
 
-	job, err := svc.CreateAndEnqueue(ctx, uuid.New(), uuid.New(), cap, "/tmp/fake.pdf")
+	tmpUID := uuid.New()
+	job, err := svc.CreateAndEnqueue(ctx, &tmpUID, uuid.New(), cap, "/tmp/fake.pdf")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -168,11 +170,37 @@ func TestInvalidTransitionRejected(t *testing.T) {
 		},
 	}
 
-	job, _ := svc.CreateAndEnqueue(ctx, uuid.New(), uuid.New(), cap, "/tmp/fake.pdf")
+	tmpUID := uuid.New()
+	job, _ := svc.CreateAndEnqueue(ctx, &tmpUID, uuid.New(), cap, "/tmp/fake.pdf")
 
 	// queued → succeeded — should be rejected
 	artifactID := uuid.New()
 	if err := svc.MarkSucceeded(ctx, job.ID, artifactID); err == nil {
 		t.Fatal("expected error for invalid transition queued → succeeded")
+	}
+}
+
+func TestCreateAndEnqueueRejectsWhenUserReachedActiveJobLimit(t *testing.T) {
+	svc, _ := newTestOrchestrator(t)
+	svc = NewService(svc.jobs, svc.audit, svc.q, WithMaxActiveJobsPerUser(1))
+	ctx := context.Background()
+
+	cap := domain.Capability{
+		ID:            "pdf-to-txt",
+		TargetFormat:  "txt",
+		SourceFormats: []string{"application/pdf"},
+		Engine:        "poppler",
+		ExecutionLimits: domain.ExecutionLimits{
+			TimeoutSeconds: 60,
+			MaxRetries:     1,
+		},
+	}
+
+	userID := uuid.New()
+	if _, err := svc.CreateAndEnqueue(ctx, &userID, uuid.New(), cap, "/tmp/first.pdf"); err != nil {
+		t.Fatalf("first job should be accepted: %v", err)
+	}
+	if _, err := svc.CreateAndEnqueue(ctx, &userID, uuid.New(), cap, "/tmp/second.pdf"); err != domain.ErrTooManyActiveJobs {
+		t.Fatalf("expected ErrTooManyActiveJobs, got %v", err)
 	}
 }

@@ -2,24 +2,22 @@ package document
 
 import (
 	"context"
-	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
 
-// ToPDFEngine converts documents (DOCX, ODT, RTF) to PDF using LibreOffice.
+// ToPDFEngine converts LibreOffice-supported office inputs to PDF.
 type ToPDFEngine struct{}
 
 func (e *ToPDFEngine) Execute(ctx context.Context, inputPath, outputDir, _ string) (string, error) {
-	cmd := exec.CommandContext(ctx,
-		"libreoffice", "--headless", "--convert-to", "pdf",
-		"--outdir", outputDir, inputPath,
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("libreoffice doc-to-pdf: %s: %w", strings.TrimSpace(string(out)), err)
+	if err := runLibreOfficeConvert(ctx, "libreoffice doc-to-pdf", "pdf", inputPath, outputDir); err != nil {
+		return "", err
 	}
 
 	base := strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
-	return filepath.Join(outputDir, base+".pdf"), nil
+	outputPath := filepath.Join(outputDir, base+".pdf")
+	if err := ensureOutputFile(outputPath); err != nil {
+		return "", err
+	}
+	return outputPath, nil
 }

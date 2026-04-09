@@ -37,10 +37,17 @@ func TestResolveFiltersUnavailableEngines(t *testing.T) {
 	// Create a prober with all engines marked unavailable except go-image.
 	p := &EngineProber{}
 	p.available = map[string]bool{
-		"go-image":    true,
-		"libreoffice": false,
-		"poppler":     false,
-		"ffmpeg":      false,
+		"go-image":     true,
+		"go-html":      false,
+		"libreoffice":  false,
+		"librsvg":      false,
+		"ocr-pdf":      false,
+		"poppler":      false,
+		"poppler-html": false,
+		"tesseract":    false,
+		"ffmpeg":       false,
+		"ghostscript":  false,
+		"goldmark":     true,
 	}
 	p.once.Do(func() {}) // prevent re-probing
 
@@ -61,10 +68,17 @@ func TestResolveFiltersUnavailableEngines(t *testing.T) {
 func TestEffectiveEngineAvailabilityAppliesFeatureFlags(t *testing.T) {
 	p := &EngineProber{}
 	p.available = map[string]bool{
-		"go-image":    true,
-		"libreoffice": true,
-		"poppler":     true,
-		"ffmpeg":      true,
+		"go-image":     true,
+		"go-html":      true,
+		"libreoffice":  true,
+		"librsvg":      true,
+		"ocr-pdf":      true,
+		"poppler":      true,
+		"poppler-html": true,
+		"tesseract":    true,
+		"ffmpeg":       true,
+		"ghostscript":  true,
+		"goldmark":     true,
 	}
 	p.once.Do(func() {})
 
