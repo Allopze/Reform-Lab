@@ -1,5 +1,5 @@
 export const DEFAULT_FOOTER_MESSAGE =
-  "© 2026 Reform Lab — Deteccion real de formato y conversion segura";
+  "© 2026 Reform Lab — Detección real de formato y conversión segura";
 
 export const FOOTER_MESSAGE_UPDATED_EVENT = "reform:footer-message-updated";
 
