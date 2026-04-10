@@ -41,6 +41,7 @@ build/
 coverage/
 coverage-final.json
 .nyc_output/
+.next/
 
 # Logs
 npm-debug.log*

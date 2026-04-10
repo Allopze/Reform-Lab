@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, type RefObject } from "react";
 import { CheckCircle2 } from "lucide-react";
 import type { CategoryConfig, FileState } from "@/types";
 import { categoryIdFromDetectedFamily, getCategoryById } from "@/config/categories";
@@ -66,6 +66,33 @@ export default function ConversionCard({ category }: ConversionCardProps) {
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const outputFormatRef = useRef(outputFormat);
   outputFormatRef.current = outputFormat;
+
+  // Fade transition on category change
+  const [faded, setFaded] = useState(false);
+  const prevCategoryIdRef = useRef(category.id);
+
+  useEffect(() => {
+    if (prevCategoryIdRef.current !== category.id) {
+      setFaded(true);
+      const timer = setTimeout(() => {
+        if (pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+        setDetectedCategoryId(null);
+        setUploadedFileId(null);
+        setCapabilities([]);
+        setUploadError(null);
+        setDownloadError(null);
+        setActiveJobId(null);
+        setOutputFormat("");
+        setFileState({ status: "idle" });
+        prevCategoryIdRef.current = category.id;
+        setFaded(false);
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [category.id]);
 
   // Cleanup polling interval on unmount
   useEffect(() => {
@@ -294,7 +321,7 @@ export default function ConversionCard({ category }: ConversionCardProps) {
       role="tabpanel"
       id={`panel-${category.id}`}
       aria-labelledby={`tab-${category.id}`}
-      className="mx-auto w-full max-w-215"
+      className={`mx-auto w-full max-w-215 transition-opacity duration-150 ease-in-out ${faded ? "opacity-0" : "opacity-100"}`}
     >
       <div className="rounded-[34px] border border-white/80 bg-white px-7 py-7 shadow-[0_24px_60px_-42px_rgba(15,23,42,0.24)] sm:px-8 sm:py-8">
         {fileState.status === "idle" ? (

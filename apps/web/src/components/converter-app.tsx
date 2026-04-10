@@ -28,9 +28,9 @@ export default function ConverterApp() {
         }
       />
 
-      <main className="flex flex-1 items-start justify-center px-5 pb-10 pt-5 sm:px-8 sm:pb-12 sm:pt-7">
+      <main className="flex flex-1 items-start justify-center px-5 pb-10 pt-8 sm:px-8 sm:pb-12 sm:pt-10">
         <section className="w-full max-w-280">
-          <ConversionCard key={category.id} category={category} />
+          <ConversionCard category={category} />
         </section>
       </main>
     </>

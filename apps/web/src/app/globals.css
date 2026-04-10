@@ -38,8 +38,8 @@ body {
     -45deg,
     transparent 0,
     transparent 23px,
-    rgba(214, 220, 228, 0.7) 23px,
-    rgba(214, 220, 228, 0.7) 24px
+    rgba(214, 220, 228, 0.35) 23px,
+    rgba(214, 220, 228, 0.35) 24px
   );
   color: #231f20;
   -webkit-font-smoothing: antialiased;

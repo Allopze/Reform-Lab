@@ -12,7 +12,7 @@ import {
   Video,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback, useState } from "react";
 
 const iconMap: Record<string, LucideIcon> = {
   search: Search,
@@ -35,6 +35,7 @@ export default function CategoryNav({
 }: CategoryNavProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
+  const [pillStyle, setPillStyle] = useState<{ left: number; width: number } | null>(null);
 
   useEffect(() => {
     if (activeRef.current && scrollRef.current) {
@@ -43,6 +44,15 @@ export default function CategoryNav({
       const scrollLeft =
         button.offsetLeft - container.offsetWidth / 2 + button.offsetWidth / 2;
       container.scrollTo({ left: scrollLeft, behavior: "smooth" });
+    }
+  }, [activeCategory]);
+
+  useEffect(() => {
+    if (activeRef.current) {
+      setPillStyle({
+        left: activeRef.current.offsetLeft,
+        width: activeRef.current.offsetWidth,
+      });
     }
   }, [activeCategory]);
 
@@ -78,9 +88,16 @@ export default function CategoryNav({
       role="tablist"
       aria-label="Categorías de conversión"
       onKeyDown={handleKeyDown}
-      className="flex w-full min-w-0 items-center gap-1 overflow-x-auto rounded-full border border-stone-200 bg-white px-1.5 py-1.5 shadow-[0_10px_22px_-20px_rgba(15,23,42,0.18)] md:justify-between"
+      className="relative flex w-full min-w-0 items-center gap-1 overflow-x-auto rounded-full border border-stone-200 bg-white px-1.5 py-1.5 shadow-[0_10px_22px_-20px_rgba(15,23,42,0.18)] md:justify-between"
       style={{ scrollbarWidth: "none" }}
     >
+      {pillStyle && (
+        <div
+          aria-hidden="true"
+          className="absolute top-1.5 bottom-1.5 rounded-full bg-coral-500 transition-all duration-300 ease-in-out"
+          style={{ left: pillStyle.left, width: pillStyle.width }}
+        />
+      )}
       {categories.map((cat) => {
         const Icon = iconMap[cat.icon] ?? File;
         const isActive = cat.id === activeCategory;
@@ -99,12 +116,12 @@ export default function CategoryNav({
             tabIndex={isActive ? 0 : -1}
             onClick={() => onChange(cat.id)}
             className={`
-              flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-full px-3.5 py-2 md:min-w-0 ${widthClass}
+              relative z-10 flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-full px-3.5 py-2 md:min-w-0 ${widthClass}
               text-[12px] font-medium leading-none whitespace-nowrap sm:text-[13px]
               transition-colors duration-150
               ${
                 isActive
-                  ? "bg-coral-500 text-white"
+                  ? "text-white"
                   : "text-stone-500 hover:bg-stone-100 hover:text-stone-700"
               }
             `}

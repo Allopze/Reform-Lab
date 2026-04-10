@@ -24,6 +24,9 @@ func renderMarkdownBlock(builder *strings.Builder, node *html.Node, listDepth in
 	for child := node.FirstChild; child != nil; child = child.NextSibling {
 		switch child.Type {
 		case html.ElementNode:
+			if htmlIgnoredElements[child.Data] {
+				continue
+			}
 			switch child.Data {
 			case "h1", "h2", "h3", "h4", "h5", "h6":
 				level := int(child.Data[1] - '0')
@@ -71,8 +74,11 @@ func renderMarkdownInline(builder *strings.Builder, node *html.Node) {
 	for child := node.FirstChild; child != nil; child = child.NextSibling {
 		switch child.Type {
 		case html.TextNode:
-			builder.WriteString(compactWhitespace(child.Data))
+			writeMarkdownInlineText(builder, child.Data)
 		case html.ElementNode:
+			if htmlIgnoredElements[child.Data] {
+				continue
+			}
 			switch child.Data {
 			case "strong", "b":
 				builder.WriteString("**")
@@ -119,8 +125,44 @@ func extractMarkdownText(node *html.Node) string {
 	return compactWhitespace(builder.String())
 }
 
+func writeMarkdownInlineText(builder *strings.Builder, value string) {
+	if strings.TrimSpace(value) == "" {
+		return
+	}
+
+	leadingSpace := hasHTMLBoundarySpace(value[0])
+	trailingSpace := hasHTMLBoundarySpace(value[len(value)-1])
+	compact := compactWhitespace(value)
+
+	if leadingSpace && !endsWithMarkdownSeparator(builder) {
+		builder.WriteByte(' ')
+	}
+	builder.WriteString(compact)
+	if trailingSpace {
+		builder.WriteByte(' ')
+	}
+}
+
 func compactWhitespace(value string) string {
 	return strings.Join(strings.Fields(value), " ")
+}
+
+func hasHTMLBoundarySpace(b byte) bool {
+	switch b {
+	case ' ', '\t', '\n', '\r', '\f':
+		return true
+	default:
+		return false
+	}
+}
+
+func endsWithMarkdownSeparator(builder *strings.Builder) bool {
+	value := builder.String()
+	if value == "" {
+		return true
+	}
+	last := value[len(value)-1]
+	return last == ' ' || last == '\n' || last == '\t'
 }
 
 func htmlAttr(node *html.Node, key string) string {
