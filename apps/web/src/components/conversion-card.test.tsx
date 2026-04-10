@@ -9,6 +9,7 @@ import {
 	downloadArtifact,
 	getCapabilities,
 	getJob,
+	getUploadPolicy,
 	uploadFile,
 } from "@/lib/api";
 
@@ -27,22 +28,35 @@ vi.mock("@/lib/api", () => ({
 	getJob: vi.fn(),
 	downloadArtifact: vi.fn(),
 	cancelJob: vi.fn(),
+	getUploadPolicy: vi.fn(),
 }));
 
 vi.mock("./dropzone", () => ({
-	default: ({ onFileSelected }: { onFileSelected: (file: File) => Promise<void> | void }) => (
-		<button
-			type="button"
-			onClick={() =>
-				void onFileSelected(
-					new File(["deck"], "slides.pptx", {
-						type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-					})
-				)
-			}
-		>
-			mock-dropzone
-		</button>
+	default: ({
+		onFileSelected,
+		supportLabel,
+		detailLabel,
+	}: {
+		onFileSelected: (file: File) => Promise<void> | void;
+		supportLabel: string;
+		detailLabel: string;
+	}) => (
+		<div>
+			<p>{supportLabel}</p>
+			<p>{detailLabel}</p>
+			<button
+				type="button"
+				onClick={() =>
+					void onFileSelected(
+						new File(["deck"], "slides.pptx", {
+							type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+						})
+					)
+				}
+			>
+				mock-dropzone
+			</button>
+		</div>
 	),
 }));
 
@@ -99,6 +113,7 @@ const createConversionMock = vi.mocked(createConversion);
 const getJobMock = vi.mocked(getJob);
 const downloadArtifactMock = vi.mocked(downloadArtifact);
 const cancelJobMock = vi.mocked(cancelJob);
+const getUploadPolicyMock = vi.mocked(getUploadPolicy);
 
 function mockUploadAndCapabilities() {
 	uploadFileMock.mockResolvedValue({
@@ -145,6 +160,13 @@ describe("ConversionCard", () => {
 	beforeEach(() => {
 		mockUploadAndCapabilities();
 		cancelJobMock.mockResolvedValue(undefined);
+		getUploadPolicyMock.mockResolvedValue({
+			guestMaxBytes: 5 * 1024 * 1024,
+			registeredMaxBytes: 25 * 1024 * 1024,
+			effectiveMaxBytes: 5 * 1024 * 1024,
+			viewerType: "guest",
+			absoluteMaxBytes: 500 * 1024 * 1024,
+		});
 	});
 
 	afterEach(() => {
@@ -169,6 +191,19 @@ describe("ConversionCard", () => {
 
 		expect(screen.queryByText("Acceso requerido para convertir archivos")).not.toBeInTheDocument();
 		expect(createConversionMock).toHaveBeenCalledWith("file-1", "presentation-to-jpg");
+	});
+
+	it("shows the active guest upload limit from backend policy", async () => {
+		const user = userEvent.setup();
+		render(<ConversionCard category={getCategoryById("auto")} />);
+
+		expect(await screen.findByText("hasta 5 MB como invitado")).toBeInTheDocument();
+		expect(
+			screen.getByText(/Como invitado puedes subir hasta 5 MB por archivo; con cuenta registrada, hasta 25 MB\./)
+		).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "mock-dropzone" }));
+		await waitFor(() => expect(uploadFileMock).toHaveBeenCalledTimes(1));
 	});
 
 	it("renders ZIP success UX from backend artifact metadata", async () => {

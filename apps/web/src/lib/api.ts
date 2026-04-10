@@ -19,6 +19,27 @@ export interface UploadedFile {
   uploadedAt: string;
 }
 
+export interface UploadPolicy {
+  guestMaxBytes: number;
+  registeredMaxBytes: number;
+  effectiveMaxBytes: number;
+  viewerType: "guest" | "registered";
+  absoluteMaxBytes: number;
+}
+
+export async function getUploadPolicy(): Promise<UploadPolicy> {
+  const res = await fetch(`${API_URL}/api/upload-policy`, {
+    headers: headers(),
+    credentials: "include",
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((data as { error?: string }).error || "Failed to load upload policy");
+  }
+  return data as UploadPolicy;
+}
+
 export async function uploadFile(file: File): Promise<UploadedFile> {
   const form = new FormData();
   form.append("file", file);
@@ -316,4 +337,21 @@ export async function updateFooterMessage(message: string): Promise<string> {
     throw new Error((data as { error?: string }).error || "Failed to update footer message");
   }
   return normalizeFooterMessage((data as { message?: string }).message);
+}
+
+export async function updateUploadPolicy(payload: {
+  guestMaxBytes: number;
+  registeredMaxBytes: number;
+}): Promise<UploadPolicy> {
+  const res = await fetch(`${API_URL}/api/admin/upload-policy`, {
+    method: "PUT",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((data as { error?: string }).error || "Failed to update upload policy");
+  }
+  return data as UploadPolicy;
 }

@@ -60,6 +60,7 @@ func NewRouter(d Deps) *chi.Mux {
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", handlers.PublicHealth())
 		footer := &handlers.FooterHandler{Settings: d.SiteSettings}
+		uploadPolicy := &handlers.UploadPolicyHandler{Settings: d.SiteSettings}
 		r.Get("/footer-message", footer.Get)
 
 		// Auth routes (public)
@@ -76,12 +77,14 @@ func NewRouter(d Deps) *chi.Mux {
 			conversionQuota := middleware.UserOrIPRateLimit(d.UserConversionsPerMinute, d.UserConversionBurst, d.TrustProxyHeaders)
 
 			upload := &handlers.UploadHandler{
-				Store:   d.Store,
-				Files:   d.Files,
-				Audit:   d.Audit,
-				Logger:  d.Logger,
-				Metrics: d.Metrics,
+				Settings: d.SiteSettings,
+				Store:    d.Store,
+				Files:    d.Files,
+				Audit:    d.Audit,
+				Logger:   d.Logger,
+				Metrics:  d.Metrics,
 			}
+			r.Get("/upload-policy", uploadPolicy.Get)
 			r.With(middleware.RateLimit(1, 2, d.TrustProxyHeaders), uploadQuota).Post("/files", upload.Handle)
 
 			caps := &handlers.CapabilitiesHandler{
@@ -128,6 +131,7 @@ func NewRouter(d Deps) *chi.Mux {
 				r.Get("/admin/overview", dashboard.AdminOverview)
 				r.Get("/admin/engines", dashboard.AdminEngines)
 				r.Put("/admin/footer-message", footer.Update)
+				r.Put("/admin/upload-policy", uploadPolicy.Update)
 			})
 		})
 	})

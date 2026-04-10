@@ -11,7 +11,9 @@ import {
   getJob,
   downloadArtifact,
   cancelJob,
+  getUploadPolicy,
   type Capability,
+  type UploadPolicy,
 } from "@/lib/api";
 import Dropzone from "./dropzone";
 import FormatSelector from "./format-selector";
@@ -20,6 +22,8 @@ import FilePreview from "./file-preview";
 interface ConversionCardProps {
   category: CategoryConfig;
 }
+
+const BYTES_PER_MB = 1024 * 1024;
 
 function isArchiveArtifact(artifactFileName?: string, artifactMimeType?: string) {
   if (artifactMimeType === "application/zip") return true;
@@ -31,6 +35,25 @@ function artifactLabel(fileState: Extract<FileState, { status: "done" }>) {
     fileState.artifactFileName ||
     `${fileState.file.name}.${fileState.outputFormat}`
   );
+}
+
+function formatMegabytes(bytes: number) {
+  return `${Math.round(bytes / BYTES_PER_MB)} MB`;
+}
+
+function uploadSupportLabel(policy: UploadPolicy | null, fallback: string) {
+  if (!policy) return fallback;
+  return policy.viewerType === "registered"
+    ? `hasta ${formatMegabytes(policy.effectiveMaxBytes)} con tu cuenta`
+    : `hasta ${formatMegabytes(policy.effectiveMaxBytes)} como invitado`;
+}
+
+function uploadPolicyDetail(policy: UploadPolicy | null) {
+  if (!policy) return null;
+  if (policy.viewerType === "registered") {
+    return `Tu limite actual es ${formatMegabytes(policy.effectiveMaxBytes)} por archivo.`;
+  }
+  return `Como invitado puedes subir hasta ${formatMegabytes(policy.effectiveMaxBytes)} por archivo; con cuenta registrada, hasta ${formatMegabytes(policy.registeredMaxBytes)}.`;
 }
 
 export default function ConversionCard({ category }: ConversionCardProps) {
@@ -58,6 +81,7 @@ export default function ConversionCard({ category }: ConversionCardProps) {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [uploadPolicy, setUploadPolicy] = useState<UploadPolicy | null>(null);
   const availableTargetFormats = capabilities.map((capability) => ({
     value: capability.targetFormat,
     label: capability.displayName,
@@ -70,6 +94,14 @@ export default function ConversionCard({ category }: ConversionCardProps) {
   // Fade transition on category change
   const [faded, setFaded] = useState(false);
   const prevCategoryIdRef = useRef(category.id);
+
+  useEffect(() => {
+    getUploadPolicy()
+      .then(setUploadPolicy)
+      .catch(() => {
+        setUploadPolicy(null);
+      });
+  }, []);
 
   useEffect(() => {
     if (prevCategoryIdRef.current !== category.id) {
@@ -315,6 +347,9 @@ export default function ConversionCard({ category }: ConversionCardProps) {
     fileState.status === "selected" ||
     fileState.status === "converting" ||
     fileState.status === "done";
+  const effectiveDetailLabel = [detailLabel, uploadPolicyDetail(uploadPolicy)]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <div
@@ -328,8 +363,8 @@ export default function ConversionCard({ category }: ConversionCardProps) {
           <Dropzone
             text={effectiveCategory.dropzoneText}
             hint={effectiveCategory.dropzoneHint}
-            supportLabel={effectiveCategory.supportLabel}
-            detailLabel={detailLabel}
+            supportLabel={uploadSupportLabel(uploadPolicy, effectiveCategory.supportLabel)}
+            detailLabel={effectiveDetailLabel}
             accept={effectiveCategory.acceptedMimeTypes}
             onFileSelected={handleFileSelected}
           />

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -22,20 +23,33 @@ const maxUploadSize = 500 * 1024 * 1024
 
 // UploadHandler handles POST /api/files.
 type UploadHandler struct {
-	Store   storage.Store
-	Files   repository.FileRepository
-	Audit   repository.AuditRepository
-	Logger  zerolog.Logger
-	Metrics *observability.Metrics
+	Settings repository.SiteSettingRepository
+	Store    storage.Store
+	Files    repository.FileRepository
+	Audit    repository.AuditRepository
+	Logger   zerolog.Logger
+	Metrics  *observability.Metrics
 }
 
 func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r) // may be nil for anonymous uploads
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
+	policy, err := loadUploadPolicy(r.Context(), h.Settings)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to load upload policy")
+		return
+	}
+	effectiveUploadLimit := effectiveUploadLimitBytes(u, policy)
+
+	r.Body = http.MaxBytesReader(w, r.Body, uploadBodyLimitBytes(u, policy))
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			respondError(w, http.StatusRequestEntityTooLarge, "file exceeds size limit")
+			return
+		}
 		respondError(w, http.StatusBadRequest, "missing or invalid file field")
 		return
 	}
@@ -54,7 +68,16 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// Stream the upload into a temporary file so large bodies stay off-heap.
 	size, err := io.Copy(tempFile, file)
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			respondError(w, http.StatusRequestEntityTooLarge, "file exceeds size limit")
+			return
+		}
 		respondError(w, http.StatusBadRequest, "failed to read uploaded file")
+		return
+	}
+	if size > effectiveUploadLimit {
+		respondError(w, http.StatusRequestEntityTooLarge, "file exceeds size limit")
 		return
 	}
 	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {

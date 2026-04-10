@@ -344,6 +344,45 @@ func uploadPNGClient(client *http.Client, baseURL, token string) (*http.Response
 	return resp, data
 }
 
+func uploadNoisyPNGClient(client *http.Client, baseURL, token string, side int) (*http.Response, map[string]interface{}) {
+	img := image.NewRGBA(image.Rect(0, 0, side, side))
+	state := uint32(0x12345678)
+	for y := 0; y < side; y++ {
+		for x := 0; x < side; x++ {
+			state ^= state << 13
+			state ^= state >> 17
+			state ^= state << 5
+			img.Set(x, y, color.RGBA{
+				R: uint8(state >> 16),
+				G: uint8(state >> 8),
+				B: uint8(state),
+				A: 255,
+			})
+		}
+	}
+
+	var pngBuf bytes.Buffer
+	png.Encode(&pngBuf, img)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, _ := writer.CreateFormFile("file", "large-test.png")
+	part.Write(pngBuf.Bytes())
+	writer.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/api/files", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if token != "" {
+		req.AddCookie(&http.Cookie{Name: "reform_session", Value: token})
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, _ := client.Do(req)
+	data := decode(resp)
+	return resp, data
+}
+
 func uploadFixtureClient(client *http.Client, baseURL, token, fixturePath string) (*http.Response, map[string]interface{}) {
 	data, err := os.ReadFile(fixturePath)
 	if err != nil {
@@ -518,6 +557,77 @@ func TestE2E_AdminCanUpdateFooterMessage(t *testing.T) {
 	}
 	if data["message"] != nextMessage {
 		t.Fatalf("expected public footer message %q, got %v", nextMessage, data["message"])
+	}
+}
+
+func TestE2E_AdminCanUpdateUploadPolicy(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	resp, data := doGet(env.server.URL+"/api/upload-policy", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("public upload policy: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	if data["viewerType"] != "guest" {
+		t.Fatalf("expected guest viewer type, got %v", data["viewerType"])
+	}
+	if data["guestMaxBytes"] != float64(500*1024*1024) {
+		t.Fatalf("unexpected default guest limit: %v", data["guestMaxBytes"])
+	}
+	if data["registeredMaxBytes"] != float64(500*1024*1024) {
+		t.Fatalf("unexpected default registered limit: %v", data["registeredMaxBytes"])
+	}
+
+	resp, _ = doPut(env.server.URL+"/api/admin/upload-policy", map[string]int64{
+		"guestMaxBytes":      1 * 1024 * 1024,
+		"registeredMaxBytes": 10 * 1024 * 1024,
+	}, "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for anonymous upload policy update, got %d", resp.StatusCode)
+	}
+
+	adminClient := registerUserClient(t, env, "PolicyAdmin", "policy-admin@test.com")
+	userClient := registerUserClient(t, env, "PolicyUser", "policy-user@test.com")
+
+	resp, _ = doPutClient(userClient, env.server.URL+"/api/admin/upload-policy", map[string]int64{
+		"guestMaxBytes":      1 * 1024 * 1024,
+		"registeredMaxBytes": 10 * 1024 * 1024,
+	}, "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin upload policy update, got %d", resp.StatusCode)
+	}
+
+	resp, data = doPutClient(adminClient, env.server.URL+"/api/admin/upload-policy", map[string]int64{
+		"guestMaxBytes":      2 * 1024 * 1024,
+		"registeredMaxBytes": 12 * 1024 * 1024,
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin upload policy update: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	if data["guestMaxBytes"] != float64(2*1024*1024) {
+		t.Fatalf("expected updated guest limit, got %v", data["guestMaxBytes"])
+	}
+	if data["registeredMaxBytes"] != float64(12*1024*1024) {
+		t.Fatalf("expected updated registered limit, got %v", data["registeredMaxBytes"])
+	}
+	if data["viewerType"] != "registered" {
+		t.Fatalf("expected registered viewer type for admin, got %v", data["viewerType"])
+	}
+
+	resp, data = doGet(env.server.URL+"/api/upload-policy", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("public upload policy after update: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	if data["effectiveMaxBytes"] != float64(2*1024*1024) {
+		t.Fatalf("expected guest effective limit, got %v", data["effectiveMaxBytes"])
+	}
+
+	resp, data = doGetClient(adminClient, env.server.URL+"/api/upload-policy", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("registered upload policy after update: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	if data["effectiveMaxBytes"] != float64(12*1024*1024) {
+		t.Fatalf("expected registered effective limit, got %v", data["effectiveMaxBytes"])
 	}
 }
 
@@ -1244,6 +1354,33 @@ func TestE2E_AuthenticatedUserUploadQuota(t *testing.T) {
 	}
 	if data["error"] != "user quota exceeded" {
 		t.Fatalf("unexpected quota error: %v", data["error"])
+	}
+}
+
+func TestE2E_UploadPolicyAppliesDifferentLimitsForGuestsAndRegisteredUsers(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	adminClient := registerUserClient(t, env, "UploadAdmin", "upload-admin@test.com")
+	resp, data := doPutClient(adminClient, env.server.URL+"/api/admin/upload-policy", map[string]int64{
+		"guestMaxBytes":      1 * 1024 * 1024,
+		"registeredMaxBytes": 10 * 1024 * 1024,
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("set upload policy: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+
+	resp, data = uploadNoisyPNGClient(nil, env.server.URL, "", 1024)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("guest upload should hit upload policy, got %d — %v", resp.StatusCode, data)
+	}
+	if data["error"] != "file exceeds size limit" {
+		t.Fatalf("unexpected guest upload error: %v", data["error"])
+	}
+
+	resp, data = uploadNoisyPNGClient(adminClient, env.server.URL, "", 1024)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("registered upload should respect higher limit, got %d — %v", resp.StatusCode, data)
 	}
 }
 
