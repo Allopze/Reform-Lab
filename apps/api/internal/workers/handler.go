@@ -106,11 +106,13 @@ func (h *Handler) ProcessPayload(ctx context.Context, _ string, data []byte) err
 		return h.fail(ctx, jobID, logger, "execute conversion", err)
 	}
 
-	// Validate output exists and has content.
+	artifactFormat := outputArtifactFormat(outputPath, payload.OutputFormat)
+
+	// Validate output exists, has content, and matches the expected artifact format.
 	_ = h.Orch.UpdateProgress(ctx, jobID, 70) // validating output
-	info, err := os.Stat(outputPath)
-	if err != nil || info.Size() == 0 {
-		return h.fail(ctx, jobID, logger, "validate output", fmt.Errorf("output file missing or empty"))
+	info, err := validateOutputArtifact(outputPath, artifactFormat)
+	if err != nil {
+		return h.fail(ctx, jobID, logger, "validate output", err)
 	}
 	if h.isCancelled(ctx, jobID) {
 		logger.Info().Msg("job cancelled before artifact persistence")
@@ -126,7 +128,6 @@ func (h *Handler) ProcessPayload(ctx context.Context, _ string, data []byte) err
 	}
 	defer outputFile.Close()
 
-	artifactFormat := outputArtifactFormat(outputPath, payload.OutputFormat)
 	fileName := outputArtifactFileName(outputPath, artifactFormat)
 	storagePath, err := h.Store.SaveArtifact(ctx, artifactID.String(), fileName, outputFile)
 	if err != nil {

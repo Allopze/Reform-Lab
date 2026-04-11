@@ -21,12 +21,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/allopze/reform-lab/apps/api/config"
 	"github.com/allopze/reform-lab/apps/api/internal/api"
 	"github.com/allopze/reform-lab/apps/api/internal/api/handlers"
 	"github.com/allopze/reform-lab/apps/api/internal/auth"
 	"github.com/allopze/reform-lab/apps/api/internal/capabilities"
 	"github.com/allopze/reform-lab/apps/api/internal/database"
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
+	emailpkg "github.com/allopze/reform-lab/apps/api/internal/email"
 	"github.com/allopze/reform-lab/apps/api/internal/observability"
 	"github.com/allopze/reform-lab/apps/api/internal/orchestrator"
 	"github.com/allopze/reform-lab/apps/api/internal/queue"
@@ -184,6 +186,10 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 	// Ensure engines are probed.
 	capabilities.DefaultProber.Probe()
 
+	// Email
+	emailTemplateRepo := repository.NewEmailTemplateRepository(db)
+	emailSvc := emailpkg.NewService(&config.Config{}, siteSettingRepo, emailTemplateRepo, logger)
+
 	router := api.NewRouter(api.Deps{
 		Logger:                   logger,
 		Metrics:                  metrics,
@@ -195,6 +201,9 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 		Users:                    userRepo,
 		Dashboard:                dashboardRepo,
 		SiteSettings:             siteSettingRepo,
+		EmailTemplates:           emailTemplateRepo,
+		EmailService:             emailSvc,
+		Queue:                    jobQueue,
 		Orchestrator:             orch,
 		AuthService:              authSvc,
 		CORSOrigin:               "*",
@@ -571,10 +580,10 @@ func TestE2E_AdminCanUpdateUploadPolicy(t *testing.T) {
 	if data["viewerType"] != "guest" {
 		t.Fatalf("expected guest viewer type, got %v", data["viewerType"])
 	}
-	if data["guestMaxBytes"] != float64(500*1024*1024) {
+	if data["guestMaxBytes"] != float64(25*1024*1024) {
 		t.Fatalf("unexpected default guest limit: %v", data["guestMaxBytes"])
 	}
-	if data["registeredMaxBytes"] != float64(500*1024*1024) {
+	if data["registeredMaxBytes"] != float64(100*1024*1024) {
 		t.Fatalf("unexpected default registered limit: %v", data["registeredMaxBytes"])
 	}
 
@@ -771,13 +780,15 @@ func TestE2E_AnonymousPublicFlowAllowed(t *testing.T) {
 	env := setupE2E(t)
 	defer env.close()
 
-	resp, fileData := uploadPNG(env.server.URL, "")
+	client := newCookieClient(t)
+
+	resp, fileData := uploadPNGClient(client, env.server.URL, "")
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("anonymous upload: expected 201, got %d — %v", resp.StatusCode, fileData)
 	}
 	fileID := fileData["id"].(string)
 
-	resp, capsData := doGet(fmt.Sprintf("%s/api/files/%s/capabilities", env.server.URL, fileID), "")
+	resp, capsData := doGetClient(client, fmt.Sprintf("%s/api/files/%s/capabilities", env.server.URL, fileID), "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("anonymous capabilities: expected 200, got %d — %v", resp.StatusCode, capsData)
 	}
@@ -787,7 +798,7 @@ func TestE2E_AnonymousPublicFlowAllowed(t *testing.T) {
 	}
 	capID := caps[0].(map[string]interface{})["id"].(string)
 
-	resp, jobData := doPost(env.server.URL+"/api/conversions", map[string]string{
+	resp, jobData := doPostClient(client, env.server.URL+"/api/conversions", map[string]string{
 		"fileId":       fileID,
 		"capabilityId": capID,
 	}, "")
@@ -795,12 +806,50 @@ func TestE2E_AnonymousPublicFlowAllowed(t *testing.T) {
 		t.Fatalf("anonymous conversion: expected 201, got %d — %v", resp.StatusCode, jobData)
 	}
 
-	resp, jobStatus := doGet(fmt.Sprintf("%s/api/jobs/%s", env.server.URL, jobData["id"].(string)), "")
+	resp, jobStatus := doGetClient(client, fmt.Sprintf("%s/api/jobs/%s", env.server.URL, jobData["id"].(string)), "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("anonymous job status: expected 200, got %d — %v", resp.StatusCode, jobStatus)
 	}
 	if jobStatus["status"] != "queued" {
 		t.Fatalf("expected queued anonymous job, got %v", jobStatus["status"])
+	}
+}
+
+func TestE2E_AnonymousResourcesAreIsolatedPerGuestSession(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	guest1 := newCookieClient(t)
+	guest2 := newCookieClient(t)
+
+	resp, fileData := uploadPNGClient(guest1, env.server.URL, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("guest upload: expected 201, got %d — %v", resp.StatusCode, fileData)
+	}
+	fileID := fileData["id"].(string)
+
+	resp, _ = doGetClient(guest2, fmt.Sprintf("%s/api/files/%s/capabilities", env.server.URL, fileID), "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for cross-guest file access, got %d", resp.StatusCode)
+	}
+
+	resp, capsData := doGetClient(guest1, fmt.Sprintf("%s/api/files/%s/capabilities", env.server.URL, fileID), "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("guest capabilities: expected 200, got %d — %v", resp.StatusCode, capsData)
+	}
+	capID := capsData["capabilities"].([]interface{})[0].(map[string]interface{})["id"].(string)
+
+	resp, jobData := doPostClient(guest1, env.server.URL+"/api/conversions", map[string]string{
+		"fileId":       fileID,
+		"capabilityId": capID,
+	}, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("guest conversion: expected 201, got %d — %v", resp.StatusCode, jobData)
+	}
+
+	resp, _ = doGetClient(guest2, fmt.Sprintf("%s/api/jobs/%s", env.server.URL, jobData["id"].(string)), "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for cross-guest job access, got %d", resp.StatusCode)
 	}
 }
 
@@ -1417,5 +1466,226 @@ func TestE2E_MaxActiveJobsPerUser(t *testing.T) {
 	}
 	if data["error"] != "too many active jobs for this user" {
 		t.Fatalf("unexpected active job error: %v", data["error"])
+	}
+}
+
+// ── Email / SMTP E2E Tests ──
+
+func doGetClientList(client *http.Client, url, token string) (*http.Response, []map[string]interface{}) {
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	if token != "" {
+		req.AddCookie(&http.Cookie{Name: "reform_session", Value: token})
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil
+	}
+	defer resp.Body.Close()
+	var list []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&list)
+	return resp, list
+}
+
+func TestE2E_AdminSMTPSettings(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	adminClient := registerUserClient(t, env, "SMTPAdmin", "smtp-admin@test.com")
+	userClient := registerUserClient(t, env, "SMTPUser", "smtp-user@test.com")
+
+	// Anonymous cannot access SMTP settings.
+	resp, _ := doGet(env.server.URL+"/api/admin/smtp-settings", "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for anonymous SMTP get, got %d", resp.StatusCode)
+	}
+
+	// Non-admin cannot access SMTP settings.
+	resp, _ = doGetClient(userClient, env.server.URL+"/api/admin/smtp-settings", "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin SMTP get, got %d", resp.StatusCode)
+	}
+
+	// Admin can get SMTP settings (initially empty / source=none).
+	resp, data := doGetClient(adminClient, env.server.URL+"/api/admin/smtp-settings", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin SMTP get: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	if data["source"] != "none" {
+		t.Fatalf("expected source=none, got %v", data["source"])
+	}
+
+	// Admin can update SMTP settings.
+	useTLS := true
+	resp, data = doPutClient(adminClient, env.server.URL+"/api/admin/smtp-settings", map[string]interface{}{
+		"host":     "mail.example.com",
+		"port":     587,
+		"user":     "testuser",
+		"password": "secret",
+		"from":     "noreply@example.com",
+		"use_tls":  useTLS,
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin SMTP update: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	if data["status"] != "saved" {
+		t.Fatalf("expected status=saved, got %v", data["status"])
+	}
+
+	// Verify settings were persisted (source=admin, password masked).
+	resp, data = doGetClient(adminClient, env.server.URL+"/api/admin/smtp-settings", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin SMTP get after update: expected 200, got %d", resp.StatusCode)
+	}
+	if data["source"] != "admin" {
+		t.Fatalf("expected source=admin, got %v", data["source"])
+	}
+	if data["host"] != "mail.example.com" {
+		t.Fatalf("expected host=mail.example.com, got %v", data["host"])
+	}
+	if data["password"] != "****" {
+		t.Fatalf("expected masked password, got %v", data["password"])
+	}
+
+	// Non-admin cannot update SMTP settings.
+	resp, _ = doPutClient(userClient, env.server.URL+"/api/admin/smtp-settings", map[string]interface{}{
+		"host": "evil.com",
+		"port": 25,
+	}, "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin SMTP update, got %d", resp.StatusCode)
+	}
+
+	// Invalid port rejected.
+	resp, data = doPutClient(adminClient, env.server.URL+"/api/admin/smtp-settings", map[string]interface{}{
+		"host": "mail.example.com",
+		"port": 99999,
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid port, got %d — %v", resp.StatusCode, data)
+	}
+
+	// Invalid from email rejected.
+	resp, data = doPutClient(adminClient, env.server.URL+"/api/admin/smtp-settings", map[string]interface{}{
+		"host": "mail.example.com",
+		"port": 587,
+		"from": "not-an-email",
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid from, got %d — %v", resp.StatusCode, data)
+	}
+}
+
+func TestE2E_AdminEmailTemplates(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	adminClient := registerUserClient(t, env, "TmplAdmin", "tmpl-admin@test.com")
+	userClient := registerUserClient(t, env, "TmplUser", "tmpl-user@test.com")
+
+	// Anonymous cannot list templates.
+	resp, _ := doGet(env.server.URL+"/api/admin/email-templates", "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for anonymous template list, got %d", resp.StatusCode)
+	}
+
+	// Non-admin cannot list templates.
+	resp, _ = doGetClient(userClient, env.server.URL+"/api/admin/email-templates", "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin template list, got %d", resp.StatusCode)
+	}
+
+	// Admin can list templates (seeded by migration 006).
+	resp, list := doGetClientList(adminClient, env.server.URL+"/api/admin/email-templates", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin template list: expected 200, got %d", resp.StatusCode)
+	}
+	if len(list) == 0 {
+		t.Fatal("expected at least one seeded template")
+	}
+
+	templateKey := list[0]["key"].(string)
+
+	// Admin can get a single template.
+	resp, data := doGetClient(adminClient, env.server.URL+"/api/admin/email-templates/"+templateKey, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin template get: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	if data["key"] != templateKey {
+		t.Fatalf("expected key=%s, got %v", templateKey, data["key"])
+	}
+
+	// 404 for non-existent template.
+	resp, _ = doGetClient(adminClient, env.server.URL+"/api/admin/email-templates/nonexistent", "")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for nonexistent template, got %d", resp.StatusCode)
+	}
+
+	// Admin can update a template.
+	resp, data = doPutClient(adminClient, env.server.URL+"/api/admin/email-templates/"+templateKey, map[string]string{
+		"subject":   "Updated: {{.Name}}",
+		"body_html": "<h1>Hello {{.Name}}</h1><p>Welcome!</p>",
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin template update: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	if data["subject"] != "Updated: {{.Name}}" {
+		t.Fatalf("expected updated subject, got %v", data["subject"])
+	}
+
+	// Non-admin cannot update template.
+	resp, _ = doPutClient(userClient, env.server.URL+"/api/admin/email-templates/"+templateKey, map[string]string{
+		"subject":   "Hacked",
+		"body_html": "<p>hacked</p>",
+	}, "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin template update, got %d", resp.StatusCode)
+	}
+
+	// Validation: empty subject rejected.
+	resp, data = doPutClient(adminClient, env.server.URL+"/api/admin/email-templates/"+templateKey, map[string]string{
+		"subject":   "",
+		"body_html": "<p>test</p>",
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty subject, got %d — %v", resp.StatusCode, data)
+	}
+
+	// Validation: empty body rejected.
+	resp, data = doPutClient(adminClient, env.server.URL+"/api/admin/email-templates/"+templateKey, map[string]string{
+		"subject":   "Test",
+		"body_html": "",
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty body, got %d — %v", resp.StatusCode, data)
+	}
+
+	// Validation: invalid Go template syntax in subject rejected.
+	resp, data = doPutClient(adminClient, env.server.URL+"/api/admin/email-templates/"+templateKey, map[string]string{
+		"subject":   "Bad {{.Unclosed",
+		"body_html": "<p>ok</p>",
+	}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid template syntax, got %d — %v", resp.StatusCode, data)
+	}
+
+	// Admin can preview a template.
+	resp, data = doPostClient(adminClient, env.server.URL+"/api/admin/email-templates/"+templateKey+"/preview", nil, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin template preview: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	htmlContent, _ := data["html"].(string)
+	if htmlContent == "" {
+		t.Fatal("expected non-empty rendered HTML in preview")
+	}
+	subjectContent, _ := data["subject"].(string)
+	if subjectContent == "" {
+		t.Fatal("expected non-empty rendered subject in preview")
+	}
+	// Preview should have the example variables rendered.
+	if !strings.Contains(subjectContent, "Usuario de Ejemplo") {
+		t.Fatalf("expected preview subject to contain rendered name, got %q", subjectContent)
 	}
 }

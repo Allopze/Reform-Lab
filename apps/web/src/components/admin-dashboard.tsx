@@ -16,6 +16,8 @@ import {
   DEFAULT_FOOTER_MESSAGE,
   emitFooterMessageUpdated,
 } from "@/lib/footer-message";
+import SMTPSettingsSection from "@/components/smtp-settings";
+import EmailTemplatesSection from "@/components/email-templates";
 
 const BYTES_PER_MB = 1024 * 1024;
 
@@ -418,6 +420,8 @@ export default function AdminDashboard() {
             ) : null}
           </section>
 
+          <SMTPSettingsSection />
+
           <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
             <h2 className="text-base font-semibold text-stone-900">Resumen operativo</h2>
             <div className="mt-4 space-y-3 text-sm text-stone-600">
@@ -475,6 +479,8 @@ export default function AdminDashboard() {
           </section>
         </aside>
       </div>
+
+      <EmailTemplatesSection />
 
       <section className="rounded-xl border border-stone-200 bg-white">
         <div className="border-b border-stone-200 px-5 py-4">

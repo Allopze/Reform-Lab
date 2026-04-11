@@ -30,6 +30,7 @@ type jobResponse struct {
 
 func (h *JobHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r) // may be nil for anonymous users
+	guestSessionID := currentGuestSessionID(r)
 
 	jobID, err := uuid.Parse(chi.URLParam(r, "jobId"))
 	if err != nil {
@@ -42,7 +43,12 @@ func (h *JobHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "job not found")
 		return
 	}
-	if !canAccessOwner(u, job.UserID) {
+	file, err := h.Files.GetByID(r.Context(), job.FileID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "file not found")
+		return
+	}
+	if !canAccessResource(u, guestSessionID, file.UserID, file.GuestSessionID) {
 		respondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -53,6 +59,7 @@ func (h *JobHandler) Handle(w http.ResponseWriter, r *http.Request) {
 // Cancel handles POST /api/jobs/{jobId}/cancel.
 func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r) // may be nil for anonymous users
+	guestSessionID := currentGuestSessionID(r)
 
 	jobID, err := uuid.Parse(chi.URLParam(r, "jobId"))
 	if err != nil {
@@ -65,7 +72,12 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "job not found")
 		return
 	}
-	if !canAccessOwner(u, job.UserID) {
+	file, err := h.Files.GetByID(r.Context(), job.FileID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "file not found")
+		return
+	}
+	if !canAccessResource(u, guestSessionID, file.UserID, file.GuestSessionID) {
 		respondError(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -81,6 +93,7 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 // Retry handles POST /api/jobs/{jobId}/retry.
 func (h *JobHandler) Retry(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r) // may be nil for anonymous users
+	guestSessionID := currentGuestSessionID(r)
 
 	jobID, err := uuid.Parse(chi.URLParam(r, "jobId"))
 	if err != nil {
@@ -93,10 +106,6 @@ func (h *JobHandler) Retry(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "job not found")
 		return
 	}
-	if !canAccessOwner(u, job.UserID) {
-		respondError(w, http.StatusForbidden, "forbidden")
-		return
-	}
 	if job.Status != domain.JobFailed {
 		respondError(w, http.StatusConflict, "only failed jobs can be retried")
 		return
@@ -107,7 +116,7 @@ func (h *JobHandler) Retry(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "file not found")
 		return
 	}
-	if !canAccessOwner(u, file.UserID) {
+	if !canAccessResource(u, guestSessionID, file.UserID, file.GuestSessionID) {
 		respondError(w, http.StatusForbidden, "forbidden")
 		return
 	}

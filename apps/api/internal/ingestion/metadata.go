@@ -1,7 +1,9 @@
 package ingestion
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -10,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
 	_ "golang.org/x/image/bmp"
@@ -17,25 +20,39 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
+const (
+	pdfMetadataTimeout = 5 * time.Second
+	avMetadataTimeout  = 8 * time.Second
+)
+
 // ExtractMetadata gathers format-specific metadata from a file on disk.
-func ExtractMetadata(path string, format domain.DetectedFormat) domain.FileMetadata {
+func ExtractMetadata(ctx context.Context, path string, format domain.DetectedFormat) (domain.FileMetadata, error) {
 	switch format.Family {
 	case domain.FamilyPDF:
-		return extractPDFMetadata(path)
+		return extractPDFMetadata(ctx, path)
 	case domain.FamilyImage:
-		return extractImageMetadata(path)
+		return extractImageMetadata(path), nil
 	case domain.FamilyAudio, domain.FamilyVideo:
-		return extractAVMetadata(path)
+		return extractAVMetadata(ctx, path)
 	default:
-		return domain.FileMetadata{}
+		return domain.FileMetadata{}, nil
 	}
 }
 
-func extractPDFMetadata(path string) domain.FileMetadata {
+func extractPDFMetadata(ctx context.Context, path string) (domain.FileMetadata, error) {
 	m := domain.FileMetadata{}
-	out, err := exec.Command("pdfinfo", path).Output()
+	cmdCtx, cancel := context.WithTimeout(ctx, pdfMetadataTimeout)
+	defer cancel()
+
+	out, err := exec.CommandContext(cmdCtx, "pdfinfo", path).Output()
 	if err != nil {
-		return m
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
+			return m, context.DeadlineExceeded
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(cmdCtx.Err(), context.Canceled) {
+			return m, context.Canceled
+		}
+		return m, nil
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(line, "Pages:") {
@@ -51,7 +68,7 @@ func extractPDFMetadata(path string) domain.FileMetadata {
 			}
 		}
 	}
-	return m
+	return m, nil
 }
 
 func extractImageMetadata(path string) domain.FileMetadata {
@@ -78,20 +95,30 @@ type ffprobeResult struct {
 	} `json:"format"`
 }
 
-func extractAVMetadata(path string) domain.FileMetadata {
+func extractAVMetadata(ctx context.Context, path string) (domain.FileMetadata, error) {
 	m := domain.FileMetadata{}
-	out, err := exec.Command(
+	cmdCtx, cancel := context.WithTimeout(ctx, avMetadataTimeout)
+	defer cancel()
+
+	out, err := exec.CommandContext(
+		cmdCtx,
 		"ffprobe", "-v", "quiet",
 		"-print_format", "json",
 		"-show_format",
 		path,
 	).Output()
 	if err != nil {
-		return m
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
+			return m, context.DeadlineExceeded
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(cmdCtx.Err(), context.Canceled) {
+			return m, context.Canceled
+		}
+		return m, nil
 	}
 	var result ffprobeResult
 	if err := json.Unmarshal(out, &result); err != nil {
-		return m
+		return m, nil
 	}
 	if result.Format.Duration != "" {
 		d, err := strconv.ParseFloat(result.Format.Duration, 64)
@@ -99,5 +126,5 @@ func extractAVMetadata(path string) domain.FileMetadata {
 			m.DurationSec = &d
 		}
 	}
-	return m
+	return m, nil
 }

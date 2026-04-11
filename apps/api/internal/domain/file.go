@@ -40,6 +40,7 @@ type FileMetadata struct {
 type OriginalFile struct {
 	ID             uuid.UUID      `json:"id"`
 	UserID         *uuid.UUID     `json:"userId,omitempty"`
+	GuestSessionID *uuid.UUID     `json:"-"`
 	InternalName   string         `json:"-"`
 	OriginalName   string         `json:"originalName"`
 	Size           int64          `json:"size"`

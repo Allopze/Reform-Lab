@@ -35,6 +35,19 @@ func (q *AsynqQueue) Enqueue(_ context.Context, taskType string, payload TaskPay
 	return err
 }
 
+func (q *AsynqQueue) EnqueueEmail(_ context.Context, payload EmailTaskPayload, opts TaskOptions) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal email payload: %w", err)
+	}
+	task := asynq.NewTask(EmailTaskType, data,
+		asynq.MaxRetry(opts.MaxRetries),
+		asynq.Timeout(opts.Timeout),
+	)
+	_, err = q.client.Enqueue(task)
+	return err
+}
+
 func (q *AsynqQueue) Close() error {
 	return q.client.Close()
 }

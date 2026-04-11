@@ -15,6 +15,7 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/capabilities"
 	"github.com/allopze/reform-lab/apps/api/internal/database"
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
+	"github.com/allopze/reform-lab/apps/api/internal/email"
 	"github.com/allopze/reform-lab/apps/api/internal/observability"
 	"github.com/allopze/reform-lab/apps/api/internal/orchestrator"
 	"github.com/allopze/reform-lab/apps/api/internal/queue"
@@ -75,9 +76,17 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	dashboardRepo := repository.NewDashboardRepository(db)
 	siteSettingRepo := repository.NewSiteSettingRepository(db)
+	emailTemplateRepo := repository.NewEmailTemplateRepository(db)
 
 	// Auth
 	authSvc := auth.NewService(userRepo, cfg.JWTSecret)
+
+	// Email
+	emailSvc := email.NewService(cfg, siteSettingRepo, emailTemplateRepo, logger)
+	emailHandler := &workers.EmailHandler{
+		Email:  emailSvc,
+		Logger: logger.With().Str("component", "email_worker").Logger(),
+	}
 
 	// Queue — use Redis if configured, otherwise in-process with embedded worker.
 	var jobQueue queue.JobQueue
@@ -110,14 +119,26 @@ func main() {
 				domain.FamilyVideo:    time.Duration(cfg.ArtifactTTLByFamily[domain.FamilyVideo]) * time.Hour,
 			},
 		}
-		ipq := queue.NewInProcessQueueWithLimit(workerHandler.ProcessPayload, cfg.InProcessConcurrency)
+
+		// Multiplex: route email tasks to emailHandler, everything else to conversion handler.
+		dispatcher := func(ctx context.Context, taskType string, payload []byte) error {
+			if taskType == queue.EmailTaskType {
+				return emailHandler.ProcessPayload(ctx, taskType, payload)
+			}
+			return workerHandler.ProcessPayload(ctx, taskType, payload)
+		}
+		ipq := queue.NewInProcessQueueWithLimit(dispatcher, cfg.InProcessConcurrency)
 		defer ipq.Close()
 		jobQueue = ipq
-		logger.Info().Int("concurrency", cfg.InProcessConcurrency).Msg("using in-process queue (no Redis)")
+		logger.Warn().
+			Str("app_env", cfg.AppEnv).
+			Int("concurrency", cfg.InProcessConcurrency).
+			Msg("using in-process queue (development mode only)")
 	}
 
 	// Orchestrator — single instance shared by router and worker handler.
-	orch := orchestrator.NewService(jobRepo, auditRepo, jobQueue, orchestrator.WithMaxActiveJobsPerUser(cfg.MaxActiveJobsPerUser))
+	emailNotifier := email.NewJobNotifier(cfg, emailSvc, jobQueue, userRepo, fileRepo, logger)
+	orch := orchestrator.NewService(jobRepo, auditRepo, jobQueue, orchestrator.WithMaxActiveJobsPerUser(cfg.MaxActiveJobsPerUser), orchestrator.WithNotifier(emailNotifier))
 	if workerHandler != nil {
 		workerHandler.Orch = orch
 	}
@@ -141,6 +162,9 @@ func main() {
 		Users:                    userRepo,
 		Dashboard:                dashboardRepo,
 		SiteSettings:             siteSettingRepo,
+		EmailTemplates:           emailTemplateRepo,
+		EmailService:             emailSvc,
+		Queue:                    jobQueue,
 		Orchestrator:             orch,
 		AuthService:              authSvc,
 		CORSOrigin:               cfg.CORSOrigin,

@@ -2,7 +2,7 @@
 import type { ReactNode } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import AccessShell from "./access-shell";
 
 vi.mock("next/link", () => ({
@@ -36,9 +36,11 @@ vi.mock("next/image", () => ({
 const pushMock = vi.fn();
 const loginMock = vi.fn();
 const registerMock = vi.fn();
+let searchParamsValue = "";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
+  useSearchParams: () => new URLSearchParams(searchParamsValue),
 }));
 
 vi.mock("@/lib/auth-context", () => ({
@@ -49,12 +51,17 @@ vi.mock("@/lib/auth-context", () => ({
 }));
 
 describe("AccessShell", () => {
-  it("renders the favicon and back navigation inside the auth card", () => {
+  beforeEach(() => {
+    searchParamsValue = "";
+  });
+
+  it("renders the favicon, chevron and auth card with correct styling", () => {
     const { container } = render(<AccessShell />);
 
-    expect(screen.getByRole("link", { name: /volver a conversiones/i })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "" })).toHaveAttribute("href", "/");
     expect(screen.getByRole("img", { name: "Reform Lab" })).toHaveAttribute("src", "/favicon.svg");
     expect(container.querySelector("section")).toHaveClass("rounded-[34px]");
+    expect(screen.getByRole("heading", { name: "Iniciar sesión" })).toBeInTheDocument();
   });
 
   it("keeps the same card shell while switching to register", async () => {
@@ -71,5 +78,14 @@ describe("AccessShell", () => {
     expect(screen.getByLabelText("Nombre")).toBeInTheDocument();
     expect(screen.getByLabelText("Equipo")).toBeInTheDocument();
     expect(screen.getByLabelText("Repetir contraseña")).toBeInTheDocument();
+  });
+
+  it("opens the register mode directly when requested in the URL", () => {
+    searchParamsValue = "mode=register";
+
+    render(<AccessShell />);
+
+    expect(screen.getByRole("heading", { name: "Crear cuenta" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Nombre")).toBeInTheDocument();
   });
 });

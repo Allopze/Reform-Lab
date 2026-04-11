@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { NextConfig } from "next";
 
 const isDev = process.env.NODE_ENV === "development";
@@ -26,9 +27,11 @@ const cspHeader = `
 	base-uri 'self';
 	form-action 'self';
 	frame-ancestors 'none';
+	${isDev ? "" : "upgrade-insecure-requests;"}
 `;
 
 const nextConfig: NextConfig = {
+	outputFileTracingRoot: path.resolve(process.cwd(), "../.."),
 	async headers() {
 		return [
 			{

@@ -32,9 +32,9 @@ func (r *sqliteFileRepo) Create(ctx context.Context, f *domain.OriginalFile) err
 	}
 
 	_, err = r.db.ExecContext(ctx,
-		`INSERT INTO files (id, user_id, internal_name, original_name, size, mime_type, format_family, detected_extension, metadata, uploaded_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		f.ID.String(), nullableUUIDString(f.UserID), f.InternalName, f.OriginalName, f.Size,
+		`INSERT INTO files (id, user_id, guest_session_id, internal_name, original_name, size, mime_type, format_family, detected_extension, metadata, uploaded_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		f.ID.String(), nullableUUIDString(f.UserID), nullableUUIDString(f.GuestSessionID), f.InternalName, f.OriginalName, f.Size,
 		f.DetectedFormat.MIMEType, string(f.DetectedFormat.Family),
 		f.DetectedFormat.Extension, string(meta), f.UploadedAt.Format(timeLayout),
 	)
@@ -44,13 +44,13 @@ func (r *sqliteFileRepo) Create(ctx context.Context, f *domain.OriginalFile) err
 func (r *sqliteFileRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.OriginalFile, error) {
 	var f domain.OriginalFile
 	var family, idStr, metaStr, uploadedAt string
-	var userIDStr *string
+	var userIDStr, guestSessionIDStr *string
 
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, user_id, internal_name, original_name, size, mime_type, format_family, detected_extension, metadata, uploaded_at
+		`SELECT id, user_id, guest_session_id, internal_name, original_name, size, mime_type, format_family, detected_extension, metadata, uploaded_at
 		 FROM files WHERE id = ?`, id.String(),
 	).Scan(
-		&idStr, &userIDStr, &f.InternalName, &f.OriginalName, &f.Size,
+		&idStr, &userIDStr, &guestSessionIDStr, &f.InternalName, &f.OriginalName, &f.Size,
 		&f.DetectedFormat.MIMEType, &family,
 		&f.DetectedFormat.Extension, &metaStr, &uploadedAt,
 	)
@@ -63,6 +63,12 @@ func (r *sqliteFileRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Ori
 		uid, parseErr := uuid.Parse(*userIDStr)
 		if parseErr == nil {
 			f.UserID = &uid
+		}
+	}
+	if guestSessionIDStr != nil && *guestSessionIDStr != "" {
+		guestID, parseErr := uuid.Parse(*guestSessionIDStr)
+		if parseErr == nil {
+			f.GuestSessionID = &guestID
 		}
 	}
 	f.DetectedFormat.Family = domain.FormatFamily(family)

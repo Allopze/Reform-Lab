@@ -13,8 +13,8 @@ import (
 
 const guestUploadMaxBytesSettingKey = "guest_upload_max_bytes"
 const registeredUploadMaxBytesSettingKey = "registered_upload_max_bytes"
-const defaultGuestUploadMaxBytes int64 = maxUploadSize
-const defaultRegisteredUploadMaxBytes int64 = maxUploadSize
+const defaultGuestUploadMaxBytes int64 = 25 * 1024 * 1024
+const defaultRegisteredUploadMaxBytes int64 = 100 * 1024 * 1024
 const minConfiguredUploadLimitBytes int64 = 1 * 1024 * 1024
 const maxMultipartBodyOverhead int64 = 1 * 1024 * 1024
 

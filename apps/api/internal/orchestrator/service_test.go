@@ -204,3 +204,100 @@ func TestCreateAndEnqueueRejectsWhenUserReachedActiveJobLimit(t *testing.T) {
 		t.Fatalf("expected ErrTooManyActiveJobs, got %v", err)
 	}
 }
+
+// mockNotifier records calls to NotifyJobCompleted and NotifyJobFailed.
+type mockNotifier struct {
+	completedJobs []*domain.Job
+	failedJobs    []*domain.Job
+}
+
+func (m *mockNotifier) NotifyJobCompleted(_ context.Context, job *domain.Job) error {
+	m.completedJobs = append(m.completedJobs, job)
+	return nil
+}
+func (m *mockNotifier) NotifyJobFailed(_ context.Context, job *domain.Job) error {
+	m.failedJobs = append(m.failedJobs, job)
+	return nil
+}
+
+func TestNotifierCalledOnSuccess(t *testing.T) {
+	svc, _ := newTestOrchestrator(t)
+	notifier := &mockNotifier{}
+	svc = NewService(svc.jobs, svc.audit, svc.q, WithNotifier(notifier))
+	ctx := context.Background()
+
+	cap := domain.Capability{
+		ID:            "pdf-to-txt",
+		TargetFormat:  "txt",
+		SourceFormats: []string{"application/pdf"},
+		Engine:        "poppler",
+		ExecutionLimits: domain.ExecutionLimits{
+			TimeoutSeconds: 60,
+			MaxRetries:     1,
+		},
+	}
+
+	uid := uuid.New()
+	job, err := svc.CreateAndEnqueue(ctx, &uid, uuid.New(), cap, "/tmp/fake.pdf")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if err := svc.MarkRunning(ctx, job.ID); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if err := svc.MarkSucceeded(ctx, job.ID, uuid.New()); err != nil {
+		t.Fatalf("mark succeeded: %v", err)
+	}
+
+	if len(notifier.completedJobs) != 1 {
+		t.Fatalf("expected 1 completed notification, got %d", len(notifier.completedJobs))
+	}
+	if notifier.completedJobs[0].ID != job.ID {
+		t.Fatal("notified wrong job ID")
+	}
+	if len(notifier.failedJobs) != 0 {
+		t.Fatalf("expected 0 failed notifications, got %d", len(notifier.failedJobs))
+	}
+}
+
+func TestNotifierCalledOnFailure(t *testing.T) {
+	svc, _ := newTestOrchestrator(t)
+	notifier := &mockNotifier{}
+	svc = NewService(svc.jobs, svc.audit, svc.q, WithNotifier(notifier))
+	ctx := context.Background()
+
+	cap := domain.Capability{
+		ID:            "pdf-to-txt",
+		TargetFormat:  "txt",
+		SourceFormats: []string{"application/pdf"},
+		Engine:        "poppler",
+		ExecutionLimits: domain.ExecutionLimits{
+			TimeoutSeconds: 60,
+			MaxRetries:     1,
+		},
+	}
+
+	uid := uuid.New()
+	job, err := svc.CreateAndEnqueue(ctx, &uid, uuid.New(), cap, "/tmp/fake.pdf")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if err := svc.MarkRunning(ctx, job.ID); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if err := svc.MarkFailed(ctx, job.ID, "boom"); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+
+	if len(notifier.failedJobs) != 1 {
+		t.Fatalf("expected 1 failed notification, got %d", len(notifier.failedJobs))
+	}
+	if notifier.failedJobs[0].ID != job.ID {
+		t.Fatal("notified wrong job ID")
+	}
+	if len(notifier.completedJobs) != 0 {
+		t.Fatalf("expected 0 completed notifications, got %d", len(notifier.completedJobs))
+	}
+}

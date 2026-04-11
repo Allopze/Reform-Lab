@@ -3,12 +3,17 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/allopze/reform-lab/apps/api/internal/api/middleware"
 	"github.com/allopze/reform-lab/apps/api/internal/auth"
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
+	"github.com/allopze/reform-lab/apps/api/internal/email"
+	"github.com/allopze/reform-lab/apps/api/internal/queue"
+	"github.com/rs/zerolog"
 )
 
 const sessionCookieName = "reform_session"
@@ -16,7 +21,10 @@ const sessionCookieMaxAgeSeconds = 72 * 60 * 60
 
 // AuthHandler handles POST /api/auth/register and /api/auth/login.
 type AuthHandler struct {
-	Auth *auth.Service
+	Auth   *auth.Service
+	Email  *email.Service
+	Queue  queue.JobQueue
+	Logger zerolog.Logger
 }
 
 type registerRequest struct {
@@ -68,6 +76,24 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeSessionCookie(w, r, result.SessionToken)
+
+	// Enqueue welcome email (best-effort, never blocks registration).
+	if h.Email != nil && h.Queue != nil && h.Email.Configured(r.Context()) {
+		err := h.Queue.EnqueueEmail(r.Context(), queue.EmailTaskPayload{
+			TemplateKey: "welcome",
+			To:          result.User.Email,
+			Vars: map[string]string{
+				"Name":    result.User.Name,
+				"Email":   result.User.Email,
+				"AppName": "Reform Lab",
+				"Year":    fmt.Sprintf("%d", time.Now().Year()),
+			},
+		}, queue.TaskOptions{MaxRetries: 3, Timeout: 30 * time.Second})
+		if err != nil {
+			h.Logger.Warn().Err(err).Str("email", result.User.Email).Msg("failed to enqueue welcome email")
+		}
+	}
+
 	respondJSON(w, http.StatusCreated, result)
 }
 

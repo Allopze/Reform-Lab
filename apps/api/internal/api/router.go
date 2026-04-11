@@ -4,8 +4,10 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/api/handlers"
 	"github.com/allopze/reform-lab/apps/api/internal/api/middleware"
 	"github.com/allopze/reform-lab/apps/api/internal/auth"
+	"github.com/allopze/reform-lab/apps/api/internal/email"
 	"github.com/allopze/reform-lab/apps/api/internal/observability"
 	"github.com/allopze/reform-lab/apps/api/internal/orchestrator"
+	"github.com/allopze/reform-lab/apps/api/internal/queue"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
 	"github.com/allopze/reform-lab/apps/api/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -26,6 +28,9 @@ type Deps struct {
 	Users                    repository.UserRepository
 	Dashboard                repository.DashboardRepository
 	SiteSettings             repository.SiteSettingRepository
+	EmailTemplates           repository.EmailTemplateRepository
+	EmailService             *email.Service
+	Queue                    queue.JobQueue
 	Orchestrator             *orchestrator.Service
 	AuthService              *auth.Service
 	CORSOrigin               string
@@ -64,7 +69,12 @@ func NewRouter(d Deps) *chi.Mux {
 		r.Get("/footer-message", footer.Get)
 
 		// Auth routes (public)
-		authH := &handlers.AuthHandler{Auth: d.AuthService}
+		authH := &handlers.AuthHandler{
+			Auth:   d.AuthService,
+			Email:  d.EmailService,
+			Queue:  d.Queue,
+			Logger: d.Logger,
+		}
 		r.With(middleware.RateLimit(1, 5, d.TrustProxyHeaders)).Post("/auth/register", authH.Register)
 		r.With(middleware.RateLimit(1, 5, d.TrustProxyHeaders)).Post("/auth/login", authH.Login)
 		r.Post("/auth/logout", authH.Logout)
@@ -73,6 +83,7 @@ func NewRouter(d Deps) *chi.Mux {
 		// available but still allows anonymous use of the public app flow.
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.OptionalAuth(d.AuthService, d.Users))
+			r.Use(middleware.OptionalGuestSession)
 			uploadQuota := middleware.UserOrIPRateLimit(d.UserUploadsPerMinute, d.UserUploadBurst, d.TrustProxyHeaders)
 			conversionQuota := middleware.UserOrIPRateLimit(d.UserConversionsPerMinute, d.UserConversionBurst, d.TrustProxyHeaders)
 
@@ -112,6 +123,7 @@ func NewRouter(d Deps) *chi.Mux {
 
 			art := &handlers.ArtifactHandler{
 				Artifacts: d.Artifacts,
+				Files:     d.Files,
 				Store:     d.Store,
 			}
 			r.Get("/artifacts/{artifactId}/download", art.Handle)
@@ -132,6 +144,25 @@ func NewRouter(d Deps) *chi.Mux {
 				r.Get("/admin/engines", dashboard.AdminEngines)
 				r.Put("/admin/footer-message", footer.Update)
 				r.Put("/admin/upload-policy", uploadPolicy.Update)
+
+				// SMTP settings
+				smtpH := &handlers.SMTPSettingsHandler{
+					Email:    d.EmailService,
+					Settings: d.SiteSettings,
+				}
+				r.Get("/admin/smtp-settings", smtpH.Get)
+				r.Put("/admin/smtp-settings", smtpH.Update)
+				r.Post("/admin/smtp-test", smtpH.Test)
+
+				// Email templates
+				emailTmplH := &handlers.EmailTemplateHandler{
+					Email:     d.EmailService,
+					Templates: d.EmailTemplates,
+				}
+				r.Get("/admin/email-templates", emailTmplH.List)
+				r.Get("/admin/email-templates/{key}", emailTmplH.Get)
+				r.Put("/admin/email-templates/{key}", emailTmplH.Update)
+				r.Post("/admin/email-templates/{key}/preview", emailTmplH.Preview)
 			})
 		})
 	})

@@ -12,6 +12,7 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/capabilities"
 	"github.com/allopze/reform-lab/apps/api/internal/database"
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
+	"github.com/allopze/reform-lab/apps/api/internal/email"
 	"github.com/allopze/reform-lab/apps/api/internal/observability"
 	"github.com/allopze/reform-lab/apps/api/internal/orchestrator"
 	"github.com/allopze/reform-lab/apps/api/internal/queue"
@@ -67,6 +68,15 @@ func main() {
 	jobRepo := repository.NewJobRepository(db)
 	artifactRepo := repository.NewArtifactRepository(db)
 	auditRepo := repository.NewAuditRepository(db)
+	siteSettingRepo := repository.NewSiteSettingRepository(db)
+	emailTemplateRepo := repository.NewEmailTemplateRepository(db)
+
+	// Email
+	emailSvc := email.NewService(cfg, siteSettingRepo, emailTemplateRepo, logger)
+	emailWorker := &workers.EmailHandler{
+		Email:  emailSvc,
+		Logger: logger.With().Str("component", "email_worker").Logger(),
+	}
 
 	// Queue (for orchestrator to update jobs)
 	q, err := queue.NewAsynqQueue(cfg.RedisURL)
@@ -203,6 +213,11 @@ func main() {
 			return handler.ProcessPayload(ctx, t.Type(), t.Payload())
 		})
 	}
+
+	// Register email task handler.
+	mux.HandleFunc(queue.EmailTaskType, func(ctx context.Context, t *asynq.Task) error {
+		return emailWorker.ProcessPayload(ctx, t.Type(), t.Payload())
+	})
 
 	// Graceful shutdown
 	go func() {

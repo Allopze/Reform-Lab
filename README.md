@@ -1,28 +1,244 @@
-# Documentación base del proyecto
+# Reform Lab
 
-Este paquete contiene un set inicial de documentos para desarrollar un **servicio web de conversión de archivos inteligente** con ayuda de agentes de IA.
+Reform Lab es una plataforma de conversión de archivos que intenta comportarse como un sistema serio.
+Eso significa que no decide nada importante por la extensión del archivo, no inventa capacidades en el frontend y no confunde “subí un archivo” con “ya resolví un pipeline de procesamiento”. Parece obvio. No lo es tanto en este tipo de proyectos.
 
-## Objetivo del producto
+## Qué hace
 
-El sistema permite que un usuario suba un archivo y vea únicamente las opciones de procesamiento o conversión que sean coherentes con:
+- recibe archivos desde la web
+- detecta el formato real
+- extrae metadatos relevantes
+- resuelve solo capacidades compatibles
+- crea jobs asíncronos de conversión
+- valida la salida antes de persistirla
+- expone descargas, estados y trazabilidad
 
-- el tipo real del archivo
-- sus metadatos
-- las capacidades soportadas por el sistema
-- las políticas de seguridad y límites operativos
+## Qué no hace
 
-## Objetivo de este pack
+- no confía en nombres como `final-final-ahora-si.pdf`
+- no pone lógica de producto en componentes UI con demasiada autoestima
+- no mete conversiones pesadas en request/response porque el caos ya tiene demasiados fans
+- no vende la fantasía de “soporta todo” cuando faltan motores o restricciones operativas
 
-Este pack existe para que humanos y agentes de IA trabajen sobre el mismo proyecto con un marco común de:
+## Arquitectura en 20 segundos
 
-- arquitectura
-- dominio
-- seguridad
-- testing
-- operación
-- evolución del repositorio
+```text
+Upload
+	-> Validate
+	-> Detect real format
+	-> Extract metadata
+	-> Resolve capabilities
+	-> Create conversion request
+	-> Enqueue job
+	-> Execute in worker
+	-> Validate output
+	-> Persist artifact
+	-> Download / inspect status
+```
 
-## Orden recomendado de lectura
+La separación de capas no es decoración:
+
+- `apps/web` presenta estados y consume contratos
+- `apps/api` valida, autentica y orquesta
+- `ingestion` detecta y clasifica
+- `capabilities` decide qué está permitido
+- `workers` ejecutan y validan salidas
+- `storage` guarda originales, temporales y artefactos
+- `observability` deja evidencia de lo que pasó cuando inevitablemente alguien pregunte “qué rompió esto”
+
+## Stack real
+
+- frontend: Next.js 15, React 19, Tailwind CSS 4, Vitest
+- backend: Go 1.25, Chi, SQLite, JWT, cola en proceso o Redis
+- motores y binarios: Poppler, Ghostscript, LibreOffice, librsvg, FFmpeg, libheif, Tesseract y otros según capacidad
+
+No todos los motores son obligatorios para arrancar. Sí son obligatorios si esperas que una capacidad dependiente funcione y no solo salga muy bonita en una demo.
+
+## Estructura del repositorio
+
+- `apps/web`: UI, flujos de usuario, adaptadores HTTP y tests de componentes
+- `apps/api`: API, auth, repositorios, orquestación, workers embebidos y tests
+- `docs`: arquitectura, dominio, seguridad, testing, operación y ADRs
+- `.github/instructions`: reglas específicas para agentes y asistentes
+
+## Requisitos de desarrollo
+
+- Node.js 20 o superior
+- npm
+- Go 1.25
+- binarios del sistema si quieres cobertura real de conversiones avanzadas
+
+## Arranque local
+
+### 1. Prepara variables de entorno
+
+```bash
+cp .env.example .env
+```
+
+Edita al menos:
+
+- `JWT_SECRET`
+- `CORS_ORIGIN` si abres la web desde otra IP, hostname local o dispositivo externo
+- `NEXT_PUBLIC_API_URL` si no quieres usar el API local en `4040`
+
+### 2. Instala dependencias
+
+```bash
+npm install
+cd apps/web && npm install
+cd ../api && go mod download
+cd ../..
+```
+
+### 3. Levanta el stack local
+
+```bash
+npm run dev
+```
+
+Servicios por defecto:
+
+- web: `http://localhost:5050`
+- api: `http://localhost:4040`
+- health: `http://localhost:4040/api/health`
+
+## Comandos útiles
+
+| Comando | Qué hace |
+| --- | --- |
+| `npm run dev` | levanta frontend y API usando el `.env` raíz |
+| `cd apps/web && npm test` | ejecuta la suite frontend |
+| `cd apps/web && npm run build` | build de Next.js |
+| `cd apps/api && go test ./...` | ejecuta la suite del backend |
+| `cd apps/api && ENV_FILE=../../.env go run ./cmd/server` | arranca solo el API |
+| `bash apps/api/scripts/docker-e2e-smoke.sh` | smoke test Docker del API |
+
+## Variables de entorno
+
+### Archivos canónicos
+
+- `.env` en la raíz: archivo principal para desarrollo local full stack
+- `.env.example` en la raíz: plantilla completa y sincronizada con el runtime real
+- `apps/web/.env.example`: plantilla mínima solo para arrancar el frontend por separado
+- `ENV_FILE`: override opcional para que el API cargue otro archivo distinto
+
+### Runtime del API
+
+| Variable | Obligatoria | Default de código | Qué hace |
+| --- | --- | --- | --- |
+| `APP_ENV` | no | `development` | controla el modo general; `production` exige `REDIS_URL` |
+| `PORT` | no | `8080` | puerto HTTP del API |
+| `DATABASE_PATH` | no | `./data/reform.db` | ruta de la base SQLite |
+| `MIGRATIONS_PATH` | no | `./migrations` | ruta de migraciones SQL |
+| `STORAGE_BASE_PATH` | no | `./data` | base para originales, temporales y artefactos |
+| `CORS_ORIGIN` | no, pero muy recomendable | `http://localhost:3000` | lista separada por comas con orígenes exactos permitidos para la web |
+| `LOG_LEVEL` | no | `info` | nivel de logs estructurados |
+| `JWT_SECRET` | sí | sin fallback válido | secreto para firmar sesión JWT; mínimo 32 caracteres y sin placeholders banales |
+| `REDIS_URL` | no en local, sí en producción | vacío | activa cola Redis; vacío usa cola en proceso |
+| `EXPOSE_METRICS` | no | `false` | expone `/metrics` para Prometheus |
+| `TRUST_PROXY_HEADERS` | no | `false` | usa headers tipo `X-Forwarded-*` al calcular IP y seguridad |
+
+### Concurrencia y cuotas
+
+| Variable | Obligatoria | Default de código | Qué hace |
+| --- | --- | --- | --- |
+| `IN_PROCESS_WORKER_CONCURRENCY` | no | `2` | concurrencia del worker embebido cuando no hay Redis |
+| `WORKER_CONCURRENCY` | no | `2` | concurrencia del worker standalone |
+| `USER_UPLOADS_PER_MINUTE` | no | `12` | cuota por usuario o IP para subidas |
+| `USER_UPLOAD_BURST` | no | `4` | burst permitido para subidas |
+| `USER_CONVERSIONS_PER_MINUTE` | no | `6` | cuota por usuario o IP para conversiones |
+| `USER_CONVERSION_BURST` | no | `3` | burst permitido para conversiones |
+| `MAX_ACTIVE_JOBS_PER_USER` | no | `3` | límite de jobs activos por usuario |
+
+### Retención y limpieza
+
+| Variable | Obligatoria | Default de código | Qué hace |
+| --- | --- | --- | --- |
+| `ORIGINAL_RETENTION_HOURS` | no | `24` | cuánto se conservan originales |
+| `TEMP_RETENTION_HOURS` | no | `6` | cuánto viven temporales de trabajo |
+| `ARTIFACT_TTL_HOURS` | no | `24` | TTL base para artefactos |
+| `ARTIFACT_TTL_HOURS_PDF` | no | hereda `ARTIFACT_TTL_HOURS` si no existe; local recomendado `48` | override para familia PDF |
+| `ARTIFACT_TTL_HOURS_IMAGE` | no | hereda `ARTIFACT_TTL_HOURS` si no existe; local recomendado `12` | override para familia imagen |
+| `ARTIFACT_TTL_HOURS_DOCUMENT` | no | hereda `ARTIFACT_TTL_HOURS` si no existe; local recomendado `24` | override para familia documento |
+| `ARTIFACT_TTL_HOURS_AUDIO` | no | hereda `ARTIFACT_TTL_HOURS` si no existe; local recomendado `72` | override para familia audio |
+| `ARTIFACT_TTL_HOURS_VIDEO` | no | hereda `ARTIFACT_TTL_HOURS` si no existe; local recomendado `96` | override para familia video |
+
+### Feature flags
+
+| Variable | Obligatoria | Default de código | Qué hace |
+| --- | --- | --- | --- |
+| `FEATURE_DISABLE_CAPABILITIES` | no | vacío | CSV de capability IDs deshabilitados |
+| `FEATURE_DISABLE_ENGINES` | no | vacío | CSV de engines deshabilitados |
+
+### Frontend
+
+| Variable | Obligatoria | Default de código | Qué hace |
+| --- | --- | --- | --- |
+| `NEXT_PUBLIC_API_URL` | no, pero recomendada | `http://localhost:8080` | base URL del API consumido por Next.js |
+
+Nota importante sobre `NEXT_PUBLIC_API_URL`:
+
+- si apunta a loopback (`localhost` o `127.0.0.1`) y abres la web desde una URL LAN, el frontend reutiliza el hostname actual para no morir en un precioso “Load failed”
+- eso no reemplaza `CORS_ORIGIN`; solo evita que el cliente intente hablar con el loopback equivocado
+
+### Variables operativas adicionales
+
+| Variable | Dónde se usa | Qué hace |
+| --- | --- | --- |
+| `ENV_FILE` | scripts root y loader del API | fuerza al backend a cargar un archivo `.env` específico |
+| `BASE_URL` | `apps/api/scripts/docker-e2e-smoke.sh` | redefine la URL base del smoke test Docker |
+
+## Auditoría de `.env`
+
+Revisión hecha sobre el estado actual del repo:
+
+- el `.env` raíz es el archivo correcto para desarrollo local full stack
+- el `.env.example` estaba desalineado con el runtime real y se corrigió
+- `JWT_SECRET=dev-secret-change-me` era una trampa: el backend lo rechaza por validación
+- `apps/web/.env.example` apuntaba a `8080`, pero el stack local de este repo usa `4040`
+- `CORS_ORIGIN` ahora debe entenderse como lista de orígenes exactos separados por comas, no como una cadena única decorativa
+
+## Testing
+
+La estrategia del repo no es “si compila, ya veremos”. El baseline esperado cubre:
+
+- unit tests para reglas y validaciones
+- integration tests para infraestructura relevante
+- contract tests para endpoints
+- end-to-end y smoke tests para flujos críticos
+- corpus de archivos reales, complejos y corruptos
+
+Consulta también:
+
+- `docs/testing/test-strategy.md`
+- `docs/architecture/system-overview.md`
+- `docs/architecture/repo-map.md`
+
+## Docker
+
+El compose del API vive en `apps/api/docker-compose.yml`.
+Si activas Redis, el worker standalone deja de ser decoración y pasa a ser requisito.
+
+## Problemas típicos
+
+### “Load failed” al registrar o hacer login
+
+Revisa en este orden:
+
+- que `NEXT_PUBLIC_API_URL` apunte al API correcto
+- que `CORS_ORIGIN` incluya el origen exacto desde el que abres la web
+- que hayas reiniciado `npm run dev` después de tocar `.env`
+
+### El motor aparece como unavailable
+
+No es misterio, es una dependencia nativa ausente. Mira los logs de arranque del API y verifica el binario correspondiente.
+
+### El frontend arranca, pero el API no
+
+Lo normal es un `JWT_SECRET` inválido, una ruta de migraciones rota o una dependencia del sistema faltante. El repositorio no está poseído; casi siempre es configuración.
+
+## Lectura recomendada
 
 1. `AGENTS.md`
 2. `docs/architecture/system-overview.md`
@@ -30,59 +246,8 @@ Este pack existe para que humanos y agentes de IA trabajen sobre el mismo proyec
 4. `docs/domain/capabilities-catalog.md`
 5. `docs/security/file-handling.md`
 6. `docs/testing/test-strategy.md`
-7. `CONTRIBUTING.md`
 
-## Archivos incluidos
+## Cierre
 
-### Raíz
-- `README.md`
-- `AGENTS.md`
-- `CONTRIBUTING.md`
-
-### GitHub / agentes
-- `.github/copilot-instructions.md`
-- `.github/instructions/backend.instructions.md`
-- `.github/instructions/frontend.instructions.md`
-- `.github/instructions/workers.instructions.md`
-
-### Arquitectura
-- `docs/architecture/system-overview.md`
-- `docs/architecture/repo-map.md`
-
-### Dominio
-- `docs/domain/glossary.md`
-- `docs/domain/capabilities-catalog.md`
-
-### Seguridad
-- `docs/security/file-handling.md`
-
-### Testing
-- `docs/testing/test-strategy.md`
-
-### Operación
-- `docs/operations/runbooks.md`
-
-### Producto
-- `docs/product/non-goals.md`
-
-### Decisiones
-- `docs/adr/0001-foundation.md`
-
-## Cómo usar este pack
-
-1. Copiar los archivos al repositorio.
-2. Ajustar nombres de módulos y carpetas a la estructura real del proyecto.
-3. Reemplazar ejemplos y placeholders por decisiones concretas.
-4. Crear ADRs nuevos cada vez que se tome una decisión estructural importante.
-5. Mantener `AGENTS.md` y la documentación de arquitectura sincronizados.
-
-## Nota importante
-
-El contenido está escrito para ser:
-
-- legible por humanos
-- interpretable por agentes IA
-- suficientemente específico para orientar cambios
-- suficientemente genérico para no forzar un stack prematuro
-
-No reemplaza documentación técnica concreta del proyecto. La prepara.
+Reform Lab no intenta ser mágico. Intenta ser entendible, auditable y difícil de romper por accidente.
+Que en software eso suene ambicioso ya dice bastante del mercado.

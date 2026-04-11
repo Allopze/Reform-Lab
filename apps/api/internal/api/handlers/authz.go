@@ -12,6 +12,10 @@ func currentUser(r *http.Request) *domain.User {
 	return middleware.UserFromContext(r.Context())
 }
 
+func currentGuestSessionID(r *http.Request) *uuid.UUID {
+	return middleware.GuestSessionIDFromContext(r.Context())
+}
+
 // userIDPtr returns a pointer to the user's ID, or nil if the user is nil (anonymous).
 func userIDPtr(u *domain.User) *uuid.UUID {
 	if u == nil {
@@ -20,15 +24,20 @@ func userIDPtr(u *domain.User) *uuid.UUID {
 	return &u.ID
 }
 
-func canAccessOwner(actor *domain.User, ownerID *uuid.UUID) bool {
-	if ownerID == nil {
+func canAccessResource(actor *domain.User, actorGuestSessionID, ownerID, resourceGuestSessionID *uuid.UUID) bool {
+	if actor != nil && actor.IsAdmin() {
 		return true
 	}
-	if actor == nil {
+
+	if ownerID != nil {
+		if actor == nil {
+			return false
+		}
+		return actor.ID == *ownerID
+	}
+
+	if actorGuestSessionID == nil || resourceGuestSessionID == nil {
 		return false
 	}
-	if actor.IsAdmin() {
-		return true
-	}
-	return actor.ID == *ownerID
+	return *actorGuestSessionID == *resourceGuestSessionID
 }

@@ -11,12 +11,20 @@ import (
 	"github.com/google/uuid"
 )
 
+// JobNotifier receives notifications when a job reaches a terminal state.
+// Implementations must be safe for best-effort use (errors are logged, not fatal).
+type JobNotifier interface {
+	NotifyJobCompleted(ctx context.Context, job *domain.Job) error
+	NotifyJobFailed(ctx context.Context, job *domain.Job) error
+}
+
 // Service manages job lifecycle: creation, status updates, and queuing.
 type Service struct {
 	jobs                 repository.JobRepository
 	audit                repository.AuditRepository
 	q                    queue.JobQueue
 	maxActiveJobsPerUser int
+	notifier             JobNotifier
 }
 
 type Option func(*Service)
@@ -24,6 +32,13 @@ type Option func(*Service)
 func WithMaxActiveJobsPerUser(limit int) Option {
 	return func(s *Service) {
 		s.maxActiveJobsPerUser = limit
+	}
+}
+
+// WithNotifier sets an optional notifier for job lifecycle events.
+func WithNotifier(n JobNotifier) Option {
+	return func(s *Service) {
+		s.notifier = n
 	}
 }
 
@@ -247,6 +262,16 @@ func (s *Service) transitionJob(ctx context.Context, id uuid.UUID, to domain.Job
 			Details:   details,
 			CreatedAt: now,
 		})
+	}
+
+	// Best-effort notification for terminal states.
+	if s.notifier != nil {
+		switch to {
+		case domain.JobSucceeded:
+			_ = s.notifier.NotifyJobCompleted(ctx, job)
+		case domain.JobFailed:
+			_ = s.notifier.NotifyJobFailed(ctx, job)
+		}
 	}
 
 	return nil

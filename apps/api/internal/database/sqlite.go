@@ -35,7 +35,7 @@ func Open(dbPath string) (*sql.DB, error) {
 
 // Migrate runs all SQL migration files against the database.
 func Migrate(db *sql.DB, migrationsPath string) error {
-	migrations := []string{"001_initial.sql", "002_users.sql", "003_owner_roles.sql", "004_site_settings.sql"}
+	migrations := []string{"001_initial.sql", "002_users.sql", "003_owner_roles.sql", "004_site_settings.sql", "005_guest_sessions.sql", "006_email_templates.sql", "007_email_templates_conversion.sql"}
 	for _, name := range migrations {
 		data, err := os.ReadFile(filepath.Join(migrationsPath, name))
 		if err != nil {
@@ -49,7 +49,7 @@ func Migrate(db *sql.DB, migrationsPath string) error {
 }
 
 func execMigrationStatements(db *sql.DB, rawSQL string) error {
-	statements := strings.Split(rawSQL, ";")
+	statements := splitSQLStatements(rawSQL)
 	for _, statement := range statements {
 		trimmed := strings.TrimSpace(statement)
 		if trimmed == "" {
@@ -76,4 +76,43 @@ func execMigrationStatements(db *sql.DB, rawSQL string) error {
 		}
 	}
 	return nil
+}
+
+// splitSQLStatements splits raw SQL on semicolons that are NOT inside string literals.
+func splitSQLStatements(sql string) []string {
+	var statements []string
+	var current strings.Builder
+	inString := false
+	quote := byte(0)
+
+	for i := 0; i < len(sql); i++ {
+		ch := sql[i]
+		if inString {
+			current.WriteByte(ch)
+			if ch == quote {
+				// Check for escaped quote (doubled quote in SQL).
+				if i+1 < len(sql) && sql[i+1] == quote {
+					current.WriteByte(sql[i+1])
+					i++
+				} else {
+					inString = false
+				}
+			}
+		} else {
+			if ch == '\'' || ch == '"' {
+				inString = true
+				quote = ch
+				current.WriteByte(ch)
+			} else if ch == ';' {
+				statements = append(statements, current.String())
+				current.Reset()
+			} else {
+				current.WriteByte(ch)
+			}
+		}
+	}
+	if s := current.String(); strings.TrimSpace(s) != "" {
+		statements = append(statements, s)
+	}
+	return statements
 }

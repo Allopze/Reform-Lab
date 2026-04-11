@@ -14,6 +14,7 @@ import (
 
 // Config holds all application configuration loaded from environment variables.
 type Config struct {
+	AppEnv                   string
 	Port                     int
 	DatabasePath             string
 	MigrationsPath           string
@@ -37,12 +38,24 @@ type Config struct {
 	ArtifactTTLByFamily      map[domain.FormatFamily]int
 	DisabledCapabilities     []string
 	DisabledEngines          []string
+
+	AppURL string // public URL for email links; defaults to CORS_ORIGIN
+
+	// SMTP configuration — empty SMTPHost disables email sending.
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUser     string
+	SMTPPassword string
+	SMTPFrom     string
+	SMTPUseTLS   bool
 }
 
 // Load reads configuration from environment variables with sensible defaults.
 // It attempts to load a .env file from ENV_FILE (if set) or from the repo root.
 func Load() (*Config, error) {
 	loadEnvFile()
+
+	appEnv := normalizeAppEnv(os.Getenv("APP_ENV"))
 
 	port := 8080
 	if v := os.Getenv("PORT"); v != "" {
@@ -116,7 +129,28 @@ func Load() (*Config, error) {
 	disabledCapabilities := parseCSVEnv("FEATURE_DISABLE_CAPABILITIES")
 	disabledEngines := parseCSVEnv("FEATURE_DISABLE_ENGINES")
 
+	appURL := os.Getenv("APP_URL")
+	if appURL == "" {
+		appURL = corsOrigin
+	}
+
+	// SMTP (optional)
+	smtpHost := os.Getenv("SMTP_HOST")
+	smtpPort := lookupPositiveIntEnv("SMTP_PORT", 587)
+	smtpUser := os.Getenv("SMTP_USER")
+	smtpPassword := os.Getenv("SMTP_PASSWORD")
+	smtpFrom := os.Getenv("SMTP_FROM")
+	if smtpFrom == "" {
+		smtpFrom = "noreply@example.com"
+	}
+	smtpUseTLS := lookupBoolEnv("SMTP_USE_TLS", true)
+
+	if appEnv == "production" && redisURL == "" {
+		return nil, fmt.Errorf("REDIS_URL is required when APP_ENV=production")
+	}
+
 	return &Config{
+		AppEnv:                   appEnv,
 		Port:                     port,
 		DatabasePath:             dbPath,
 		MigrationsPath:           migrationsPath,
@@ -140,7 +174,27 @@ func Load() (*Config, error) {
 		ArtifactTTLByFamily:      artifactTTLByFamily,
 		DisabledCapabilities:     disabledCapabilities,
 		DisabledEngines:          disabledEngines,
+		AppURL:                   appURL,
+		SMTPHost:                 smtpHost,
+		SMTPPort:                 smtpPort,
+		SMTPUser:                 smtpUser,
+		SMTPPassword:             smtpPassword,
+		SMTPFrom:                 smtpFrom,
+		SMTPUseTLS:               smtpUseTLS,
 	}, nil
+}
+
+func normalizeAppEnv(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "dev", "development":
+		return "development"
+	case "test":
+		return "test"
+	case "prod", "production":
+		return "production"
+	default:
+		return "development"
+	}
 }
 
 // loadEnvFile loads variables from a .env file. It checks, in order:

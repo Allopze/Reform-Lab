@@ -355,3 +355,113 @@ export async function updateUploadPolicy(payload: {
   }
   return data as UploadPolicy;
 }
+
+// ── SMTP Settings ──
+
+export interface SMTPSettings {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  from: string;
+  use_tls: boolean;
+  source: "env" | "admin" | "none";
+}
+
+export async function getSMTPSettings(): Promise<SMTPSettings> {
+  const res = await fetch(`${API_URL}/api/admin/smtp-settings`, {
+    headers: headers(),
+    credentials: "include",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to load SMTP settings");
+  return data as SMTPSettings;
+}
+
+export async function updateSMTPSettings(settings: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  from: string;
+  use_tls: boolean;
+}): Promise<void> {
+  const res = await fetch(`${API_URL}/api/admin/smtp-settings`, {
+    method: "PUT",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(settings),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to save SMTP settings");
+}
+
+export async function testSMTPConnection(): Promise<{ success: boolean; message: string }> {
+  const res = await fetch(`${API_URL}/api/admin/smtp-test`, {
+    method: "POST",
+    headers: headers(),
+    credentials: "include",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to test SMTP");
+  return data as { success: boolean; message: string };
+}
+
+// ── Email Templates ──
+
+export interface EmailTemplate {
+  key: string;
+  subject: string;
+  body_html: string;
+  updated_at: string;
+}
+
+export async function getEmailTemplates(): Promise<EmailTemplate[]> {
+  const res = await fetch(`${API_URL}/api/admin/email-templates`, {
+    headers: headers(),
+    credentials: "include",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to load email templates");
+  return data as EmailTemplate[];
+}
+
+export async function getEmailTemplate(key: string): Promise<EmailTemplate> {
+  const res = await fetch(`${API_URL}/api/admin/email-templates/${key}`, {
+    headers: headers(),
+    credentials: "include",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to load template");
+  return data as EmailTemplate;
+}
+
+export async function updateEmailTemplate(
+  key: string,
+  payload: { subject: string; body_html: string }
+): Promise<EmailTemplate> {
+  const res = await fetch(`${API_URL}/api/admin/email-templates/${key}`, {
+    method: "PUT",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to update template");
+  return data as EmailTemplate;
+}
+
+export async function previewEmailTemplate(
+  key: string,
+  draft?: { subject: string; body_html: string }
+): Promise<{ subject: string; html: string }> {
+  const res = await fetch(`${API_URL}/api/admin/email-templates/${key}/preview`, {
+    method: "POST",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: draft ? JSON.stringify(draft) : "{}",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to preview template");
+  return data as { subject: string; html: string };
+}

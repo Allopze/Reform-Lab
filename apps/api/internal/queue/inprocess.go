@@ -38,6 +38,19 @@ func (q *InProcessQueue) Enqueue(ctx context.Context, taskType string, payload T
 		return fmt.Errorf("marshal payload: %w", err)
 	}
 
+	return q.enqueueRaw(taskType, data, opts)
+}
+
+func (q *InProcessQueue) EnqueueEmail(ctx context.Context, payload EmailTaskPayload, opts TaskOptions) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal email payload: %w", err)
+	}
+
+	return q.enqueueRaw(EmailTaskType, data, opts)
+}
+
+func (q *InProcessQueue) enqueueRaw(taskType string, data []byte, opts TaskOptions) error {
 	if q.handler == nil {
 		return nil
 	}

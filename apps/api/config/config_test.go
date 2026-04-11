@@ -48,3 +48,59 @@ func TestLoadParsesAuthenticatedUserQuotaSettings(t *testing.T) {
 		t.Fatalf("unexpected max active jobs: %d", cfg.MaxActiveJobsPerUser)
 	}
 }
+
+func TestLoadRejectsProductionWithoutRedis(t *testing.T) {
+	t.Setenv("ENV_FILE", "/tmp/reform-nonexistent.env")
+	t.Setenv("JWT_SECRET", "test-strong-jwt-secret-1234567890")
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("REDIS_URL", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load to reject production without Redis")
+	}
+}
+
+func TestLoadAcceptsProductionWithRedis(t *testing.T) {
+	t.Setenv("ENV_FILE", "/tmp/reform-nonexistent.env")
+	t.Setenv("JWT_SECRET", "test-strong-jwt-secret-1234567890")
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("REDIS_URL", "redis://localhost:6379")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected valid config, got %v", err)
+	}
+	if cfg.AppEnv != "production" {
+		t.Fatalf("unexpected app env: %q", cfg.AppEnv)
+	}
+}
+
+func TestLoadAppURL_DefaultsToCORSOrigin(t *testing.T) {
+	t.Setenv("ENV_FILE", "/tmp/reform-nonexistent.env")
+	t.Setenv("JWT_SECRET", "test-strong-jwt-secret-1234567890")
+	t.Setenv("CORS_ORIGIN", "https://myapp.example.com")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected valid config, got %v", err)
+	}
+	if cfg.AppURL != "https://myapp.example.com" {
+		t.Fatalf("expected AppURL to default to CORS_ORIGIN, got %q", cfg.AppURL)
+	}
+}
+
+func TestLoadAppURL_ExplicitOverride(t *testing.T) {
+	t.Setenv("ENV_FILE", "/tmp/reform-nonexistent.env")
+	t.Setenv("JWT_SECRET", "test-strong-jwt-secret-1234567890")
+	t.Setenv("CORS_ORIGIN", "https://myapp.example.com")
+	t.Setenv("APP_URL", "https://custom.example.com")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected valid config, got %v", err)
+	}
+	if cfg.AppURL != "https://custom.example.com" {
+		t.Fatalf("expected AppURL to use APP_URL env, got %q", cfg.AppURL)
+	}
+}

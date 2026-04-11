@@ -408,13 +408,11 @@ export default function ConversionCard({ category }: ConversionCardProps) {
               id={`format-${category.id}`}
             />
           </div>
-        ) : (
+        ) : uploadedFileId ? (
           <div className="mt-6 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-stone-500">
-            {uploadedFileId
-              ? "Este archivo no tiene capacidades disponibles con la politica actual."
-              : "Sube un archivo y Reform Lab mostrara solo las salidas confirmadas por el backend."}
+            Este archivo no tiene capacidades disponibles con la politica actual.
           </div>
-        )}
+        ) : null}
 
         {uploadError && (
           <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">

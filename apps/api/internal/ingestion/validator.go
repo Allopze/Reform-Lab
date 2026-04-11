@@ -14,6 +14,9 @@ var maxSizeByFamily = map[domain.FormatFamily]int64{
 }
 
 const maxImagePixels = 40_000_000
+const maxPDFPages = 500
+const maxAudioDurationSec = 60 * 60
+const maxVideoDurationSec = 30 * 60
 
 // ValidateFile checks that a file meets ingestion requirements.
 // It returns a classified domain error on failure.
@@ -38,6 +41,25 @@ func ValidateFile(size int64, format domain.DetectedFormat, meta domain.FileMeta
 	if meta.Width != nil && meta.Height != nil {
 		if int64(*meta.Width)*int64(*meta.Height) > maxImagePixels {
 			return domain.ErrLimitExceeded
+		}
+	}
+
+	if meta.Pages != nil && format.Family == domain.FamilyPDF {
+		if *meta.Pages > maxPDFPages {
+			return domain.ErrLimitExceeded
+		}
+	}
+
+	if meta.DurationSec != nil {
+		switch format.Family {
+		case domain.FamilyAudio:
+			if *meta.DurationSec > maxAudioDurationSec {
+				return domain.ErrLimitExceeded
+			}
+		case domain.FamilyVideo:
+			if *meta.DurationSec > maxVideoDurationSec {
+				return domain.ErrLimitExceeded
+			}
 		}
 	}
 

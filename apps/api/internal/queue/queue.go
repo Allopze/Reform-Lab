@@ -15,6 +15,16 @@ type TaskPayload struct {
 	OutputFormat string `json:"outputFormat"`
 }
 
+// EmailTaskPayload is the data sent for email delivery tasks.
+type EmailTaskPayload struct {
+	TemplateKey string            `json:"templateKey"`
+	To          string            `json:"to"`
+	Vars        map[string]string `json:"vars"`
+}
+
+// EmailTaskType is the task type used for email delivery via the queue.
+const EmailTaskType = "email:send"
+
 // TaskOptions configures retry and timeout for a task.
 type TaskOptions struct {
 	MaxRetries int
@@ -24,5 +34,6 @@ type TaskOptions struct {
 // JobQueue abstracts the enqueueing of conversion tasks.
 type JobQueue interface {
 	Enqueue(ctx context.Context, taskType string, payload TaskPayload, opts TaskOptions) error
+	EnqueueEmail(ctx context.Context, payload EmailTaskPayload, opts TaskOptions) error
 	Close() error
 }

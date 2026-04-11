@@ -29,6 +29,7 @@ type conversionRequest struct {
 
 func (h *ConversionHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r) // may be nil for anonymous users
+	guestSessionID := currentGuestSessionID(r)
 
 	var req conversionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -47,7 +48,7 @@ func (h *ConversionHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "file not found")
 		return
 	}
-	if !canAccessOwner(u, file.UserID) {
+	if !canAccessResource(u, guestSessionID, file.UserID, file.GuestSessionID) {
 		respondError(w, http.StatusForbidden, "forbidden")
 		return
 	}

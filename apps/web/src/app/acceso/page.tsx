@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import AccessShell from "@/components/access-shell";
 import Footer from "@/components/footer";
 
@@ -10,7 +11,9 @@ export const metadata: Metadata = {
 export default function AccesoPage() {
   return (
     <div className="flex min-h-screen flex-col">
-      <AccessShell />
+      <Suspense>
+        <AccessShell />
+      </Suspense>
 
       <Footer />
     </div>

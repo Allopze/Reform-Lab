@@ -24,6 +24,7 @@ type capabilityResponse struct {
 
 func (h *CapabilitiesHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r) // may be nil for anonymous users
+	guestSessionID := currentGuestSessionID(r)
 
 	fileID, err := uuid.Parse(chi.URLParam(r, "fileId"))
 	if err != nil {
@@ -36,7 +37,7 @@ func (h *CapabilitiesHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "file not found")
 		return
 	}
-	if !canAccessOwner(u, file.UserID) {
+	if !canAccessResource(u, guestSessionID, file.UserID, file.GuestSessionID) {
 		respondError(w, http.StatusForbidden, "forbidden")
 		return
 	}

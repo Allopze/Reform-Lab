@@ -7,17 +7,26 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestCanAccessOwnerAllowsAnonymousResourcesByID(t *testing.T) {
+func TestCanAccessResource(t *testing.T) {
 	user := &domain.User{ID: uuid.New(), Role: domain.RoleUser}
 	admin := &domain.User{ID: uuid.New(), Role: domain.RoleAdmin}
+	ownerID := user.ID
+	guestID := uuid.New()
+	otherGuestID := uuid.New()
 
-	if !canAccessOwner(nil, nil) {
-		t.Fatal("expected anonymous actor to access anonymous resource")
+	if !canAccessResource(admin, nil, nil, nil) {
+		t.Fatal("expected admin to access any resource")
 	}
-	if !canAccessOwner(admin, nil) {
-		t.Fatal("expected admin to access anonymous resource")
+	if !canAccessResource(user, nil, &ownerID, nil) {
+		t.Fatal("expected owner to access owned resource")
 	}
-	if !canAccessOwner(user, nil) {
-		t.Fatal("expected regular user to access anonymous resource")
+	if canAccessResource(nil, nil, nil, &guestID) {
+		t.Fatal("expected anonymous actor without guest session to be rejected")
+	}
+	if !canAccessResource(nil, &guestID, nil, &guestID) {
+		t.Fatal("expected matching guest session to access guest resource")
+	}
+	if canAccessResource(nil, &otherGuestID, nil, &guestID) {
+		t.Fatal("expected different guest session to be rejected")
 	}
 }

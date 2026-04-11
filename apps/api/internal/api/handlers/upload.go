@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -33,6 +34,13 @@ type UploadHandler struct {
 
 func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r) // may be nil for anonymous uploads
+	guestSessionID := currentGuestSessionID(r)
+	if u != nil {
+		guestSessionID = nil
+	}
+	if u == nil && guestSessionID == nil {
+		guestSessionID = ensureGuestSession(w, r)
+	}
 
 	policy, err := loadUploadPolicy(r.Context(), h.Settings)
 	if err != nil {
@@ -54,15 +62,25 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	tempFile, err := os.CreateTemp("", "reform-upload-*")
+
+	stageID := "upload-" + uuid.NewString()
+	tempDir, err := h.Store.CreateTempDir(r.Context(), stageID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to stage uploaded file")
 		return
 	}
-	tempPath := tempFile.Name()
+	defer func() {
+		_ = h.Store.CleanupTemp(r.Context(), stageID)
+	}()
+
+	tempPath := filepath.Join(tempDir, "upload.bin")
+	tempFile, err := os.Create(tempPath)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to stage uploaded file")
+		return
+	}
 	defer func() {
 		_ = tempFile.Close()
-		_ = os.Remove(tempPath)
 	}()
 
 	// Stream the upload into a temporary file so large bodies stay off-heap.
@@ -102,7 +120,20 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	originalName := security.SanitizeFileName(header.Filename)
 
 	// Extract metadata from the staged file before committing it to long-lived storage.
-	meta := ingestion.ExtractMetadata(tempPath, detected)
+	meta, err := ingestion.ExtractMetadata(r.Context(), tempPath, detected)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			respondError(w, http.StatusRequestEntityTooLarge, "file is too complex to inspect safely")
+			return
+		}
+		if errors.Is(err, context.Canceled) {
+			respondError(w, http.StatusRequestTimeout, "request cancelled during file inspection")
+			return
+		}
+		h.Logger.Warn().Err(err).Str("detected_mime", detected.MIMEType).Msg("metadata extraction failed")
+		respondError(w, http.StatusUnprocessableEntity, "file metadata could not be inspected safely")
+		return
+	}
 
 	// Validate file against limits and policies.
 	if err := ingestion.ValidateFile(size, detected, meta); err != nil {
@@ -135,6 +166,7 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	record := domain.OriginalFile{
 		ID:             fileID,
 		UserID:         userIDPtr(u),
+		GuestSessionID: guestSessionID,
 		InternalName:   internalName,
 		OriginalName:   originalName,
 		Size:           size,

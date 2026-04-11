@@ -17,7 +17,7 @@ export const categories: CategoryConfig[] = [
       "Sube un archivo y Reform Lab identifica su tipo para adaptar la conversión.",
     dropzoneText: "Arrastra tu archivo aquí",
     dropzoneHint: "PDF, imágenes, documentos, audio y video",
-    supportLabel: "hasta 500 MB según el archivo",
+    supportLabel: "limites reales segun archivo y cuenta",
     cta: "Detectar y convertir",
     acceptedFormats: [],
     targetFormats: [],
@@ -31,8 +31,8 @@ export const categories: CategoryConfig[] = [
     subtitle:
       "Transforma documentos PDF a otros formatos sin perder calidad.",
     dropzoneText: "Arrastra tu PDF aquí",
-    dropzoneHint: "PDF · máx. 100 MB",
-    supportLabel: "hasta 100 MB",
+    dropzoneHint: "PDF",
+    supportLabel: "limite real segun tu cuenta",
     cta: "Convertir PDF",
     acceptedFormats: [{ value: "pdf", label: "PDF" }],
     targetFormats: [
@@ -51,7 +51,7 @@ export const categories: CategoryConfig[] = [
     subtitle: "Convierte entre JPG, PNG y más con un solo clic.",
     dropzoneText: "Suelta una imagen para convertirla",
     dropzoneHint: "JPG, PNG, WEBP, GIF, BMP, TIFF",
-    supportLabel: "hasta 100 MB",
+    supportLabel: "limite real segun tu cuenta",
     cta: "Convertir imagen",
     acceptedFormats: [
       { value: "jpg", label: "JPG" },
@@ -77,7 +77,7 @@ export const categories: CategoryConfig[] = [
       "Pasa entre formatos de oficina y texto plano sin complicaciones.",
     dropzoneText: "Selecciona un documento para convertir",
     dropzoneHint: "DOCX, ODT, TXT, RTF",
-    supportLabel: "hasta 100 MB",
+    supportLabel: "limite real segun tu cuenta",
     cta: "Convertir documento",
     acceptedFormats: [
       { value: "docx", label: "DOCX" },
@@ -101,7 +101,7 @@ export const categories: CategoryConfig[] = [
     subtitle: "Convierte entre MP3, WAV, OGG y más formatos de audio.",
     dropzoneText: "Sube un archivo de audio",
     dropzoneHint: "MP3, WAV, OGG, FLAC, AAC",
-    supportLabel: "hasta 250 MB",
+    supportLabel: "limite real segun tu cuenta",
     cta: "Convertir audio",
     acceptedFormats: [
       { value: "mp3", label: "MP3" },
@@ -124,8 +124,8 @@ export const categories: CategoryConfig[] = [
     title: "Prepara tus videos en el formato adecuado",
     subtitle: "Convierte entre MP4, MOV, WEBM y más.",
     dropzoneText: "Arrastra un video",
-    dropzoneHint: "MP4, MOV, WEBM, AVI · máx. 500 MB",
-    supportLabel: "hasta 500 MB",
+    dropzoneHint: "MP4, MOV, WEBM, AVI",
+    supportLabel: "limite real segun tu cuenta",
     cta: "Convertir video",
     acceptedFormats: [
       { value: "mp4", label: "MP4" },
