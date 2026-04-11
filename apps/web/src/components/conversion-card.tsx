@@ -1,20 +1,13 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, type RefObject } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { CheckCircle2 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import type { CategoryConfig, FileState } from "@/types";
-import { categoryIdFromDetectedFamily, getCategoryById } from "@/config/categories";
-import {
-  uploadFile,
-  getCapabilities,
-  createConversion,
-  getJob,
-  downloadArtifact,
-  cancelJob,
-  getUploadPolicy,
-  type Capability,
-  type UploadPolicy,
-} from "@/lib/api";
+import { getCategoryById } from "@/config/categories";
+import type { UploadPolicy } from "@/lib/api";
+import { useUpload } from "./hooks/use-upload";
+import { useConversion } from "./hooks/use-conversion";
 import Dropzone from "./dropzone";
 import FormatSelector from "./format-selector";
 import FilePreview from "./file-preview";
@@ -41,82 +34,89 @@ function formatMegabytes(bytes: number) {
   return `${Math.round(bytes / BYTES_PER_MB)} MB`;
 }
 
-function uploadSupportLabel(policy: UploadPolicy | null, fallback: string) {
-  if (!policy) return fallback;
-  return policy.viewerType === "registered"
-    ? `hasta ${formatMegabytes(policy.effectiveMaxBytes)} con tu cuenta`
-    : `hasta ${formatMegabytes(policy.effectiveMaxBytes)} como invitado`;
-}
-
-function uploadPolicyDetail(policy: UploadPolicy | null) {
-  if (!policy) return null;
-  if (policy.viewerType === "registered") {
-    return `Tu limite actual es ${formatMegabytes(policy.effectiveMaxBytes)} por archivo.`;
-  }
-  return `Como invitado puedes subir hasta ${formatMegabytes(policy.effectiveMaxBytes)} por archivo; con cuenta registrada, hasta ${formatMegabytes(policy.registeredMaxBytes)}.`;
-}
-
 export default function ConversionCard({ category }: ConversionCardProps) {
+  const t = useTranslations("conversionCard");
+  const tc = useTranslations("categories");
+  const tCommon = useTranslations("common");
   const isAutoCategory = category.id === "auto";
-  const [detectedCategoryId, setDetectedCategoryId] = useState<Exclude<CategoryConfig["id"], "auto"> | null>(null);
   const [fileState, setFileState] = useState<FileState>({ status: "idle" });
   const [outputFormat, setOutputFormat] = useState("");
+  const outputFormatRef = useRef(outputFormat);
+  outputFormatRef.current = outputFormat;
+
+  const {
+    uploadPolicy,
+    uploadedFileId,
+    capabilities,
+    uploadError,
+    detectedCategoryId,
+    handleFileSelected,
+    resetUpload,
+  } = useUpload(setFileState, outputFormatRef, setOutputFormat);
+
+  const {
+    downloadError,
+    handleConvert,
+    handleDownload,
+    handleCancel,
+    clearDownloadError,
+    stopPolling,
+  } = useConversion(fileState, setFileState, uploadedFileId, capabilities, outputFormat);
+
   const detectedCategory = detectedCategoryId
     ? getCategoryById(detectedCategoryId)
     : null;
   const effectiveCategory = isAutoCategory && detectedCategory
     ? detectedCategory
     : category;
+  const effectiveCategoryId = effectiveCategory.id;
+
+  function uploadSupportLabel(policy: UploadPolicy | null) {
+    if (!policy) return tc(`${effectiveCategoryId}.supportLabel`);
+    return policy.viewerType === "registered"
+      ? t("registeredSupport", { limit: formatMegabytes(policy.effectiveMaxBytes) })
+      : t("guestSupport", { limit: formatMegabytes(policy.effectiveMaxBytes) });
+  }
+
+  function uploadPolicyDetail(policy: UploadPolicy | null) {
+    if (!policy) return null;
+    if (policy.viewerType === "registered") {
+      return t("registeredLimit", { limit: formatMegabytes(policy.effectiveMaxBytes) });
+    }
+    return t("guestLimit", {
+      guestLimit: formatMegabytes(policy.effectiveMaxBytes),
+      registeredLimit: formatMegabytes(policy.registeredMaxBytes),
+    });
+  }
+
   const detailLabel = isAutoCategory
     ? detectedCategory
-      ? `Detectamos ${detectedCategory.label.toLowerCase()} y habilitamos ${detectedCategory.targetFormats.map((format) => format.label).join(", ")}.`
-      : "Detecta el formato real del archivo y habilita solo conversiones compatibles."
-    : `Convierte a ${effectiveCategory.targetFormats
-        .map((format) => format.label)
-        .join(", ")}.`;
+      ? t("detectedDetail", {
+          category: tc(`${detectedCategory.id}.label`).toLowerCase(),
+          formats: detectedCategory.targetFormats.map((f) => f.label).join(", "),
+        })
+      : t("defaultDetail")
+    : t("categoryFormats", {
+        formats: effectiveCategory.targetFormats.map((f) => f.label).join(", "),
+      });
 
-  // Track uploaded file ID and capabilities from backend
-  const [uploadedFileId, setUploadedFileId] = useState<string | null>(null);
-  const [capabilities, setCapabilities] = useState<Capability[]>([]);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
-  const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const [uploadPolicy, setUploadPolicy] = useState<UploadPolicy | null>(null);
   const availableTargetFormats = capabilities.map((capability) => ({
     value: capability.targetFormat,
     label: capability.displayName,
   }));
   const canChooseOutput = availableTargetFormats.length > 0;
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const outputFormatRef = useRef(outputFormat);
-  outputFormatRef.current = outputFormat;
 
   // Fade transition on category change
   const [faded, setFaded] = useState(false);
   const prevCategoryIdRef = useRef(category.id);
 
   useEffect(() => {
-    getUploadPolicy()
-      .then(setUploadPolicy)
-      .catch(() => {
-        setUploadPolicy(null);
-      });
-  }, []);
-
-  useEffect(() => {
     if (prevCategoryIdRef.current !== category.id) {
       setFaded(true);
       const timer = setTimeout(() => {
-        if (pollingRef.current) {
-          clearInterval(pollingRef.current);
-          pollingRef.current = null;
-        }
-        setDetectedCategoryId(null);
-        setUploadedFileId(null);
-        setCapabilities([]);
-        setUploadError(null);
-        setDownloadError(null);
-        setActiveJobId(null);
+        stopPolling();
+        resetUpload();
+        clearDownloadError();
         setOutputFormat("");
         setFileState({ status: "idle" });
         prevCategoryIdRef.current = category.id;
@@ -124,60 +124,15 @@ export default function ConversionCard({ category }: ConversionCardProps) {
       }, 150);
       return () => clearTimeout(timer);
     }
-  }, [category.id]);
-
-  // Cleanup polling interval on unmount
-  useEffect(() => {
-    return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current);
-    };
-  }, []);
-
-  const handleFileSelected = useCallback(
-    async (file: File) => {
-      setDownloadError(null);
-      setUploadError(null);
-      setCapabilities([]);
-      setUploadedFileId(null);
-      setFileState({ status: "selected", file, outputFormat: outputFormatRef.current });
-
-      // Upload file to backend and fetch capabilities
-      try {
-        const uploaded = await uploadFile(file);
-        setUploadedFileId(uploaded.id);
-        const nextCategoryId = categoryIdFromDetectedFamily(
-          uploaded.detectedFormat.family
-        );
-        setDetectedCategoryId(nextCategoryId);
-
-        const caps = await getCapabilities(uploaded.id);
-        setCapabilities(caps);
-
-        const nextOutputFormat = caps[0]?.targetFormat ?? "";
-        setOutputFormat(nextOutputFormat);
-        setFileState({ status: "selected", file, outputFormat: nextOutputFormat });
-      } catch (err) {
-        setUploadedFileId(null);
-        setUploadError(
-          err instanceof Error ? err.message : "Error al subir el archivo."
-        );
-        setCapabilities([]);
-      }
-    },
-    []
-  );
+  }, [category.id, stopPolling, resetUpload, clearDownloadError]);
 
   const handleRemoveFile = useCallback(() => {
-    if (pollingRef.current) clearInterval(pollingRef.current);
-    setDetectedCategoryId(null);
-    setUploadedFileId(null);
-    setCapabilities([]);
-    setUploadError(null);
-    setDownloadError(null);
-    setActiveJobId(null);
+    stopPolling();
+    resetUpload();
+    clearDownloadError();
     setOutputFormat("");
     setFileState({ status: "idle" });
-  }, []);
+  }, [stopPolling, resetUpload, clearDownloadError]);
 
   const handleOutputFormatChange = useCallback(
     (value: string) => {
@@ -188,152 +143,6 @@ export default function ConversionCard({ category }: ConversionCardProps) {
     },
     [fileState]
   );
-
-  const handleConvert = useCallback(async () => {
-    if (fileState.status !== "selected" || !uploadedFileId) return;
-
-    // Find the capability matching the chosen output format
-    const cap = capabilities.find((c) => c.targetFormat === outputFormat);
-    if (!cap) {
-      setFileState({
-        status: "error",
-        file: fileState.file,
-        outputFormat,
-        message: "No hay capacidad disponible para este formato de salida.",
-      });
-      return;
-    }
-
-    setFileState({
-      status: "converting",
-      file: fileState.file,
-      outputFormat,
-      progress: 0,
-    });
-
-    try {
-      const job = await createConversion(uploadedFileId, cap.id);
-      setActiveJobId(job.id);
-      const maxPolls = Math.max(
-        40,
-        Math.ceil(((cap.timeoutSeconds ?? 90) + 30) * 1000 / 1500)
-      );
-
-      // Poll job status until terminal using backend-provided timeout as the baseline.
-      let pollCount = 0;
-      pollingRef.current = setInterval(async () => {
-        pollCount++;
-        if (pollCount > maxPolls) {
-          if (pollingRef.current) {
-            clearInterval(pollingRef.current);
-            pollingRef.current = null;
-          }
-          setActiveJobId(null);
-          setFileState({
-            status: "error",
-            file: fileState.file,
-            outputFormat,
-            message: "La conversión tardó demasiado. Intenta de nuevo.",
-          });
-          return;
-        }
-
-        try {
-          const updated = await getJob(job.id);
-
-          if (updated.status === "succeeded" && updated.artifactId) {
-            if (pollingRef.current) {
-              clearInterval(pollingRef.current);
-              pollingRef.current = null;
-            }
-            setActiveJobId(null);
-            setFileState({
-              status: "done",
-              file: fileState.file,
-              outputFormat,
-              artifactId: updated.artifactId,
-              artifactFileName: updated.artifactFileName,
-              artifactMimeType: updated.artifactMimeType,
-              artifactSize: updated.artifactSize,
-            });
-          } else if (updated.status === "failed") {
-            if (pollingRef.current) {
-              clearInterval(pollingRef.current);
-              pollingRef.current = null;
-            }
-            setActiveJobId(null);
-            setFileState({
-              status: "error",
-              file: fileState.file,
-              outputFormat,
-              message: updated.error || "La conversión falló.",
-            });
-          } else if (updated.status === "cancelled") {
-            if (pollingRef.current) {
-              clearInterval(pollingRef.current);
-              pollingRef.current = null;
-            }
-            setActiveJobId(null);
-            setFileState({ status: "idle" });
-          } else {
-            setFileState({
-              status: "converting",
-              file: fileState.file,
-              outputFormat,
-              progress: updated.progress,
-            });
-          }
-        } catch {
-          if (pollingRef.current) {
-            clearInterval(pollingRef.current);
-            pollingRef.current = null;
-          }
-          setActiveJobId(null);
-          setFileState({
-            status: "error",
-            file: fileState.file,
-            outputFormat,
-            message: "Error al consultar el estado de la conversión.",
-          });
-        }
-      }, 1500);
-    } catch (err: unknown) {
-      setFileState({
-        status: "error",
-        file: fileState.file,
-        outputFormat,
-        message: err instanceof Error ? err.message : "Error al iniciar la conversión.",
-      });
-    }
-  }, [fileState, uploadedFileId, capabilities, outputFormat]);
-
-  const handleDownload = useCallback(async () => {
-    if (fileState.status !== "done") return;
-
-    try {
-      setDownloadError(null);
-      await downloadArtifact(
-        fileState.artifactId,
-        fileState.artifactFileName || `${fileState.file.name}.${fileState.outputFormat}`
-      );
-    } catch (err) {
-      setDownloadError(
-        err instanceof Error ? err.message : "No se pudo descargar el artefacto."
-      );
-    }
-  }, [fileState]);
-
-  const handleCancel = useCallback(async () => {
-    if (!activeJobId) return;
-    try {
-      await cancelJob(activeJobId);
-      if (pollingRef.current) clearInterval(pollingRef.current);
-      setActiveJobId(null);
-      setFileState({ status: "idle" });
-    } catch {
-      // If cancel fails (e.g. already completed), ignore — polling will handle it.
-    }
-  }, [activeJobId]);
 
   const isConverting = fileState.status === "converting";
   const isDone = fileState.status === "done";
@@ -361,9 +170,9 @@ export default function ConversionCard({ category }: ConversionCardProps) {
       <div className="rounded-[34px] border border-white/80 bg-white px-7 py-7 shadow-[0_24px_60px_-42px_rgba(15,23,42,0.24)] sm:px-8 sm:py-8">
         {fileState.status === "idle" ? (
           <Dropzone
-            text={effectiveCategory.dropzoneText}
-            hint={effectiveCategory.dropzoneHint}
-            supportLabel={uploadSupportLabel(uploadPolicy, effectiveCategory.supportLabel)}
+            text={tc(`${effectiveCategoryId}.dropzoneText`)}
+            hint={tc(`${effectiveCategoryId}.dropzoneHint`)}
+            supportLabel={uploadSupportLabel(uploadPolicy)}
             detailLabel={effectiveDetailLabel}
             accept={effectiveCategory.acceptedMimeTypes}
             onFileSelected={handleFileSelected}
@@ -371,7 +180,7 @@ export default function ConversionCard({ category }: ConversionCardProps) {
         ) : fileState.status === "error" ? (
           <div className="rounded-[28px] border border-rose-200 bg-rose-50 px-6 py-6 text-left">
             <p className="text-base font-semibold text-rose-800">
-              Archivo no compatible con detección automática
+              {t("errorTitle")}
             </p>
             <p className="mt-2 text-sm leading-6 text-rose-700">
               {fileState.message}
@@ -381,7 +190,7 @@ export default function ConversionCard({ category }: ConversionCardProps) {
               onClick={handleRemoveFile}
               className="mt-4 text-sm font-medium text-rose-800 underline underline-offset-2"
             >
-              Probar otro archivo
+              {t("tryAnother")}
             </button>
           </div>
         ) : (
@@ -394,14 +203,14 @@ export default function ConversionCard({ category }: ConversionCardProps) {
 
         {isAutoCategory && detectedCategory ? (
           <p className="mt-6 text-sm font-medium text-stone-500">
-            Formato detectado: <span className="text-stone-800">{detectedCategory.label}</span>
+            {t("detectedFormat")} <span className="text-stone-800">{tc(`${detectedCategory.id}.label`)}</span>
           </p>
         ) : null}
 
         {canChooseOutput ? (
           <div className="mt-6">
             <FormatSelector
-              label="Salida disponible"
+              label={t("outputLabel")}
               options={availableTargetFormats}
               value={outputFormat}
               onChange={handleOutputFormatChange}
@@ -410,13 +219,13 @@ export default function ConversionCard({ category }: ConversionCardProps) {
           </div>
         ) : uploadedFileId ? (
           <div className="mt-6 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-stone-500">
-            Este archivo no tiene capacidades disponibles con la politica actual.
+            {t("noCapabilities")}
           </div>
         ) : null}
 
         {uploadError && (
           <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            {uploadError} — la conversión no estará disponible hasta que se suba correctamente.
+            {uploadError} {t("uploadErrorSuffix")}
           </div>
         )}
 
@@ -438,14 +247,14 @@ export default function ConversionCard({ category }: ConversionCardProps) {
             </div>
             <div className="mt-3 flex items-center justify-between">
               <p className="text-sm text-stone-500">
-                Convirtiendo… {fileState.status === "converting" ? fileState.progress : 0}%
+                {t("converting", { progress: fileState.status === "converting" ? fileState.progress : 0 })}
               </p>
               <button
                 type="button"
                 onClick={() => void handleCancel()}
                 className="text-sm font-medium text-stone-400 underline underline-offset-2 hover:text-stone-600"
               >
-                Cancelar
+                {tCommon("cancel")}
               </button>
             </div>
           </div>
@@ -456,12 +265,12 @@ export default function ConversionCard({ category }: ConversionCardProps) {
             <div>
               <p className="flex items-center gap-2 text-sm font-medium text-emerald-800">
                 <CheckCircle2 size={16} strokeWidth={2} />
-                Conversión completada
+                {t("conversionDone")}
               </p>
               <p className="mt-1 text-sm text-emerald-900/80">
                 {doneIsArchive
-                  ? `La salida incluye varios archivos y se agrupó como ${doneArtifactName}.`
-                  : `Artefacto listo: ${doneArtifactName}.`}
+                  ? t("archiveMessage", { fileName: doneArtifactName ?? "" })
+                  : t("artifactMessage", { fileName: doneArtifactName ?? "" })}
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -473,14 +282,14 @@ export default function ConversionCard({ category }: ConversionCardProps) {
                 }}
                 className="text-sm font-medium text-emerald-700 underline underline-offset-2 hover:text-emerald-900"
               >
-                {doneIsArchive ? "Descargar ZIP" : "Descargar archivo"}
+                {doneIsArchive ? t("downloadZip") : t("downloadFile")}
               </a>
               <button
                 type="button"
                 onClick={handleRemoveFile}
                 className="text-sm font-medium text-coral-700 underline underline-offset-2 hover:text-coral-800"
               >
-                Convertir otro archivo
+                {t("convertAnother")}
               </button>
             </div>
           </div>
@@ -501,10 +310,10 @@ export default function ConversionCard({ category }: ConversionCardProps) {
           `}
         >
           {isConverting
-            ? "Convirtiendo…"
+            ? t("convertingButton")
             : isDone
-              ? "Completado"
-                : effectiveCategory.cta}
+              ? t("completed")
+                : tc(`${effectiveCategoryId}.cta`)}
         </button>
       </div>
     </div>

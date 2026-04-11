@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import EmailTemplatesSection from "./email-templates";
+import { IntlWrapper } from "@/test/intl-wrapper";
 
 import * as api from "@/lib/api";
 vi.mock("@/lib/api");
@@ -49,7 +50,7 @@ describe("EmailTemplatesSection", () => {
     });
   });
   it("renders template editor after loading", async () => {
-    render(<EmailTemplatesSection />);
+    render(<IntlWrapper><EmailTemplatesSection /></IntlWrapper>);
 
     // With a single template, the editor is shown immediately.
     await waitFor(() => {
@@ -58,7 +59,7 @@ describe("EmailTemplatesSection", () => {
   });
 
   it("shows template editor when a template is selected", async () => {
-    render(<EmailTemplatesSection />);
+    render(<IntlWrapper><EmailTemplatesSection /></IntlWrapper>);
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("Bienvenido a {{.AppName}}")).toBeInTheDocument();
@@ -66,7 +67,7 @@ describe("EmailTemplatesSection", () => {
   });
 
   it("shows mode toggle buttons", async () => {
-    render(<EmailTemplatesSection />);
+    render(<IntlWrapper><EmailTemplatesSection /></IntlWrapper>);
 
     await waitFor(() => {
       expect(screen.getByText("Visual")).toBeInTheDocument();
@@ -78,7 +79,7 @@ describe("EmailTemplatesSection", () => {
 
   it("switches to code mode and shows CodeMirror", async () => {
     const user = userEvent.setup();
-    render(<EmailTemplatesSection />);
+    render(<IntlWrapper><EmailTemplatesSection /></IntlWrapper>);
 
     await waitFor(() => {
       expect(screen.getByText("Codigo")).toBeInTheDocument();
@@ -92,7 +93,7 @@ describe("EmailTemplatesSection", () => {
   });
 
   it("shows variable chips in visual mode", async () => {
-    render(<EmailTemplatesSection />);
+    render(<IntlWrapper><EmailTemplatesSection /></IntlWrapper>);
 
     await waitFor(() => {
       expect(screen.getByText("Variables:")).toBeInTheDocument();
@@ -104,7 +105,7 @@ describe("EmailTemplatesSection", () => {
   });
 
   it("shows discard button disabled when form is clean", async () => {
-    render(<EmailTemplatesSection />);
+    render(<IntlWrapper><EmailTemplatesSection /></IntlWrapper>);
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /descartar/i })).toBeDisabled();
@@ -112,7 +113,7 @@ describe("EmailTemplatesSection", () => {
   });
 
   it("shows save button disabled when form is clean", async () => {
-    render(<EmailTemplatesSection />);
+    render(<IntlWrapper><EmailTemplatesSection /></IntlWrapper>);
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /guardar plantilla/i })).toBeDisabled();

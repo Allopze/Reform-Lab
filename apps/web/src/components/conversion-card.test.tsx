@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, beforeEach, afterEach, expect, it, vi } from "vitest";
 import ConversionCard from "./conversion-card";
 import { getCategoryById } from "@/config/categories";
+import { IntlWrapper } from "@/test/intl-wrapper";
 import {
 	cancelJob,
 	createConversion,
@@ -185,7 +186,7 @@ describe("ConversionCard", () => {
 		});
 
 		const user = userEvent.setup();
-		render(<ConversionCard category={getCategoryById("auto")} />);
+		render(<IntlWrapper><ConversionCard category={getCategoryById("auto")} /></IntlWrapper>);
 
 		await uploadAndStartConversion(user);
 
@@ -195,7 +196,7 @@ describe("ConversionCard", () => {
 
 	it("shows the active guest upload limit from backend policy", async () => {
 		const user = userEvent.setup();
-		render(<ConversionCard category={getCategoryById("auto")} />);
+		render(<IntlWrapper><ConversionCard category={getCategoryById("auto")} /></IntlWrapper>);
 
 		expect(await screen.findByText("hasta 5 MB como invitado")).toBeInTheDocument();
 		expect(
@@ -223,7 +224,7 @@ describe("ConversionCard", () => {
 		downloadArtifactMock.mockResolvedValue(undefined);
 
 		const user = userEvent.setup();
-		render(<ConversionCard category={getCategoryById("auto")} />);
+		render(<IntlWrapper><ConversionCard category={getCategoryById("auto")} /></IntlWrapper>);
 
 		await uploadAndStartConversion(user);
 		expect(
@@ -255,7 +256,7 @@ describe("ConversionCard", () => {
 		});
 
 		const user = userEvent.setup();
-		render(<ConversionCard category={getCategoryById("auto")} />);
+		render(<IntlWrapper><ConversionCard category={getCategoryById("auto")} /></IntlWrapper>);
 
 		await uploadAndStartConversion(user);
 		expect(
@@ -285,7 +286,7 @@ describe("ConversionCard", () => {
 		downloadArtifactMock.mockRejectedValue(new Error("El ZIP ya expiró."));
 
 		const user = userEvent.setup();
-		render(<ConversionCard category={getCategoryById("auto")} />);
+		render(<IntlWrapper><ConversionCard category={getCategoryById("auto")} /></IntlWrapper>);
 
 		await uploadAndStartConversion(user);
 		await user.click(

@@ -4,6 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import AccessShell from "./access-shell";
+import { IntlWrapper } from "@/test/intl-wrapper";
 
 vi.mock("next/link", () => ({
   default: ({
@@ -56,7 +57,7 @@ describe("AccessShell", () => {
   });
 
   it("renders the favicon, chevron and auth card with correct styling", () => {
-    const { container } = render(<AccessShell />);
+    const { container } = render(<IntlWrapper><AccessShell /></IntlWrapper>);
 
     expect(screen.getByRole("link", { name: "" })).toHaveAttribute("href", "/");
     expect(screen.getByRole("img", { name: "Reform Lab" })).toHaveAttribute("src", "/favicon.svg");
@@ -66,7 +67,7 @@ describe("AccessShell", () => {
 
   it("keeps the same card shell while switching to register", async () => {
     const user = userEvent.setup();
-    const { container } = render(<AccessShell />);
+    const { container } = render(<IntlWrapper><AccessShell /></IntlWrapper>);
 
     const card = container.querySelector("section");
     expect(screen.getByRole("heading", { name: "Iniciar sesión" })).toBeInTheDocument();
@@ -83,7 +84,7 @@ describe("AccessShell", () => {
   it("opens the register mode directly when requested in the URL", () => {
     searchParamsValue = "mode=register";
 
-    render(<AccessShell />);
+    render(<IntlWrapper><AccessShell /></IntlWrapper>);
 
     expect(screen.getByRole("heading", { name: "Crear cuenta" })).toBeInTheDocument();
     expect(screen.getByLabelText("Nombre")).toBeInTheDocument();

@@ -53,6 +53,7 @@ func NewRouter(d Deps) *chi.Mux {
 	r.Use(middleware.SecurityHeaders)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Logging(d.Logger))
+	r.Use(middleware.MetricsMiddleware(d.Metrics))
 	r.Use(middleware.CORS(d.CORSOrigin))
 	r.Use(middleware.RateLimit(20, 40, d.TrustProxyHeaders))
 	r.Use(middleware.MaxBodySize(500 * 1024 * 1024)) // 500 MB global limit

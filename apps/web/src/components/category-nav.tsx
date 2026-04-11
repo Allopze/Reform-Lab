@@ -2,6 +2,7 @@
 
 import { categories } from "@/config/categories";
 import type { CategoryId } from "@/types";
+import { useTranslations } from "next-intl";
 import {
   Search,
   FileText,
@@ -33,6 +34,7 @@ export default function CategoryNav({
   activeCategory,
   onChange,
 }: CategoryNavProps) {
+  const tc = useTranslations("categories");
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
   const [pillStyle, setPillStyle] = useState<{ left: number; width: number } | null>(null);
@@ -86,7 +88,7 @@ export default function CategoryNav({
     <div
       ref={scrollRef}
       role="tablist"
-      aria-label="Categorías de conversión"
+      aria-label={tc("navAriaLabel")}
       onKeyDown={handleKeyDown}
       className="relative flex w-full min-w-0 items-center gap-1 overflow-x-auto rounded-full border border-stone-200 bg-white px-1.5 py-1.5 shadow-[0_10px_22px_-20px_rgba(15,23,42,0.18)] md:justify-between"
       style={{ scrollbarWidth: "none" }}
@@ -132,7 +134,7 @@ export default function CategoryNav({
               aria-hidden="true"
               className="shrink-0"
             />
-            {cat.label}
+            {tc(`${cat.id}.label`)}
           </button>
         );
       })}

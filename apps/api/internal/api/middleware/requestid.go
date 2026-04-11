@@ -5,6 +5,8 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type contextKey string
@@ -17,6 +19,9 @@ func RequestID(next http.Handler) http.Handler {
 		id := uuid.New().String()
 		w.Header().Set("X-Request-ID", id)
 		ctx := context.WithValue(r.Context(), requestIDKey, id)
+		if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+			span.SetAttributes(attribute.String("request.id", id))
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

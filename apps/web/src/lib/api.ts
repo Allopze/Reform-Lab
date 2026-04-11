@@ -5,6 +5,22 @@ function headers(): HeadersInit {
   return {};
 }
 
+const DEFAULT_TIMEOUT_MS = 15_000;
+const TRANSFER_TIMEOUT_MS = 300_000; // 5 min for file uploads/downloads
+
+function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init?: RequestInit & { timeoutMs?: number },
+): Promise<Response> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchInit } = init ?? {};
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+
+  return fetch(input, { ...fetchInit, signal: controller.signal }).finally(() =>
+    clearTimeout(id),
+  );
+}
+
 // ── Upload ──
 
 export interface UploadedFile {
@@ -28,7 +44,7 @@ export interface UploadPolicy {
 }
 
 export async function getUploadPolicy(): Promise<UploadPolicy> {
-  const res = await fetch(`${API_URL}/api/upload-policy`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/upload-policy`, {
     headers: headers(),
     credentials: "include",
   });
@@ -44,11 +60,12 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
   const form = new FormData();
   form.append("file", file);
 
-  const res = await fetch(`${API_URL}/api/files`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/files`, {
     method: "POST",
     headers: headers(),
     credentials: "include",
     body: form,
+    timeoutMs: TRANSFER_TIMEOUT_MS,
   });
 
   const data = await res.json();
@@ -67,7 +84,7 @@ export interface Capability {
 }
 
 export async function getCapabilities(fileId: string): Promise<Capability[]> {
-  const res = await fetch(`${API_URL}/api/files/${fileId}/capabilities`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/files/${fileId}/capabilities`, {
     headers: headers(),
     credentials: "include",
   });
@@ -98,7 +115,7 @@ export interface Job {
 }
 
 export async function createConversion(fileId: string, capabilityId: string): Promise<Job> {
-  const res = await fetch(`${API_URL}/api/conversions`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/conversions`, {
     method: "POST",
     headers: { ...headers(), "Content-Type": "application/json" },
     credentials: "include",
@@ -111,7 +128,7 @@ export async function createConversion(fileId: string, capabilityId: string): Pr
 }
 
 export async function getJob(jobId: string): Promise<Job> {
-  const res = await fetch(`${API_URL}/api/jobs/${jobId}`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/jobs/${jobId}`, {
     headers: headers(),
     credentials: "include",
   });
@@ -192,7 +209,7 @@ export interface AdminDashboardData {
 }
 
 export async function getMyDashboard(): Promise<UserDashboardData> {
-  const res = await fetch(`${API_URL}/api/dashboard/me`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/dashboard/me`, {
     headers: headers(),
     credentials: "include",
   });
@@ -203,7 +220,7 @@ export async function getMyDashboard(): Promise<UserDashboardData> {
 }
 
 export async function getAdminOverview(): Promise<AdminDashboardData> {
-  const res = await fetch(`${API_URL}/api/admin/overview`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/overview`, {
     headers: headers(),
     credentials: "include",
   });
@@ -229,9 +246,10 @@ export async function downloadArtifact(
   artifactId: string,
   fallbackName?: string
 ): Promise<void> {
-  const res = await fetch(artifactDownloadUrl(artifactId), {
+  const res = await fetchWithTimeout(artifactDownloadUrl(artifactId), {
     headers: headers(),
     credentials: "include",
+    timeoutMs: TRANSFER_TIMEOUT_MS,
   });
 
   if (!res.ok) {
@@ -262,7 +280,7 @@ export async function downloadArtifact(
 // ── Job management ──
 
 export async function cancelJob(jobId: string): Promise<void> {
-  const res = await fetch(`${API_URL}/api/jobs/${jobId}/cancel`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/jobs/${jobId}/cancel`, {
     method: "POST",
     headers: headers(),
     credentials: "include",
@@ -274,7 +292,7 @@ export async function cancelJob(jobId: string): Promise<void> {
 }
 
 export async function retryJob(jobId: string): Promise<Job> {
-  const res = await fetch(`${API_URL}/api/jobs/${jobId}/retry`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/jobs/${jobId}/retry`, {
     method: "POST",
     headers: headers(),
     credentials: "include",
@@ -301,7 +319,7 @@ export interface HealthInfo {
 }
 
 export async function getHealthInfo(): Promise<HealthInfo> {
-  const res = await fetch(`${API_URL}/api/admin/health`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/health`, {
     credentials: "include",
   });
   const data = await res.json();
@@ -316,7 +334,7 @@ function normalizeFooterMessage(message: unknown): string {
 }
 
 export async function getFooterMessage(): Promise<string> {
-  const res = await fetch(`${API_URL}/api/footer-message`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/footer-message`, {
     headers: headers(),
     credentials: "include",
   });
@@ -326,7 +344,7 @@ export async function getFooterMessage(): Promise<string> {
 }
 
 export async function updateFooterMessage(message: string): Promise<string> {
-  const res = await fetch(`${API_URL}/api/admin/footer-message`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/footer-message`, {
     method: "PUT",
     headers: { ...headers(), "Content-Type": "application/json" },
     credentials: "include",
@@ -343,7 +361,7 @@ export async function updateUploadPolicy(payload: {
   guestMaxBytes: number;
   registeredMaxBytes: number;
 }): Promise<UploadPolicy> {
-  const res = await fetch(`${API_URL}/api/admin/upload-policy`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/upload-policy`, {
     method: "PUT",
     headers: { ...headers(), "Content-Type": "application/json" },
     credentials: "include",
@@ -369,7 +387,7 @@ export interface SMTPSettings {
 }
 
 export async function getSMTPSettings(): Promise<SMTPSettings> {
-  const res = await fetch(`${API_URL}/api/admin/smtp-settings`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/smtp-settings`, {
     headers: headers(),
     credentials: "include",
   });
@@ -386,7 +404,7 @@ export async function updateSMTPSettings(settings: {
   from: string;
   use_tls: boolean;
 }): Promise<void> {
-  const res = await fetch(`${API_URL}/api/admin/smtp-settings`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/smtp-settings`, {
     method: "PUT",
     headers: { ...headers(), "Content-Type": "application/json" },
     credentials: "include",
@@ -397,7 +415,7 @@ export async function updateSMTPSettings(settings: {
 }
 
 export async function testSMTPConnection(): Promise<{ success: boolean; message: string }> {
-  const res = await fetch(`${API_URL}/api/admin/smtp-test`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/smtp-test`, {
     method: "POST",
     headers: headers(),
     credentials: "include",
@@ -417,7 +435,7 @@ export interface EmailTemplate {
 }
 
 export async function getEmailTemplates(): Promise<EmailTemplate[]> {
-  const res = await fetch(`${API_URL}/api/admin/email-templates`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/email-templates`, {
     headers: headers(),
     credentials: "include",
   });
@@ -427,7 +445,7 @@ export async function getEmailTemplates(): Promise<EmailTemplate[]> {
 }
 
 export async function getEmailTemplate(key: string): Promise<EmailTemplate> {
-  const res = await fetch(`${API_URL}/api/admin/email-templates/${key}`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/email-templates/${key}`, {
     headers: headers(),
     credentials: "include",
   });
@@ -440,7 +458,7 @@ export async function updateEmailTemplate(
   key: string,
   payload: { subject: string; body_html: string }
 ): Promise<EmailTemplate> {
-  const res = await fetch(`${API_URL}/api/admin/email-templates/${key}`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/email-templates/${key}`, {
     method: "PUT",
     headers: { ...headers(), "Content-Type": "application/json" },
     credentials: "include",
@@ -455,7 +473,7 @@ export async function previewEmailTemplate(
   key: string,
   draft?: { subject: string; body_html: string }
 ): Promise<{ subject: string; html: string }> {
-  const res = await fetch(`${API_URL}/api/admin/email-templates/${key}/preview`, {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/email-templates/${key}/preview`, {
     method: "POST",
     headers: { ...headers(), "Content-Type": "application/json" },
     credentials: "include",

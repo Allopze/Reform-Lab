@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Header from "./header";
 import { ThemeProvider } from "@/lib/theme-context";
+import { IntlWrapper } from "@/test/intl-wrapper";
 
 const authState: {
   user: { name: string; role: "admin" | "user" } | null;
@@ -72,9 +73,11 @@ describe("Header", () => {
     const user = userEvent.setup();
 
     render(
-      <ThemeProvider>
-        <Header />
-      </ThemeProvider>
+      <IntlWrapper>
+        <ThemeProvider>
+          <Header />
+        </ThemeProvider>
+      </IntlWrapper>
     );
 
     await waitFor(() => {
@@ -99,9 +102,11 @@ describe("Header", () => {
     window.localStorage.setItem("reform-lab-theme", "dark");
 
     render(
-      <ThemeProvider>
-        <Header />
-      </ThemeProvider>
+      <IntlWrapper>
+        <ThemeProvider>
+          <Header />
+        </ThemeProvider>
+      </IntlWrapper>
     );
 
     await waitFor(() => {
@@ -117,9 +122,11 @@ describe("Header", () => {
     const user = userEvent.setup();
 
     render(
-      <ThemeProvider>
-        <Header />
-      </ThemeProvider>
+      <IntlWrapper>
+        <ThemeProvider>
+          <Header />
+        </ThemeProvider>
+      </IntlWrapper>
     );
 
     await user.click(screen.getByLabelText("Abrir menu de usuario"));
@@ -135,9 +142,11 @@ describe("Header", () => {
     const user = userEvent.setup();
 
     render(
-      <ThemeProvider>
-        <Header />
-      </ThemeProvider>
+      <IntlWrapper>
+        <ThemeProvider>
+          <Header />
+        </ThemeProvider>
+      </IntlWrapper>
     );
 
     await waitFor(() => {

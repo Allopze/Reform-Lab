@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SMTPSettingsSection from "./smtp-settings";
+import { IntlWrapper } from "@/test/intl-wrapper";
 
 import * as api from "@/lib/api";
 vi.mock("@/lib/api");
@@ -23,7 +24,7 @@ describe("SMTPSettingsSection", () => {
     vi.mocked(api.testSMTPConnection).mockResolvedValue({ success: true, message: "OK" });
   });
   it("renders the form with loaded settings", async () => {
-    render(<SMTPSettingsSection />);
+    render(<IntlWrapper><SMTPSettingsSection /></IntlWrapper>);
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("mail.example.com")).toBeInTheDocument();
@@ -35,7 +36,7 @@ describe("SMTPSettingsSection", () => {
   });
 
   it("shows source badge", async () => {
-    render(<SMTPSettingsSection />);
+    render(<IntlWrapper><SMTPSettingsSection /></IntlWrapper>);
 
     await waitFor(() => {
       expect(screen.getByText(/personalizados por admin/i)).toBeInTheDocument();
@@ -43,7 +44,7 @@ describe("SMTPSettingsSection", () => {
   });
 
   it("disables save when form is clean", async () => {
-    render(<SMTPSettingsSection />);
+    render(<IntlWrapper><SMTPSettingsSection /></IntlWrapper>);
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("mail.example.com")).toBeInTheDocument();
@@ -55,7 +56,7 @@ describe("SMTPSettingsSection", () => {
 
   it("enables save when form is dirty", async () => {
     const user = userEvent.setup();
-    render(<SMTPSettingsSection />);
+    render(<IntlWrapper><SMTPSettingsSection /></IntlWrapper>);
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("mail.example.com")).toBeInTheDocument();
@@ -71,7 +72,7 @@ describe("SMTPSettingsSection", () => {
 
   it("calls testSMTPConnection when test button is clicked", async () => {
     const user = userEvent.setup();
-    render(<SMTPSettingsSection />);
+    render(<IntlWrapper><SMTPSettingsSection /></IntlWrapper>);
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("mail.example.com")).toBeInTheDocument();

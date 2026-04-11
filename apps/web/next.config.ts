@@ -1,7 +1,10 @@
 import path from "node:path";
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs";
+import createNextIntlPlugin from "next-intl/plugin";
 
 const isDev = process.env.NODE_ENV === "development";
+const hasSentry = !!process.env.NEXT_PUBLIC_SENTRY_DSN;
 const connectSrc = ["'self'"];
 
 if (process.env.NEXT_PUBLIC_API_URL) {
@@ -14,6 +17,10 @@ if (process.env.NEXT_PUBLIC_API_URL) {
 
 if (isDev) {
 	connectSrc.push("http:", "ws:");
+}
+
+if (hasSentry) {
+	connectSrc.push("https://*.ingest.sentry.io");
 }
 
 const cspHeader = `
@@ -59,4 +66,12 @@ const nextConfig: NextConfig = {
 	},
 };
 
-export default nextConfig;
+const withNextIntl = createNextIntlPlugin();
+
+export default hasSentry
+	? withSentryConfig(withNextIntl(nextConfig), {
+			org: process.env.SENTRY_ORG,
+			project: process.env.SENTRY_PROJECT,
+			silent: !process.env.CI,
+		})
+	: withNextIntl(nextConfig);

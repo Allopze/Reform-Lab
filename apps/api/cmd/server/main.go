@@ -27,6 +27,7 @@ import (
 	workerImage "github.com/allopze/reform-lab/apps/api/internal/workers/image"
 	"github.com/allopze/reform-lab/apps/api/internal/workers/pdf"
 	"github.com/allopze/reform-lab/apps/api/internal/workers/video"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 func main() {
@@ -38,6 +39,13 @@ func main() {
 
 	logger := observability.NewLogger(cfg.LogLevel)
 	metrics := observability.NewMetrics()
+
+	shutdownTracer, err := observability.InitTracer(context.Background(), "reform-api", "1.0.0")
+	if err != nil {
+		logger.Fatal().Err(err).Msg("init tracer")
+	}
+	defer shutdownTracer(context.Background())
+
 	capabilities.ConfigureFeatureFlags(cfg.DisabledCapabilities, cfg.DisabledEngines)
 	flags := capabilities.DefaultFlags.Snapshot()
 	if len(flags.DisabledCapabilities) > 0 || len(flags.DisabledEngines) > 0 {
@@ -186,7 +194,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
-		Handler:      router,
+		Handler:      otelhttp.NewHandler(router, "reform-api"),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  60 * time.Second,

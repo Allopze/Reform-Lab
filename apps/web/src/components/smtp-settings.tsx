@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   getSMTPSettings,
   updateSMTPSettings,
@@ -9,6 +10,8 @@ import {
 } from "@/lib/api";
 
 export default function SMTPSettingsSection() {
+  const t = useTranslations("smtpSettings");
+  const tCommon = useTranslations("common");
   const [settings, setSettings] = useState<SMTPSettings | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -36,10 +39,10 @@ export default function SMTPSettingsSection() {
         setUseTLS(data.use_tls);
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : "No se pudo cargar la configuracion SMTP.");
+        setError(err instanceof Error ? err.message : t("loadError"));
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [t]);
 
   const dirty =
     settings !== null &&
@@ -72,9 +75,9 @@ export default function SMTPSettingsSection() {
       setPassword(updated.password);
       setFrom(updated.from);
       setUseTLS(updated.use_tls);
-      setStatus("Configuracion SMTP guardada.");
+      setStatus(t("saved"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo guardar la configuracion.");
+      setError(err instanceof Error ? err.message : t("saveError"));
     } finally {
       setSaving(false);
     }
@@ -93,7 +96,7 @@ export default function SMTPSettingsSection() {
         setError(result.message);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo enviar el correo de prueba.");
+      setError(err instanceof Error ? err.message : t("testError"));
     } finally {
       setTesting(false);
     }
@@ -102,7 +105,7 @@ export default function SMTPSettingsSection() {
   if (loading) {
     return (
       <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
-        <p className="text-sm text-stone-500">Cargando configuracion SMTP...</p>
+        <p className="text-sm text-stone-500">{t("loading")}</p>
       </section>
     );
   }
@@ -111,12 +114,12 @@ export default function SMTPSettingsSection() {
     <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold text-stone-900">Correo SMTP</h2>
+          <h2 className="text-base font-semibold text-stone-900">{t("title")}</h2>
           <p className="mt-1 text-sm text-stone-500">
-            Configura el servidor de correo saliente.
-            {settings?.source === "env" && " Valores base cargados desde .env."}
-            {settings?.source === "admin" && " Valores personalizados por admin."}
-            {settings?.source === "none" && " Sin configurar — los correos no se enviaran."}
+            {t("description")}
+            {settings?.source === "env" && ` ${t("sourceEnv")}`}
+            {settings?.source === "admin" && ` ${t("sourceAdmin")}`}
+            {settings?.source === "none" && ` ${t("sourceNone")}`}
           </p>
         </div>
       </div>
@@ -124,17 +127,17 @@ export default function SMTPSettingsSection() {
       <div className="mt-4 space-y-3">
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block">
-            <span className="mb-1.5 block text-[13px] font-medium text-stone-600">Host</span>
+            <span className="mb-1.5 block text-[13px] font-medium text-stone-600">{t("hostLabel")}</span>
             <input
               type="text"
               value={host}
               onChange={(e) => { setHost(e.target.value); setError(null); setStatus(null); }}
-              placeholder="smtp.ejemplo.com"
+              placeholder={t("hostPlaceholder")}
               className="h-10 w-full rounded-lg border border-stone-200 bg-stone-50/60 px-3 text-sm text-stone-900 transition-colors focus:border-coral-400 focus:bg-white"
             />
           </label>
           <label className="block">
-            <span className="mb-1.5 block text-[13px] font-medium text-stone-600">Puerto</span>
+            <span className="mb-1.5 block text-[13px] font-medium text-stone-600">{t("portLabel")}</span>
             <input
               type="number"
               value={port}
@@ -148,18 +151,18 @@ export default function SMTPSettingsSection() {
 
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block">
-            <span className="mb-1.5 block text-[13px] font-medium text-stone-600">Usuario</span>
+            <span className="mb-1.5 block text-[13px] font-medium text-stone-600">{t("userLabel")}</span>
             <input
               type="text"
               value={user}
               onChange={(e) => { setUser(e.target.value); setError(null); setStatus(null); }}
-              placeholder="usuario@ejemplo.com"
+              placeholder={t("userPlaceholder")}
               autoComplete="off"
               className="h-10 w-full rounded-lg border border-stone-200 bg-stone-50/60 px-3 text-sm text-stone-900 transition-colors focus:border-coral-400 focus:bg-white"
             />
           </label>
           <label className="block">
-            <span className="mb-1.5 block text-[13px] font-medium text-stone-600">Contraseña</span>
+            <span className="mb-1.5 block text-[13px] font-medium text-stone-600">{t("passwordLabel")}</span>
             <input
               type="password"
               value={password}
@@ -172,12 +175,12 @@ export default function SMTPSettingsSection() {
         </div>
 
         <label className="block">
-          <span className="mb-1.5 block text-[13px] font-medium text-stone-600">Remitente (From)</span>
+          <span className="mb-1.5 block text-[13px] font-medium text-stone-600">{t("fromLabel")}</span>
           <input
             type="email"
             value={from}
             onChange={(e) => { setFrom(e.target.value); setError(null); setStatus(null); }}
-            placeholder="noreply@ejemplo.com"
+            placeholder={t("fromPlaceholder")}
             className="h-10 w-full rounded-lg border border-stone-200 bg-stone-50/60 px-3 text-sm text-stone-900 transition-colors focus:border-coral-400 focus:bg-white"
           />
         </label>
@@ -189,7 +192,7 @@ export default function SMTPSettingsSection() {
             onChange={(e) => { setUseTLS(e.target.checked); setError(null); setStatus(null); }}
             className="h-4 w-4 rounded border-stone-300 text-coral-500 focus:ring-coral-400"
           />
-          <span className="text-sm text-stone-700">Usar TLS</span>
+          <span className="text-sm text-stone-700">{t("useTLS")}</span>
         </label>
       </div>
 
@@ -200,7 +203,7 @@ export default function SMTPSettingsSection() {
           disabled={saving || !dirty}
           className="inline-flex h-10 items-center rounded-lg bg-coral-500 px-4 text-sm font-medium text-white transition-colors hover:bg-coral-600 disabled:cursor-not-allowed disabled:bg-coral-200"
         >
-          {saving ? "Guardando..." : "Guardar SMTP"}
+          {saving ? tCommon("saving") : t("saveSMTP")}
         </button>
         <button
           type="button"
@@ -208,7 +211,7 @@ export default function SMTPSettingsSection() {
           disabled={testing || !host}
           className="inline-flex h-10 items-center rounded-lg border border-stone-200 bg-white px-4 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:text-stone-400"
         >
-          {testing ? "Enviando..." : "Enviar correo de prueba"}
+          {testing ? t("testing") : t("testEmail")}
         </button>
       </div>
 

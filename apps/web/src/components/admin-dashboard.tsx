@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import {
   getAdminOverview,
   getFooterMessage,
@@ -21,16 +22,16 @@ import EmailTemplatesSection from "@/components/email-templates";
 
 const BYTES_PER_MB = 1024 * 1024;
 
-const auditFilters = [
-  { value: "all", label: "Todos" },
-  { value: "upload", label: "Uploads" },
-  { value: "job_created", label: "Jobs creados" },
-  { value: "job_started", label: "Jobs iniciados" },
-  { value: "job_completed", label: "Jobs completados" },
-  { value: "job_failed", label: "Jobs fallidos" },
-  { value: "job_cancelled", label: "Jobs cancelados" },
-  { value: "job_retried", label: "Jobs reintentados" },
-  { value: "artifact_created", label: "Artefactos" },
+const auditFilterKeys = [
+  "all",
+  "upload",
+  "job_created",
+  "job_started",
+  "job_completed",
+  "job_failed",
+  "job_cancelled",
+  "job_retried",
+  "artifact_created",
 ] as const;
 
 function formatDate(value: string): string {
@@ -40,8 +41,8 @@ function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
-function formatSeconds(value: number): string {
-  if (value <= 0) return "Sin datos";
+function formatSeconds(value: number, noDataLabel: string): string {
+  if (value <= 0) return noDataLabel;
   if (value < 60) return `${value.toFixed(1)} s`;
   return `${(value / 60).toFixed(1)} min`;
 }
@@ -63,60 +64,40 @@ function parseLimitDraft(value: string): number | null {
   return parsed;
 }
 
-function auditLabel(eventType: string): string {
-  switch (eventType) {
-    case "upload":
-      return "Archivo subido";
-    case "job_created":
-      return "Job creado";
-    case "job_started":
-      return "Job iniciado";
-    case "job_completed":
-      return "Job completado";
-    case "job_failed":
-      return "Job fallido";
-    case "job_cancelled":
-      return "Job cancelado";
-    case "job_retried":
-      return "Job reintentado";
-    case "artifact_created":
-      return "Artefacto creado";
-    default:
-      return eventType;
-  }
-}
-
-function auditDetails(event: NonNullable<AdminDashboardData>["recentAudit"][number]): string {
-  const details = event.details ?? {};
-  if (event.eventType === "artifact_created") {
-    const fileName = typeof details.fileName === "string" ? details.fileName : null;
-    return fileName ? `Salida ${fileName}` : "Artefacto persistido";
-  }
-  if (event.eventType === "job_failed") {
-    const error = typeof details.error === "string" ? details.error : null;
-    return error || "Fallo registrado";
-  }
-  if (event.eventType === "job_created") {
-    const capability = typeof details.capabilityId === "string" ? details.capabilityId : null;
-    return capability ? `Capability ${capability}` : "Solicitud registrada";
-  }
-  if (event.eventType === "job_retried") {
-    const sourceJobId = typeof details.sourceJobId === "string" ? details.sourceJobId : null;
-    return sourceJobId ? `Reintento desde ${sourceJobId.slice(0, 8)}` : "Reintento registrado";
-  }
-  if (event.eventType === "upload") {
-    const originalName = typeof details.originalName === "string" ? details.originalName : null;
-    return originalName || "Upload registrado";
-  }
-  return "Evento registrado";
-}
-
 export default function AdminDashboard() {
   const router = useRouter();
   const { user, loading } = useAuth();
+  const t = useTranslations("adminDashboard");
+  const tCommon = useTranslations("common");
+
+  function auditDetails(event: NonNullable<AdminDashboardData>["recentAudit"][number]): string {
+    const details = event.details ?? {};
+    if (event.eventType === "artifact_created") {
+      const fileName = typeof details.fileName === "string" ? details.fileName : null;
+      return fileName ? t("auditDetail.output", { fileName }) : t("auditDetail.artifactPersisted");
+    }
+    if (event.eventType === "job_failed") {
+      const error = typeof details.error === "string" ? details.error : null;
+      return error || t("auditDetail.failureRecorded");
+    }
+    if (event.eventType === "job_created") {
+      const capability = typeof details.capabilityId === "string" ? details.capabilityId : null;
+      return capability ? t("auditDetail.capability", { id: capability }) : t("auditDetail.requestRecorded");
+    }
+    if (event.eventType === "job_retried") {
+      const sourceJobId = typeof details.sourceJobId === "string" ? details.sourceJobId : null;
+      return sourceJobId ? t("auditDetail.retryFrom", { jobId: sourceJobId.slice(0, 8) }) : t("auditDetail.retryRecorded");
+    }
+    if (event.eventType === "upload") {
+      const originalName = typeof details.originalName === "string" ? details.originalName : null;
+      return originalName || t("auditDetail.uploadRecorded");
+    }
+    return t("auditDetail.eventRecorded");
+  }
+
   const [data, setData] = useState<AdminDashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [auditFilter, setAuditFilter] = useState<(typeof auditFilters)[number]["value"]>("all");
+  const [auditFilter, setAuditFilter] = useState<(typeof auditFilterKeys)[number]>("all");
   const [footerMessage, setFooterMessage] = useState(DEFAULT_FOOTER_MESSAGE);
   const [footerDraft, setFooterDraft] = useState(DEFAULT_FOOTER_MESSAGE);
   const [footerError, setFooterError] = useState<string | null>(null);
@@ -143,7 +124,7 @@ export default function AdminDashboard() {
     getAdminOverview()
       .then(setData)
       .catch((err) => {
-        setError(err instanceof Error ? err.message : "No se pudo cargar el panel admin.");
+        setError(err instanceof Error ? err.message : t("loadError"));
       });
 
     getFooterMessage()
@@ -152,7 +133,7 @@ export default function AdminDashboard() {
         setFooterDraft(message);
       })
       .catch((err) => {
-        setFooterError(err instanceof Error ? err.message : "No se pudo cargar el footer actual.");
+        setFooterError(err instanceof Error ? err.message : t("footerLoadError"));
       });
 
     getUploadPolicy()
@@ -162,12 +143,12 @@ export default function AdminDashboard() {
         setRegisteredLimitDraft(String(bytesToMegabytes(policy.registeredMaxBytes)));
       })
       .catch((err) => {
-        setUploadPolicyError(err instanceof Error ? err.message : "No se pudo cargar la politica de uploads.");
+        setUploadPolicyError(err instanceof Error ? err.message : t("policyLoadError"));
       });
-  }, [loading, router, user]);
+  }, [loading, router, user, t]);
 
   if (loading || (!data && !error)) {
-    return <p className="text-sm text-stone-500">Cargando panel admin...</p>;
+    return <p className="text-sm text-stone-500">{t("loading")}</p>;
   }
 
   if (error) {
@@ -193,7 +174,7 @@ export default function AdminDashboard() {
 
   async function handleFooterSave() {
     if (!normalizedFooterDraft) {
-      setFooterError("El mensaje del footer no puede quedar vacio.");
+      setFooterError(t("footerEmpty"));
       setFooterStatus(null);
       return;
     }
@@ -207,9 +188,9 @@ export default function AdminDashboard() {
       setFooterMessage(savedMessage);
       setFooterDraft(savedMessage);
       emitFooterMessageUpdated(savedMessage);
-      setFooterStatus("Mensaje del footer actualizado.");
+      setFooterStatus(t("footerUpdated"));
     } catch (err) {
-      setFooterError(err instanceof Error ? err.message : "No se pudo guardar el footer.");
+      setFooterError(err instanceof Error ? err.message : t("footerSaveError"));
     } finally {
       setFooterSaving(false);
     }
@@ -217,7 +198,7 @@ export default function AdminDashboard() {
 
   async function handleUploadPolicySave() {
     if (guestLimitMb === null || registeredLimitMb === null) {
-      setUploadPolicyError("Los limites deben ser numeros enteros entre 1 MB y 500 MB.");
+      setUploadPolicyError(t("limitsValidation"));
       setUploadPolicyStatus(null);
       return;
     }
@@ -234,9 +215,9 @@ export default function AdminDashboard() {
       setUploadPolicy(savedPolicy);
       setGuestLimitDraft(String(bytesToMegabytes(savedPolicy.guestMaxBytes)));
       setRegisteredLimitDraft(String(bytesToMegabytes(savedPolicy.registeredMaxBytes)));
-      setUploadPolicyStatus("Politica de uploads actualizada.");
+      setUploadPolicyStatus(t("policyUpdated"));
     } catch (err) {
-      setUploadPolicyError(err instanceof Error ? err.message : "No se pudo guardar la politica de uploads.");
+      setUploadPolicyError(err instanceof Error ? err.message : t("policySaveError"));
     } finally {
       setUploadPolicySaving(false);
     }
@@ -247,25 +228,25 @@ export default function AdminDashboard() {
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
         <section className="overflow-hidden rounded-xl border border-stone-200 bg-white">
           <div className="border-b border-stone-200 px-5 py-4">
-            <h2 className="text-base font-semibold text-stone-900">Jobs recientes</h2>
-            <p className="mt-1 text-sm text-stone-500">Ultima actividad operativa visible para administracion.</p>
+            <h2 className="text-base font-semibold text-stone-900">{t("recentJobs")}</h2>
+            <p className="mt-1 text-sm text-stone-500">{t("recentJobsDescription")}</p>
           </div>
           <table className="w-full border-collapse text-left">
             <thead className="bg-stone-50 text-xs font-medium text-stone-500">
               <tr>
-                <th className="px-5 py-3">Job</th>
-                <th className="px-5 py-3">Archivo</th>
-                <th className="px-5 py-3">Usuario</th>
-                <th className="px-5 py-3">Salida</th>
-                <th className="px-5 py-3">Estado</th>
-                <th className="px-5 py-3">Actualizado</th>
+                <th className="px-5 py-3">{t("jobHeader")}</th>
+                <th className="px-5 py-3">{t("fileHeader")}</th>
+                <th className="px-5 py-3">{t("userHeader")}</th>
+                <th className="px-5 py-3">{t("outputHeader")}</th>
+                <th className="px-5 py-3">{t("statusHeader")}</th>
+                <th className="px-5 py-3">{t("updatedHeader")}</th>
               </tr>
             </thead>
             <tbody>
               {data.recentJobs.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-5 py-8 text-sm text-stone-500">
-                    No hay jobs registrados todavia.
+                    {t("emptyJobs")}
                   </td>
                 </tr>
               ) : (
@@ -289,14 +270,14 @@ export default function AdminDashboard() {
 
         <aside className="space-y-4">
           <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
-            <h2 className="text-base font-semibold text-stone-900">Limite de archivo</h2>
+            <h2 className="text-base font-semibold text-stone-900">{t("fileLimitTitle")}</h2>
             <p className="mt-1 text-sm text-stone-500">
-              Ajusta el maximo por archivo para invitados y usuarios registrados. El tope tecnico global sigue siendo 500 MB.
+              {t("fileLimitDescription")}
             </p>
 
             <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
               <label className="block">
-                <span className="mb-1.5 block text-[13px] font-medium text-stone-600">Invitados</span>
+                <span className="mb-1.5 block text-[13px] font-medium text-stone-600">{t("guestsLabel")}</span>
                 <div className="relative">
                   <input
                     type="number"
@@ -311,7 +292,7 @@ export default function AdminDashboard() {
                       if (uploadPolicyStatus) setUploadPolicyStatus(null);
                     }}
                     className="h-11 w-full rounded-xl border border-stone-200 bg-stone-50/60 px-3.5 pr-12 text-sm text-stone-900 transition-colors duration-150 focus:border-coral-400 focus:bg-white"
-                    aria-label="Limite para invitados en MB"
+                    aria-label={t("guestLimitAria")}
                   />
                   <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs font-medium text-stone-400">
                     MB
@@ -320,7 +301,7 @@ export default function AdminDashboard() {
               </label>
 
               <label className="block">
-                <span className="mb-1.5 block text-[13px] font-medium text-stone-600">Registrados</span>
+                <span className="mb-1.5 block text-[13px] font-medium text-stone-600">{t("registeredLabel")}</span>
                 <div className="relative">
                   <input
                     type="number"
@@ -335,7 +316,7 @@ export default function AdminDashboard() {
                       if (uploadPolicyStatus) setUploadPolicyStatus(null);
                     }}
                     className="h-11 w-full rounded-xl border border-stone-200 bg-stone-50/60 px-3.5 pr-12 text-sm text-stone-900 transition-colors duration-150 focus:border-coral-400 focus:bg-white"
-                    aria-label="Limite para registrados en MB"
+                    aria-label={t("registeredLimitAria")}
                   />
                   <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs font-medium text-stone-400">
                     MB
@@ -347,8 +328,8 @@ export default function AdminDashboard() {
             <div className="mt-3 flex items-center justify-between gap-3">
               <p className="text-xs text-stone-500">
                 {uploadPolicy
-                  ? `Actual: invitados ${formatMegabytes(uploadPolicy.guestMaxBytes)} · registrados ${formatMegabytes(uploadPolicy.registeredMaxBytes)}`
-                  : "Cargando politica actual..."}
+                  ? t("currentLimits", { guestLimit: formatMegabytes(uploadPolicy.guestMaxBytes), registeredLimit: formatMegabytes(uploadPolicy.registeredMaxBytes) })
+                  : t("loadingPolicy")}
               </p>
               <button
                 type="button"
@@ -356,7 +337,7 @@ export default function AdminDashboard() {
                 disabled={uploadPolicySaving || !uploadPolicyDirty}
                 className="inline-flex h-10 items-center rounded-lg bg-coral-500 px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-coral-600 disabled:cursor-not-allowed disabled:bg-coral-200"
               >
-                {uploadPolicySaving ? "Guardando..." : "Guardar limites"}
+                {uploadPolicySaving ? tCommon("saving") : t("saveLimits")}
               </button>
             </div>
 
@@ -374,13 +355,13 @@ export default function AdminDashboard() {
           </section>
 
           <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
-            <h2 className="text-base font-semibold text-stone-900">Footer publico</h2>
+            <h2 className="text-base font-semibold text-stone-900">{t("footerTitle")}</h2>
             <p className="mt-1 text-sm text-stone-500">
-              Edita el mensaje visible al pie de todas las pantallas publicas y privadas.
+              {t("footerDescription")}
             </p>
 
             <label className="mt-4 block">
-              <span className="mb-1.5 block text-[13px] font-medium text-stone-600">Mensaje actual</span>
+              <span className="mb-1.5 block text-[13px] font-medium text-stone-600">{t("currentMessage")}</span>
               <textarea
                 value={footerDraft}
                 onChange={(event) => {
@@ -391,7 +372,7 @@ export default function AdminDashboard() {
                 rows={3}
                 maxLength={240}
                 className="min-h-24 w-full rounded-xl border border-stone-200 bg-stone-50/60 px-3.5 py-3 text-sm text-stone-900 placeholder:text-stone-400 transition-colors duration-150 focus:border-coral-400 focus:bg-white"
-                placeholder="Escribe el mensaje del footer"
+                placeholder={t("footerPlaceholder")}
               />
             </label>
 
@@ -403,7 +384,7 @@ export default function AdminDashboard() {
                 disabled={footerSaving || !footerDirty || !normalizedFooterDraft}
                 className="inline-flex h-10 items-center rounded-lg bg-coral-500 px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-coral-600 disabled:cursor-not-allowed disabled:bg-coral-200"
               >
-                {footerSaving ? "Guardando..." : "Guardar footer"}
+                {footerSaving ? tCommon("saving") : t("saveFooter")}
               </button>
             </div>
 
@@ -423,32 +404,32 @@ export default function AdminDashboard() {
           <SMTPSettingsSection />
 
           <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
-            <h2 className="text-base font-semibold text-stone-900">Resumen operativo</h2>
+            <h2 className="text-base font-semibold text-stone-900">{t("summaryTitle")}</h2>
             <div className="mt-4 space-y-3 text-sm text-stone-600">
-              <p>Usuarios: {data.totalUsers}</p>
-              <p>Archivos: {data.totalFiles}</p>
-              <p>Jobs: {data.totalJobs}</p>
-              <p>En cola: {data.queuedJobs}</p>
-              <p>En ejecucion: {data.runningJobs}</p>
-              <p>Exitosos: {data.succeededJobs}</p>
-              <p>Fallidos: {data.failedJobs}</p>
-              <p>Cancelados: {data.cancelledJobs}</p>
+              <p>{t("totalUsers", { count: data.totalUsers })}</p>
+              <p>{t("totalFiles", { count: data.totalFiles })}</p>
+              <p>{t("totalJobs", { count: data.totalJobs })}</p>
+              <p>{t("queuedJobs", { count: data.queuedJobs })}</p>
+              <p>{t("runningJobs", { count: data.runningJobs })}</p>
+              <p>{t("succeededJobs", { count: data.succeededJobs })}</p>
+              <p>{t("failedJobs", { count: data.failedJobs })}</p>
+              <p>{t("cancelledJobs", { count: data.cancelledJobs })}</p>
             </div>
           </section>
 
           <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
-            <h2 className="text-base font-semibold text-stone-900">Indicadores</h2>
+            <h2 className="text-base font-semibold text-stone-900">{t("indicatorsTitle")}</h2>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
               <div className="rounded-lg border border-stone-200 bg-stone-50 px-4 py-3">
-                <p className="text-xs uppercase tracking-[0.12em] text-stone-500">Tasa de exito</p>
+                <p className="text-xs uppercase tracking-[0.12em] text-stone-500">{t("successRate")}</p>
                 <p className="mt-2 text-2xl font-semibold text-stone-900">{data.successRatePct.toFixed(1)}%</p>
               </div>
               <div className="rounded-lg border border-stone-200 bg-stone-50 px-4 py-3">
-                <p className="text-xs uppercase tracking-[0.12em] text-stone-500">Duracion media</p>
-                <p className="mt-2 text-2xl font-semibold text-stone-900">{formatSeconds(data.averageDurationSec)}</p>
+                <p className="text-xs uppercase tracking-[0.12em] text-stone-500">{t("avgDuration")}</p>
+                <p className="mt-2 text-2xl font-semibold text-stone-900">{formatSeconds(data.averageDurationSec, t("noData"))}</p>
               </div>
               <div className="rounded-lg border border-stone-200 bg-stone-50 px-4 py-3">
-                <p className="text-xs uppercase tracking-[0.12em] text-stone-500">Engines disponibles</p>
+                <p className="text-xs uppercase tracking-[0.12em] text-stone-500">{t("availableEngines")}</p>
                 <p className="mt-2 text-2xl font-semibold text-stone-900">
                   {data.availableEngines}/{data.totalEngines}
                 </p>
@@ -457,21 +438,21 @@ export default function AdminDashboard() {
 
             {data.unavailableEngines.length > 0 && (
               <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                Engines faltantes: {data.unavailableEngines.join(", ")}
+                {t("missingEngines", { engines: data.unavailableEngines.join(", ") })}
               </div>
             )}
           </section>
 
           <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
-            <h2 className="text-base font-semibold text-stone-900">Uso por engine</h2>
+            <h2 className="text-base font-semibold text-stone-900">{t("engineUsageTitle")}</h2>
             <div className="mt-4 space-y-3">
               {data.engineUsage.length === 0 ? (
-                <p className="text-sm text-stone-500">Todavia no hay uso registrado.</p>
+                <p className="text-sm text-stone-500">{t("noEngineUsage")}</p>
               ) : (
                 data.engineUsage.map((item) => (
                   <div key={item.key} className="flex items-center justify-between rounded-lg border border-stone-200 px-3 py-2 text-sm text-stone-700">
                     <span className="font-medium text-stone-900">{item.key}</span>
-                    <span>{item.count} jobs</span>
+                    <span>{t("jobs", { count: item.count })}</span>
                   </div>
                 ))
               )}
@@ -484,21 +465,21 @@ export default function AdminDashboard() {
 
       <section className="rounded-xl border border-stone-200 bg-white">
         <div className="border-b border-stone-200 px-5 py-4">
-          <h2 className="text-base font-semibold text-stone-900">Auditoria reciente</h2>
-          <p className="mt-1 text-sm text-stone-500">Eventos recientes del sistema con filtro rapido por tipo.</p>
+          <h2 className="text-base font-semibold text-stone-900">{t("auditTitle")}</h2>
+          <p className="mt-1 text-sm text-stone-500">{t("auditDescription")}</p>
           <div className="mt-4 flex flex-wrap gap-2">
-            {auditFilters.map((filter) => (
+            {auditFilterKeys.map((key) => (
               <button
-                key={filter.value}
+                key={key}
                 type="button"
-                onClick={() => setAuditFilter(filter.value)}
+                onClick={() => setAuditFilter(key)}
                 className={
-                  auditFilter === filter.value
+                  auditFilter === key
                     ? "rounded-full border border-stone-900 bg-stone-900 px-3 py-1 text-xs font-medium text-white"
                     : "rounded-full border border-stone-300 bg-white px-3 py-1 text-xs font-medium text-stone-600"
                 }
               >
-                {filter.label}
+                {t(`auditFilter.${key}`)}
               </button>
             ))}
           </div>
@@ -506,18 +487,18 @@ export default function AdminDashboard() {
 
         <div className="divide-y divide-stone-200">
           {visibleAudit.length === 0 ? (
-            <p className="px-5 py-8 text-sm text-stone-500">No hay eventos para ese filtro.</p>
+            <p className="px-5 py-8 text-sm text-stone-500">{t("noAuditEvents")}</p>
           ) : (
             visibleAudit.map((event) => (
               <div key={event.id} className="grid gap-2 px-5 py-4 text-sm text-stone-700 sm:grid-cols-[180px_minmax(0,1fr)_180px] sm:items-center">
                 <div>
-                  <p className="font-medium text-stone-900">{auditLabel(event.eventType)}</p>
+                  <p className="font-medium text-stone-900">{t(`auditLabel.${event.eventType}`)}</p>
                   <p className="mt-1 text-xs text-stone-500">{event.eventType}</p>
                 </div>
                 <div>
                   <p>{auditDetails(event)}</p>
                   <p className="mt-1 text-xs text-stone-500">
-                    {event.jobId ? `Job ${event.jobId.slice(0, 8)}` : "Sin job"}
+                    {event.jobId ? `Job ${event.jobId.slice(0, 8)}` : t("sinJob")}
                     {event.fileId ? ` · File ${event.fileId.slice(0, 8)}` : ""}
                   </p>
                 </div>

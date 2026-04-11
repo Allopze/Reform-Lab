@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   getEmailTemplates,
   updateEmailTemplate,
@@ -21,16 +22,16 @@ type ViewMode = "visual" | "code" | "preview";
 type PreviewWidth = "desktop" | "mobile";
 
 const TEMPLATE_VARS = [
-  { label: "Nombre", value: "{{.Name}}" },
-  { label: "Email", value: "{{.Email}}" },
-  { label: "App", value: "{{.AppName}}" },
-  { label: "URL App", value: "{{.AppURL}}" },
-  { label: "Año", value: "{{.Year}}" },
-  { label: "Archivo", value: "{{.FileName}}" },
-  { label: "Formato destino", value: "{{.OutputFormat}}" },
-  { label: "Error", value: "{{.ErrorMessage}}" },
-  { label: "URL reset", value: "{{.ResetURL}}" },
-];
+  { labelKey: "varName", value: "{{.Name}}" },
+  { labelKey: "varEmail", value: "{{.Email}}" },
+  { labelKey: "varApp", value: "{{.AppName}}" },
+  { labelKey: "varAppUrl", value: "{{.AppURL}}" },
+  { labelKey: "varYear", value: "{{.Year}}" },
+  { labelKey: "varFile", value: "{{.FileName}}" },
+  { labelKey: "varOutputFormat", value: "{{.OutputFormat}}" },
+  { labelKey: "varError", value: "{{.ErrorMessage}}" },
+  { labelKey: "varResetUrl", value: "{{.ResetURL}}" },
+] as const;
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat("es-ES", {
@@ -40,6 +41,7 @@ function formatDate(value: string): string {
 }
 
 export default function EmailTemplatesSection() {
+  const t = useTranslations("emailTemplates");
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,14 +53,14 @@ export default function EmailTemplatesSection() {
         setTemplates(data);
         if (data.length > 0 && !selected) setSelected(data[0].key);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : "No se pudieron cargar las plantillas."))
+      .catch((err) => setError(err instanceof Error ? err.message : t("loadError")))
       .finally(() => setLoading(false));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) {
     return (
       <section className="rounded-xl border border-stone-200 bg-white">
-        <div className="px-5 py-8 text-sm text-stone-500">Cargando plantillas de correo...</div>
+        <div className="px-5 py-8 text-sm text-stone-500">{t("loading")}</div>
       </section>
     );
   }
@@ -76,7 +78,7 @@ export default function EmailTemplatesSection() {
   if (templates.length === 0) {
     return (
       <section className="rounded-xl border border-stone-200 bg-white">
-        <div className="px-5 py-8 text-sm text-stone-500">No hay plantillas de correo configuradas.</div>
+        <div className="px-5 py-8 text-sm text-stone-500">{t("noTemplates")}</div>
       </section>
     );
   }
@@ -86,9 +88,9 @@ export default function EmailTemplatesSection() {
   return (
     <section className="rounded-xl border border-stone-200 bg-white">
       <div className="border-b border-stone-200 px-5 py-4">
-        <h2 className="text-base font-semibold text-stone-900">Plantillas de correo</h2>
+        <h2 className="text-base font-semibold text-stone-900">{t("title")}</h2>
         <p className="mt-1 text-sm text-stone-500">
-          Edita el HTML y el asunto de cada plantilla. Usa variables con doble llave: {"{{.Name}}"}, {"{{.Email}}"}, {"{{.AppName}}"}, {"{{.Year}}"}.
+          {t("description")}
         </p>
 
         {templates.length > 1 && (
@@ -131,6 +133,8 @@ function TemplateEditor({
   template: EmailTemplate;
   onSave: (updated: EmailTemplate) => void;
 }) {
+  const t = useTranslations("emailTemplates");
+  const tCommon = useTranslations("common");
   const [subject, setSubject] = useState(template.subject);
   const [bodyHtml, setBodyHtml] = useState(template.body_html);
   const [viewMode, setViewMode] = useState<ViewMode>("visual");
@@ -212,9 +216,9 @@ function TemplateEditor({
         body_html: bodyHtml,
       });
       onSave(updated);
-      setStatus("Plantilla guardada correctamente.");
+      setStatus(t("saved"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo guardar la plantilla.");
+      setError(err instanceof Error ? err.message : t("saveError"));
     } finally {
       setSaving(false);
     }
@@ -233,7 +237,7 @@ function TemplateEditor({
       setPreviewSubject(result.subject);
       setViewMode("preview");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo generar la vista previa.");
+      setError(err instanceof Error ? err.message : t("previewError"));
     } finally {
       setPreviewing(false);
     }
@@ -253,7 +257,7 @@ function TemplateEditor({
   return (
     <div className="px-5 py-4">
       <label className="block">
-        <span className="mb-1.5 block text-[13px] font-medium text-stone-600">Asunto</span>
+        <span className="mb-1.5 block text-[13px] font-medium text-stone-600">{t("subjectLabel")}</span>
         <input
           type="text"
           value={subject}
@@ -265,7 +269,7 @@ function TemplateEditor({
       {/* Variable chips — only shown in visual mode */}
       {viewMode === "visual" && (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-stone-500">Variables:</span>
+          <span className="text-xs text-stone-500">{t("variablesLabel")}:</span>
           {TEMPLATE_VARS.map((v) => (
             <button
               key={v.value}
@@ -273,7 +277,7 @@ function TemplateEditor({
               onClick={() => insertVariable(v.value)}
               className="rounded border border-stone-200 bg-stone-50 px-2 py-0.5 text-xs font-medium text-stone-600 transition-colors hover:bg-stone-100"
             >
-              {v.label}
+              {t(v.labelKey)}
             </button>
           ))}
         </div>
@@ -282,11 +286,11 @@ function TemplateEditor({
       <div className="mt-4">
         <div className="flex items-center justify-between">
           <span className="text-[13px] font-medium text-stone-600">
-            Cuerpo HTML
+            {t("bodyLabel")}
           </span>
           <div className="flex gap-1">
             {(["visual", "code", "preview"] as const).map((mode) => {
-              const labels: Record<ViewMode, string> = { visual: "Visual", code: "Codigo", preview: "Vista previa" };
+              const labels: Record<ViewMode, string> = { visual: t("modeVisual"), code: t("modeCode"), preview: t("modePreview") };
               return (
                 <button
                   key={mode}
@@ -299,7 +303,7 @@ function TemplateEditor({
                       : "rounded-md border border-stone-200 bg-white px-2.5 py-1 text-xs font-medium text-stone-600 hover:bg-stone-50"
                   }
                 >
-                  {mode === "preview" && previewing ? "Cargando..." : labels[mode]}
+                  {mode === "preview" && previewing ? tCommon("loading") : labels[mode]}
                 </button>
               );
             })}
@@ -332,7 +336,7 @@ function TemplateEditor({
               {previewSubject && (
                 <div className="flex items-center justify-between border-b border-stone-200 bg-stone-50 px-4 py-2.5">
                   <div>
-                    <p className="text-xs text-stone-500">Asunto renderizado</p>
+                    <p className="text-xs text-stone-500">{t("renderedSubject")}</p>
                     <p className="mt-0.5 text-sm font-medium text-stone-900">{previewSubject}</p>
                   </div>
                   <div className="flex gap-1">
@@ -364,7 +368,7 @@ function TemplateEditor({
               <div className="flex justify-center bg-stone-100 py-4">
                 <iframe
                   ref={iframeRef}
-                  title="Vista previa del correo"
+                  title={t("previewIframeTitle")}
                   className={`h-125 border border-stone-200 bg-white transition-all ${previewWidth === "mobile" ? "w-93.75" : "w-full max-w-175"}`}
                   sandbox="allow-same-origin"
                 />
@@ -376,7 +380,7 @@ function TemplateEditor({
 
       <div className="mt-4 flex items-center justify-between gap-3">
         <p className="text-xs text-stone-500">
-          Ultima actualizacion: {formatDate(template.updated_at)}
+          {t("lastUpdate")}: {formatDate(template.updated_at)}
         </p>
         <div className="flex gap-2">
           <button
@@ -385,7 +389,7 @@ function TemplateEditor({
             disabled={!dirty}
             className="inline-flex h-10 items-center rounded-lg border border-stone-200 bg-white px-4 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50 disabled:cursor-not-allowed disabled:text-stone-400"
           >
-            Descartar
+            {t("discard")}
           </button>
           <button
             type="button"
@@ -393,7 +397,7 @@ function TemplateEditor({
             disabled={saving || !dirty}
             className="inline-flex h-10 items-center rounded-lg bg-coral-500 px-4 text-sm font-medium text-white transition-colors hover:bg-coral-600 disabled:cursor-not-allowed disabled:bg-coral-200"
           >
-            {saving ? "Guardando..." : "Guardar plantilla"}
+            {saving ? tCommon("saving") : t("saveTemplate")}
           </button>
         </div>
       </div>
@@ -416,6 +420,7 @@ function TemplateEditor({
 // ── TipTap Toolbar ──
 
 function TiptapToolbar({ editor }: { editor: ReturnType<typeof useEditor> }) {
+  const t = useTranslations("emailTemplates");
   if (!editor) return null;
 
   const btnClass = (active: boolean) =>
@@ -434,7 +439,7 @@ function TiptapToolbar({ editor }: { editor: ReturnType<typeof useEditor> }) {
       <button
         type="button"
         onClick={() => {
-          const url = window.prompt("URL del enlace");
+          const url = window.prompt(t("linkPrompt"));
           if (url) editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
         }}
         className={btnClass(editor.isActive("link"))}
@@ -448,28 +453,28 @@ function TiptapToolbar({ editor }: { editor: ReturnType<typeof useEditor> }) {
       <span className="mx-1 w-px self-stretch bg-stone-200" />
 
       <button type="button" onClick={() => editor.chain().focus().setTextAlign("left").run()} className={btnClass(editor.isActive({ textAlign: "left" }))}>
-        Izq
+        {t("alignLeft")}
       </button>
       <button type="button" onClick={() => editor.chain().focus().setTextAlign("center").run()} className={btnClass(editor.isActive({ textAlign: "center" }))}>
-        Centro
+        {t("alignCenter")}
       </button>
       <button type="button" onClick={() => editor.chain().focus().setTextAlign("right").run()} className={btnClass(editor.isActive({ textAlign: "right" }))}>
-        Der
+        {t("alignRight")}
       </button>
 
       <span className="mx-1 w-px self-stretch bg-stone-200" />
 
       <button type="button" onClick={() => editor.chain().focus().toggleBulletList().run()} className={btnClass(editor.isActive("bulletList"))}>
-        Lista
+        {t("list")}
       </button>
       <button type="button" onClick={() => editor.chain().focus().toggleOrderedList().run()} className={btnClass(editor.isActive("orderedList"))}>
-        Num.
+        {t("numberedList")}
       </button>
 
       <span className="mx-1 w-px self-stretch bg-stone-200" />
 
       <label className="flex items-center gap-1 text-xs text-stone-600">
-        Color
+        {t("colorLabel")}
         <input
           type="color"
           onChange={(e) => editor.chain().focus().setColor(e.target.value).run()}
@@ -481,12 +486,12 @@ function TiptapToolbar({ editor }: { editor: ReturnType<typeof useEditor> }) {
       <button
         type="button"
         onClick={() => {
-          const url = window.prompt("URL de la imagen");
+          const url = window.prompt(t("imagePrompt"));
           if (url) editor.chain().focus().setImage({ src: url }).run();
         }}
         className={btnClass(false)}
       >
-        Imagen
+        {t("imageBtn")}
       </button>
     </div>
   );

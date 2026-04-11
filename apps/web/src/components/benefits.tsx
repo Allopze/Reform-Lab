@@ -1,39 +1,32 @@
-import { Zap, Shield, Globe } from "lucide-react";
+"use client";
 
-const benefits = [
-  {
-    icon: Zap,
-    title: "Rápido",
-    description: "Conversiones en segundos, sin esperas innecesarias.",
-  },
-  {
-    icon: Shield,
-    title: "Seguro",
-    description: "Tus archivos se eliminan automáticamente tras el proceso.",
-  },
-  {
-    icon: Globe,
-    title: "Sin instalación",
-    description: "Funciona directamente desde tu navegador, en cualquier dispositivo.",
-  },
-];
+import { Zap, Shield, Globe } from "lucide-react";
+import { useTranslations } from "next-intl";
+
+const benefitKeys = [
+  { key: "fast", icon: Zap },
+  { key: "secure", icon: Shield },
+  { key: "noInstall", icon: Globe },
+] as const;
 
 export default function Benefits() {
+  const t = useTranslations("benefits");
+
   return (
     <section className="mx-auto mt-12 grid max-w-xl gap-4 sm:grid-cols-3">
-      {benefits.map((b) => {
+      {benefitKeys.map((b) => {
         const Icon = b.icon;
         return (
           <div
-            key={b.title}
+            key={b.key}
             className="flex flex-col items-center gap-2 rounded-xl border border-stone-200 bg-white p-4 text-center"
           >
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-stone-100 text-stone-600">
               <Icon size={18} strokeWidth={2} aria-hidden="true" />
             </div>
-            <p className="text-sm font-medium text-gray-800">{b.title}</p>
+            <p className="text-sm font-medium text-gray-800">{t(`${b.key}.title`)}</p>
             <p className="text-xs leading-relaxed text-gray-400">
-              {b.description}
+              {t(`${b.key}.description`)}
             </p>
           </div>
         );

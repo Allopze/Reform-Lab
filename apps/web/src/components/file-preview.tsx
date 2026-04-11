@@ -1,6 +1,7 @@
 "use client";
 
 import { X, FileIcon } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 interface FilePreviewProps {
   file: File;
@@ -19,6 +20,8 @@ export default function FilePreview({
   outputFormat,
   onRemove,
 }: FilePreviewProps) {
+  const t = useTranslations("filePreview");
+
   return (
     <div className="flex items-center gap-4 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4">
       <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white text-coral-600 shadow-[0_12px_22px_-20px_rgba(34,27,25,0.6)]">
@@ -43,7 +46,7 @@ export default function FilePreview({
       <button
         type="button"
         onClick={onRemove}
-        aria-label="Eliminar archivo seleccionado"
+        aria-label={t("removeAria")}
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-stone-400 transition-colors duration-150 hover:bg-white hover:text-stone-700"
       >
         <X size={16} strokeWidth={2} />

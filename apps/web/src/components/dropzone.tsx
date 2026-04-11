@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useCallback, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 
 interface DropzoneProps {
   text: string;
@@ -20,6 +21,7 @@ export default function Dropzone({
   accept,
   onFileSelected,
 }: DropzoneProps) {
+  const t = useTranslations("common");
   const [isDragOver, setIsDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -108,7 +110,7 @@ export default function Dropzone({
           {text}
         </p>
         <p className="mt-4 text-[18px] text-stone-500 sm:text-[19px]">
-          Soporte {supportLabel}.
+          {t("supportPrefix", { label: supportLabel })}
         </p>
         <p className="mt-2 text-[15px] leading-7 text-stone-500 sm:text-[16px]">
           {detailLabel}

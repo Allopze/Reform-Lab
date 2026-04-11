@@ -41,6 +41,13 @@ func main() {
 
 	logger := observability.NewLogger(cfg.LogLevel)
 	metrics := observability.NewMetrics()
+
+	shutdownTracer, err := observability.InitTracer(context.Background(), "reform-worker", "1.0.0")
+	if err != nil {
+		logger.Fatal().Err(err).Msg("init tracer")
+	}
+	defer shutdownTracer(context.Background())
+
 	capabilities.ConfigureFeatureFlags(cfg.DisabledCapabilities, cfg.DisabledEngines)
 	flags := capabilities.DefaultFlags.Snapshot()
 	if len(flags.DisabledCapabilities) > 0 || len(flags.DisabledEngines) > 0 {

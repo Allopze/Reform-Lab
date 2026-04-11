@@ -146,6 +146,123 @@ Es una guía para actuar sin improvisar.
 
 ---
 
+## Procedimiento: backup de SQLite
+
+### Cuándo
+- antes de cualquier despliegue que incluya migraciones
+- como parte de backup periódico (cron recomendado)
+
+### Pasos
+1. usar la API de backup online de SQLite (`.backup` o `VACUUM INTO`):
+   ```bash
+   sqlite3 /data/reform.db "VACUUM INTO '/backups/reform-$(date +%Y%m%d-%H%M%S).db';"
+   ```
+2. verificar integridad del backup:
+   ```bash
+   sqlite3 /backups/reform-*.db "PRAGMA integrity_check;"
+   ```
+3. copiar el backup a almacenamiento externo (S3, volumen remoto, etc.)
+4. mantener al menos 7 días de backups; rotar los más antiguos
+
+### Notas
+- no usar `cp` directamente sobre la base de datos en modo WAL; puede generar copias inconsistentes
+- no interrumpir el servidor durante `VACUUM INTO`; es seguro ejecutar en caliente
+
+---
+
+## Procedimiento: rotación de JWT secret
+
+### Cuándo
+- compromiso sospechado de credenciales
+- rotación periódica planificada
+
+### Pasos
+1. generar un nuevo secret (mínimo 32 bytes):
+   ```bash
+   openssl rand -base64 48
+   ```
+2. configurar el nuevo valor en la variable de entorno `JWT_SECRET`
+3. reiniciar el servidor de API
+4. todas las sesiones existentes se invalidarán; los usuarios deberán autenticarse de nuevo
+5. verificar que el endpoint `/api/health` responde y que login funciona
+
+### Notas
+- no soporta doble-secret (old + new) simultáneo; el corte es instantáneo
+- coordinar con ventana de mantenimiento si el impacto de sesión es relevante
+
+---
+
+## Procedimiento: deshabilitar una capacidad
+
+### Cuándo
+- una capacidad produce artefactos corruptos
+- un motor tiene vulnerabilidad conocida
+- se requiere mantenimiento del motor subyacente
+
+### Pasos
+1. identificar el `capabilityId` afectado en `capabilities/catalog.go`
+2. añadir flag de desactivación en `capabilities/flags.go` o desactivar vía feature flag
+3. verificar que el resolver ya no la devuelve para archivos nuevos:
+   ```bash
+   curl -s http://localhost:8080/api/files/<file-id>/capabilities | jq
+   ```
+4. los jobs ya en cola continuarán; monitorear hasta que se completen o fallen
+5. comunicar al usuario que la capacidad no está disponible temporalmente
+
+---
+
+## Procedimiento: limpieza de artefactos expirados
+
+### Cuándo
+- disco por encima del 80% de uso
+- ejecución manual del proceso de retención
+
+### Pasos
+1. verificar la configuración actual de TTL:
+   - `ARTIFACT_TTL_HOURS` (por defecto)
+   - `ARTIFACT_TTL_BY_FAMILY` (override por familia)
+2. el servicio de retención (`orchestrator/retention.go`) limpia automáticamente en cada ciclo
+3. para forzar manualmente:
+   ```bash
+   # Listar artefactos expirados antes de borrar
+   sqlite3 /data/reform.db "SELECT id, file_name, created_at FROM artifacts WHERE expires_at < datetime('now');"
+   ```
+4. ejecutar el proceso de retención manualmente si el ciclo automático no corre
+5. verificar que el espacio se recuperó:
+   ```bash
+   du -sh /data/artifacts/
+   ```
+
+### Notas
+- no borrar archivos del filesystem sin actualizar la base de datos
+- los originales tienen su propia política de retención
+
+---
+
+## Incidente: Redis no disponible
+
+### Síntomas
+- jobs no se encolan
+- API responde pero conversiones no inician
+- errores de conexión en logs del servidor y workers
+
+### Verificaciones
+1. revisar estado de Redis:
+   ```bash
+   redis-cli ping
+   ```
+2. revisar conectividad de red entre API y Redis
+3. revisar memoria y uso de disco de Redis
+4. revisar si el problema es transitorio (reinicio) o persistente
+
+### Posibles mitigaciones
+- reiniciar Redis si es un problema de estado
+- verificar y corregir la dirección de Redis en configuración (`REDIS_ADDR`)
+- si Redis es irrecuperable a corto plazo, activar el queue in-process como degradación temporal (ver `queue/inprocess.go`)
+- los jobs que estaban en vuelo podrían quedar en estado "running" sin avanzar; marcarlos como failed manualmente si no se recuperan tras restaurar Redis
+
+---
+
 ## Postmortem mínimo recomendado
 
 - resumen del incidente

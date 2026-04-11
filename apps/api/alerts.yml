@@ -1,0 +1,54 @@
+groups:
+  - name: reform
+    rules:
+      - alert: HighJobFailureRate
+        expr: |
+          (
+            sum(rate(reform_jobs_total{status="failed"}[5m]))
+            /
+            clamp_min(sum(rate(reform_jobs_total[5m])), 1)
+          ) > 0.15
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Job failure rate above 15%"
+          description: "{{ $value | humanizePercentage }} of jobs failed over the last 5 minutes."
+
+      - alert: HighErrorRate
+        expr: sum(rate(reform_errors_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Application error rate elevated"
+          description: "{{ $value }} errors/sec over the last 5 minutes."
+
+      - alert: SlowHTTPResponses
+        expr: |
+          histogram_quantile(0.95, sum(rate(reform_http_request_duration_seconds_bucket[5m])) by (le))
+          > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "HTTP p95 latency above 2 seconds"
+          description: "p95 latency is {{ $value }}s."
+
+      - alert: ActiveJobsStuck
+        expr: sum(reform_active_jobs{status="running"}) > 20
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Too many running jobs"
+          description: "{{ $value }} jobs running for over 10 minutes — possible queue stall."
+
+      - alert: RateLimitSpike
+        expr: sum(rate(reform_rate_limit_hits_total[5m])) > 5
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "Rate limiting spike"
+          description: "{{ $value }} rate-limited requests/sec."

@@ -35,14 +35,34 @@ func Open(dbPath string) (*sql.DB, error) {
 
 // Migrate runs all SQL migration files against the database.
 func Migrate(db *sql.DB, migrationsPath string) error {
+	// Ensure tracking table exists.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS _migrations (
+		name TEXT PRIMARY KEY,
+		applied_at DATETIME DEFAULT (datetime('now'))
+	)`); err != nil {
+		return fmt.Errorf("create _migrations table: %w", err)
+	}
+
 	migrations := []string{"001_initial.sql", "002_users.sql", "003_owner_roles.sql", "004_site_settings.sql", "005_guest_sessions.sql", "006_email_templates.sql", "007_email_templates_conversion.sql"}
 	for _, name := range migrations {
+		// Skip already-applied migrations.
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM _migrations WHERE name = ?`, name).Scan(&count); err != nil {
+			return fmt.Errorf("check migration %s: %w", name, err)
+		}
+		if count > 0 {
+			continue
+		}
+
 		data, err := os.ReadFile(filepath.Join(migrationsPath, name))
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", name, err)
 		}
 		if err := execMigrationStatements(db, string(data)); err != nil {
 			return fmt.Errorf("apply migration %s: %w", name, err)
+		}
+		if _, err := db.Exec(`INSERT INTO _migrations (name) VALUES (?)`, name); err != nil {
+			return fmt.Errorf("record migration %s: %w", name, err)
 		}
 	}
 	return nil

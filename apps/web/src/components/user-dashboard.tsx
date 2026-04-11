@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { downloadArtifact, getMyDashboard, retryJob, type UserDashboardData } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
@@ -12,28 +13,11 @@ function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
-function statusLabel(status: string): string {
-  switch (status) {
-    case "queued":
-      return "En cola";
-    case "running":
-      return "En ejecucion";
-    case "succeeded":
-      return "Listo";
-    case "failed":
-      return "Fallido";
-    case "expired":
-      return "Expirado";
-    case "cancelled":
-      return "Cancelado";
-    default:
-      return status;
-  }
-}
-
 export default function UserDashboard() {
   const router = useRouter();
   const { user, loading } = useAuth();
+  const t = useTranslations("userDashboard");
+  const tCommon = useTranslations("common");
   const [data, setData] = useState<UserDashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
@@ -53,12 +37,12 @@ export default function UserDashboard() {
 
     refreshDashboard()
       .catch((err) => {
-        setError(err instanceof Error ? err.message : "No se pudo cargar tu panel.");
+        setError(err instanceof Error ? err.message : t("loadError"));
       });
-  }, [loading, refreshDashboard, router, user]);
+  }, [loading, refreshDashboard, router, user, t]);
 
   if (loading || (!data && !error)) {
-    return <p className="text-sm text-stone-500">Cargando actividad...</p>;
+    return <p className="text-sm text-stone-500">{t("loading")}</p>;
   }
 
   if (error) {
@@ -73,19 +57,19 @@ export default function UserDashboard() {
         <table className="w-full border-collapse text-left">
           <thead className="bg-stone-50 text-xs font-medium text-stone-500">
             <tr>
-              <th className="px-5 py-3">Archivo</th>
-              <th className="px-5 py-3">Detectado</th>
-              <th className="px-5 py-3">Salida</th>
-              <th className="px-5 py-3">Estado</th>
-              <th className="px-5 py-3">Actualizado</th>
-              <th className="px-5 py-3">Accion</th>
+              <th className="px-5 py-3">{t("fileHeader")}</th>
+              <th className="px-5 py-3">{t("detectedHeader")}</th>
+              <th className="px-5 py-3">{t("outputHeader")}</th>
+              <th className="px-5 py-3">{t("statusHeader")}</th>
+              <th className="px-5 py-3">{t("updatedHeader")}</th>
+              <th className="px-5 py-3">{t("actionHeader")}</th>
             </tr>
           </thead>
           <tbody>
             {data.recentJobs.length === 0 ? (
               <tr>
                 <td colSpan={6} className="px-5 py-8 text-sm text-stone-500">
-                  Todavia no tienes conversiones registradas.
+                  {t("emptyState")}
                 </td>
               </tr>
             ) : (
@@ -106,7 +90,7 @@ export default function UserDashboard() {
                         <span className="text-xs text-stone-500">{job.progress}%</span>
                       </div>
                     ) : (
-                      statusLabel(job.status)
+                      t(`status.${job.status}`)
                     )}
                   </td>
                   <td className="px-5 py-4 text-stone-500">{formatDate(job.updatedAt)}</td>
@@ -121,18 +105,18 @@ export default function UserDashboard() {
                               setDownloadingId(job.jobId);
                               await downloadArtifact(job.artifactId!, job.artifactFileName);
                             } catch (err) {
-                              setError(err instanceof Error ? err.message : "No se pudo descargar.");
+                              setError(err instanceof Error ? err.message : t("downloadError"));
                             } finally {
                               setDownloadingId(null);
                             }
                           }}
                           className="font-medium text-coral-700 underline underline-offset-2"
                         >
-                          {downloadingId === job.jobId ? "Descargando..." : "Descargar"}
+                          {downloadingId === job.jobId ? tCommon("downloading") : tCommon("download")}
                         </button>
                         {job.expiresAt && (
                           <span className="text-xs text-stone-400">
-                            Expira {formatDate(job.expiresAt)}
+                            {t("expires", { date: formatDate(job.expiresAt) })}
                           </span>
                         )}
                       </div>
@@ -146,14 +130,14 @@ export default function UserDashboard() {
                             await retryJob(job.jobId);
                             await refreshDashboard();
                           } catch (err) {
-                            setError(err instanceof Error ? err.message : "No se pudo reintentar.");
+                            setError(err instanceof Error ? err.message : t("retryError"));
                           } finally {
                             setRetryingId(null);
                           }
                         }}
                         className="font-medium text-coral-700 underline underline-offset-2"
                       >
-                        {retryingId === job.jobId ? "Reintentando..." : "Reintentar"}
+                        {retryingId === job.jobId ? t("retrying") : t("retry")}
                       </button>
                     ) : (
                       <span className="text-stone-400">-</span>
@@ -168,20 +152,20 @@ export default function UserDashboard() {
 
       <aside className="space-y-4">
         <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
-          <h2 className="text-base font-semibold text-stone-900">Resumen</h2>
+          <h2 className="text-base font-semibold text-stone-900">{t("summaryTitle")}</h2>
           <div className="mt-4 space-y-3 text-sm text-stone-600">
-            <p>Archivos propios: {data.totalFiles}</p>
-            <p>Jobs registrados: {data.totalJobs}</p>
-            <p>Jobs activos: {data.activeJobs}</p>
-            <p>Exitosos: {data.succeededJobs}</p>
-            <p>Fallidos: {data.failedJobs}</p>
+            <p>{t("ownFiles", { count: data.totalFiles })}</p>
+            <p>{t("totalJobs", { count: data.totalJobs })}</p>
+            <p>{t("activeJobs", { count: data.activeJobs })}</p>
+            <p>{t("succeededJobs", { count: data.succeededJobs })}</p>
+            <p>{t("failedJobs", { count: data.failedJobs })}</p>
           </div>
         </section>
 
         <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
-          <h2 className="text-base font-semibold text-stone-900">Retencion</h2>
+          <h2 className="text-base font-semibold text-stone-900">{t("retentionTitle")}</h2>
           <p className="mt-3 text-sm leading-6 text-stone-600">
-            Los artefactos completados quedan disponibles hasta su expiracion real en backend. Cuando expiran, se purgan y el job pasa a estado expirada.
+            {t("retentionDescription")}
           </p>
         </section>
       </aside>

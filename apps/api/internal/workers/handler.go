@@ -19,6 +19,10 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/storage"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Handler processes conversion tasks by delegating to the appropriate engine.
@@ -40,6 +44,14 @@ func (h *Handler) ProcessPayload(ctx context.Context, _ string, data []byte) err
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return fmt.Errorf("unmarshal payload: %w", err)
 	}
+
+	ctx, span := otel.Tracer("reform-worker").Start(ctx, "conversion.process")
+	span.SetAttributes(
+		attribute.String("job.id", payload.JobID),
+		attribute.String("capability.id", payload.CapabilityID),
+		attribute.String("file.id", payload.FileID),
+	)
+	defer span.End()
 
 	jobID, err := uuid.Parse(payload.JobID)
 	if err != nil {
@@ -64,6 +76,8 @@ func (h *Handler) ProcessPayload(ctx context.Context, _ string, data []byte) err
 		Logger()
 
 	// Mark job as running.
+	h.Metrics.ActiveJobs.WithLabelValues("running").Inc()
+	defer h.Metrics.ActiveJobs.WithLabelValues("running").Dec()
 	if err := h.Orch.MarkRunning(ctx, jobID); err != nil {
 		logger.Error().Err(err).Msg("failed to mark job running")
 		return err
@@ -192,6 +206,11 @@ func (h *Handler) fail(ctx context.Context, jobID uuid.UUID, logger zerolog.Logg
 	logger.Error().Err(err).Str("step", step).Msg("conversion failed")
 	_ = h.Orch.MarkFailed(ctx, jobID, msg)
 	h.Metrics.JobsTotal.WithLabelValues("", "failed").Inc()
+	h.Metrics.ErrorsTotal.WithLabelValues(step).Inc()
+	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+		span.SetStatus(codes.Error, msg)
+		span.RecordError(err)
+	}
 	return fmt.Errorf("%s: %w", step, err)
 }
 

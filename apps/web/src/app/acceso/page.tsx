@@ -1,12 +1,16 @@
 import type { Metadata } from "next";
+import { getTranslations } from "next-intl/server";
 import { Suspense } from "react";
 import AccessShell from "@/components/access-shell";
 import Footer from "@/components/footer";
 
-export const metadata: Metadata = {
-  title: "Acceso | Reform Lab",
-  description: "Pantalla de acceso y registro para usuarios y administradores de Reform Lab.",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("metadata");
+  return {
+    title: t("accesoTitle"),
+    description: t("accesoDescription"),
+  };
+}
 
 export default function AccesoPage() {
   return (
