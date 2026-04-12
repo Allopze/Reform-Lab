@@ -1,8 +1,8 @@
 package handlers
 
 import (
-	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"time"
 
@@ -56,6 +56,9 @@ func (h *ArtifactHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	defer reader.Close()
 
 	w.Header().Set("Content-Type", artifact.MIMEType)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, artifact.FileName))
+	disposition := mime.FormatMediaType("attachment", map[string]string{
+		"filename": artifact.FileName,
+	})
+	w.Header().Set("Content-Disposition", disposition)
 	io.Copy(w, reader)
 }

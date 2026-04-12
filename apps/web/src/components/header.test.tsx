@@ -166,4 +166,27 @@ describe("Header", () => {
 
     expect(registerLink).toHaveClass("bg-coral-900", "text-coral-100", "border", "border-coral-800");
   });
+
+  it("keeps theme and user controls pinned to the third grid column", () => {
+    const { rerender } = render(
+      <IntlWrapper>
+        <ThemeProvider>
+          <Header />
+        </ThemeProvider>
+      </IntlWrapper>
+    );
+
+    expect(screen.getByRole("button", { name: "Activar tema oscuro" }).parentElement).toHaveClass("col-start-3");
+
+    rerender(
+      <IntlWrapper>
+        <ThemeProvider>
+          <Header toolbar={<div>Toolbar</div>} />
+        </ThemeProvider>
+      </IntlWrapper>
+    );
+
+    expect(screen.getByText("Toolbar").parentElement).toHaveClass("col-start-2");
+    expect(screen.getByRole("button", { name: "Activar tema oscuro" }).parentElement).toHaveClass("col-start-3");
+  });
 });

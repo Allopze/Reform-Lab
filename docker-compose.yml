@@ -50,7 +50,16 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "256mb",
+        "--maxmemory-policy",
+        "allkeys-lru",
+      ]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -59,6 +68,8 @@ services:
       retries: 10
     volumes:
       - ./runtime/redis:/data
+    pids_limit: 128
+    mem_limit: "${REDIS_MEMORY_LIMIT:-512m}"
     networks:
       - worker_internal
 

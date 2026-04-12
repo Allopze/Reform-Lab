@@ -60,3 +60,31 @@ func TestSaveArtifactPersistsFileOnSuccess(t *testing.T) {
 		t.Fatalf("unexpected artifact contents: %q", string(data))
 	}
 }
+
+func TestSaveArtifactRejectsInvalidFileName(t *testing.T) {
+	store, err := NewFilesystem(t.TempDir())
+	if err != nil {
+		t.Fatalf("new filesystem: %v", err)
+	}
+
+	_, err = store.SaveArtifact(context.Background(), "artifact-invalid", "../output.txt", strings.NewReader("nope"))
+	if err == nil {
+		t.Fatal("expected SaveArtifact to reject traversal filename")
+	}
+	if !strings.Contains(err.Error(), "invalid artifact file name") {
+		t.Fatalf("expected invalid artifact file name error, got %v", err)
+	}
+}
+
+func TestGetArtifactByNameRejectsInvalidFileName(t *testing.T) {
+	store, err := NewFilesystem(t.TempDir())
+	if err != nil {
+		t.Fatalf("new filesystem: %v", err)
+	}
+
+	if _, err := store.GetArtifactByName("artifact-invalid", "../output.txt"); err == nil {
+		t.Fatal("expected GetArtifactByName to reject traversal filename")
+	} else if !strings.Contains(err.Error(), "invalid artifact file name") {
+		t.Fatalf("expected invalid artifact file name error, got %v", err)
+	}
+}

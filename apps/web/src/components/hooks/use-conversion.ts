@@ -11,6 +11,35 @@ import {
 } from "@/lib/api";
 import type { FileState } from "@/types";
 
+function findCapabilityByID(
+  capabilities: Capability[],
+  capabilityID: string,
+): Capability | undefined {
+  return capabilities.find((capability) => capability.id === capabilityID);
+}
+
+function stripExtension(fileName: string): string {
+  const lastDot = fileName.lastIndexOf(".");
+  if (lastDot <= 0) return fileName;
+  return fileName.slice(0, lastDot);
+}
+
+function extensionFromArtifactName(fileName?: string): string | null {
+  if (!fileName) return null;
+  const lastDot = fileName.lastIndexOf(".");
+  if (lastDot <= 0 || lastDot === fileName.length - 1) return null;
+  return fileName.slice(lastDot + 1);
+}
+
+export function getConvertedArtifactName(
+  inputFileName: string,
+  outputFormat: string,
+  artifactFileName?: string,
+): string {
+  const extension = extensionFromArtifactName(artifactFileName) || outputFormat;
+  return `${stripExtension(inputFileName)}.${extension}`;
+}
+
 export interface UseConversionReturn {
   activeJobId: string | null;
   downloadError: string | null;
@@ -26,7 +55,7 @@ export function useConversion(
   setFileState: (state: FileState) => void,
   uploadedFileId: string | null,
   capabilities: Capability[],
-  outputFormat: string,
+  selectedCapabilityId: string,
 ): UseConversionReturn {
   const t = useTranslations("conversion");
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -49,20 +78,24 @@ export function useConversion(
   const handleConvert = useCallback(async () => {
     if (fileState.status !== "selected" || !uploadedFileId) return;
 
-    const cap = capabilities.find((c) => c.targetFormat === outputFormat);
+    const cap = findCapabilityByID(capabilities, selectedCapabilityId);
     if (!cap) {
       setFileState({
         status: "error",
         file: fileState.file,
-        outputFormat,
+        selectedCapabilityId,
+        outputFormat: "",
         message: t("noCapability"),
       });
       return;
     }
 
+    const outputFormat = cap.targetFormat;
+
     setFileState({
       status: "converting",
       file: fileState.file,
+      selectedCapabilityId: cap.id,
       outputFormat,
       progress: 0,
     });
@@ -85,6 +118,7 @@ export function useConversion(
           setFileState({
             status: "error",
             file: fileState.file,
+            selectedCapabilityId: cap.id,
             outputFormat,
             message: t("timeout"),
           });
@@ -100,6 +134,7 @@ export function useConversion(
             setFileState({
               status: "done",
               file: fileState.file,
+              selectedCapabilityId: cap.id,
               outputFormat,
               artifactId: updated.artifactId,
               artifactFileName: updated.artifactFileName,
@@ -112,6 +147,7 @@ export function useConversion(
             setFileState({
               status: "error",
               file: fileState.file,
+              selectedCapabilityId: cap.id,
               outputFormat,
               message: updated.error || t("failed"),
             });
@@ -123,6 +159,7 @@ export function useConversion(
             setFileState({
               status: "converting",
               file: fileState.file,
+              selectedCapabilityId: cap.id,
               outputFormat,
               progress: updated.progress,
             });
@@ -135,6 +172,7 @@ export function useConversion(
           setFileState({
             status: "error",
             file: fileState.file,
+            selectedCapabilityId: cap.id,
             outputFormat,
             message: t("pollingError"),
           });
@@ -146,11 +184,19 @@ export function useConversion(
       setFileState({
         status: "error",
         file: fileState.file,
+        selectedCapabilityId: cap.id,
         outputFormat,
         message: err instanceof Error ? err.message : t("startError"),
       });
     }
-  }, [fileState, uploadedFileId, capabilities, outputFormat, setFileState, t]);
+  }, [
+    fileState,
+    uploadedFileId,
+    capabilities,
+    selectedCapabilityId,
+    setFileState,
+    t,
+  ]);
 
   const handleDownload = useCallback(async () => {
     if (fileState.status !== "done") return;
@@ -159,12 +205,14 @@ export function useConversion(
       setDownloadError(null);
       await downloadArtifact(
         fileState.artifactId,
-        fileState.artifactFileName || `${fileState.file.name}.${fileState.outputFormat}`,
+        getConvertedArtifactName(
+          fileState.file.name,
+          fileState.outputFormat,
+          fileState.artifactFileName,
+        ),
       );
     } catch (err) {
-      setDownloadError(
-        err instanceof Error ? err.message : t("downloadError"),
-      );
+      setDownloadError(err instanceof Error ? err.message : t("downloadError"));
     }
   }, [fileState, t]);
 

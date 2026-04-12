@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 
 interface FilePreviewProps {
   file: File;
+  selectionLabel?: string;
   outputFormat: string;
   onRemove: () => void;
 }
@@ -17,10 +18,16 @@ function formatSize(bytes: number): string {
 
 export default function FilePreview({
   file,
+  selectionLabel,
   outputFormat,
   onRemove,
 }: FilePreviewProps) {
   const t = useTranslations("filePreview");
+  const details = [
+    formatSize(file.size),
+    selectionLabel,
+    outputFormat ? `.${outputFormat.toUpperCase()}` : null,
+  ].filter(Boolean);
 
   return (
     <div className="flex items-center gap-4 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4">
@@ -32,15 +39,7 @@ export default function FilePreview({
         <p className="truncate text-sm font-medium text-stone-800">
           {file.name}
         </p>
-        <p className="mt-1 text-xs text-stone-500">
-          {formatSize(file.size)}
-          {outputFormat && (
-            <span>
-              {" "}
-              a <span className="font-medium text-coral-700">.{outputFormat.toUpperCase()}</span>
-            </span>
-          )}
-        </p>
+        <p className="mt-1 text-xs text-stone-500">{details.join(" / ")}</p>
       </div>
 
       <button

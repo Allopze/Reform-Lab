@@ -15,11 +15,12 @@ type CapabilitiesHandler struct {
 }
 
 type capabilityResponse struct {
-	ID             string `json:"id"`
-	DisplayName    string `json:"displayName"`
-	TargetFormat   string `json:"targetFormat"`
-	OperationType  string `json:"operationType"`
-	TimeoutSeconds int    `json:"timeoutSeconds"`
+	ID                string `json:"id"`
+	DisplayName       string `json:"displayName"`
+	PresentationOrder int    `json:"presentationOrder"`
+	TargetFormat      string `json:"targetFormat"`
+	OperationType     string `json:"operationType"`
+	TimeoutSeconds    int    `json:"timeoutSeconds"`
 }
 
 func (h *CapabilitiesHandler) Handle(w http.ResponseWriter, r *http.Request) {
@@ -47,11 +48,12 @@ func (h *CapabilitiesHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	result := make([]capabilityResponse, len(caps))
 	for i, c := range caps {
 		result[i] = capabilityResponse{
-			ID:             c.ID,
-			DisplayName:    c.DisplayName,
-			TargetFormat:   c.TargetFormat,
-			OperationType:  string(c.OperationType),
-			TimeoutSeconds: c.ExecutionLimits.TimeoutSeconds,
+			ID:                c.ID,
+			DisplayName:       c.DisplayName,
+			PresentationOrder: c.PresentationOrder,
+			TargetFormat:      c.TargetFormat,
+			OperationType:     string(c.OperationType),
+			TimeoutSeconds:    c.ExecutionLimits.TimeoutSeconds,
 		}
 	}
 

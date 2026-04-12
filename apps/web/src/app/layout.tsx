@@ -6,6 +6,8 @@ import { AuthProvider } from "@/lib/auth-context";
 import { ThemeProvider } from "@/lib/theme-context";
 import "./globals.css";
 
+export const dynamic = "force-dynamic";
+
 const geist = Geist({
   subsets: ["latin"],
   display: "swap",
@@ -32,21 +34,9 @@ export async function generateMetadata(): Promise<Metadata> {
       description: t("ogDescription"),
     },
     icons: {
-      icon: [
-        { url: "/favicon.svg", type: "image/svg+xml" },
-        {
-          url: "/logo-light.svg",
-          media: "(prefers-color-scheme: light)",
-          type: "image/svg+xml",
-        },
-        {
-          url: "/logo-dark.svg",
-          media: "(prefers-color-scheme: dark)",
-          type: "image/svg+xml",
-        },
-      ],
+      icon: [{ url: "/favicon.svg", type: "image/svg+xml" }],
       shortcut: ["/favicon.svg"],
-      apple: [{ url: "/logo-light.svg", type: "image/svg+xml" }],
+      apple: [{ url: "/favicon.svg", type: "image/svg+xml" }],
     },
     manifest: "/manifest.webmanifest",
   };

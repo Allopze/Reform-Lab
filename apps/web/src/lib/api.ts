@@ -51,7 +51,9 @@ export async function getUploadPolicy(): Promise<UploadPolicy> {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error((data as { error?: string }).error || "Failed to load upload policy");
+    throw new Error(
+      (data as { error?: string }).error || "Failed to load upload policy",
+    );
   }
   return data as UploadPolicy;
 }
@@ -78,16 +80,20 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
 export interface Capability {
   id: string;
   displayName: string;
+  presentationOrder: number;
   targetFormat: string;
   operationType: string;
   timeoutSeconds: number;
 }
 
 export async function getCapabilities(fileId: string): Promise<Capability[]> {
-  const res = await fetchWithTimeout(`${API_URL}/api/files/${fileId}/capabilities`, {
-    headers: headers(),
-    credentials: "include",
-  });
+  const res = await fetchWithTimeout(
+    `${API_URL}/api/files/${fileId}/capabilities`,
+    {
+      headers: headers(),
+      credentials: "include",
+    },
+  );
 
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Failed to load capabilities");
@@ -102,7 +108,13 @@ export interface Job {
   fileId: string;
   capabilityId: string;
   outputFormat: string;
-  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "expired";
+  status:
+    | "queued"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "cancelled"
+    | "expired";
   progress: number;
   error?: string;
   artifactId?: string;
@@ -114,7 +126,10 @@ export interface Job {
   createdAt: string;
 }
 
-export async function createConversion(fileId: string, capabilityId: string): Promise<Job> {
+export async function createConversion(
+  fileId: string,
+  capabilityId: string,
+): Promise<Job> {
   const res = await fetchWithTimeout(`${API_URL}/api/conversions`, {
     method: "POST",
     headers: { ...headers(), "Content-Type": "application/json" },
@@ -244,7 +259,7 @@ function fileNameFromDisposition(value: string | null): string | null {
 
 export async function downloadArtifact(
   artifactId: string,
-  fallbackName?: string
+  fallbackName?: string,
 ): Promise<void> {
   const res = await fetchWithTimeout(artifactDownloadUrl(artifactId), {
     headers: headers(),
@@ -287,7 +302,9 @@ export async function cancelJob(jobId: string): Promise<void> {
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error((data as { error?: string }).error || "Failed to cancel job");
+    throw new Error(
+      (data as { error?: string }).error || "Failed to cancel job",
+    );
   }
 }
 
@@ -299,7 +316,9 @@ export async function retryJob(jobId: string): Promise<Job> {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error((data as { error?: string }).error || "Failed to retry job");
+    throw new Error(
+      (data as { error?: string }).error || "Failed to retry job",
+    );
   }
   return data as Job;
 }
@@ -339,7 +358,10 @@ export async function getFooterMessage(): Promise<string> {
     credentials: "include",
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to load footer message");
+  if (!res.ok)
+    throw new Error(
+      (data as { error?: string }).error || "Failed to load footer message",
+    );
   return normalizeFooterMessage((data as { message?: string }).message);
 }
 
@@ -352,7 +374,9 @@ export async function updateFooterMessage(message: string): Promise<string> {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error((data as { error?: string }).error || "Failed to update footer message");
+    throw new Error(
+      (data as { error?: string }).error || "Failed to update footer message",
+    );
   }
   return normalizeFooterMessage((data as { message?: string }).message);
 }
@@ -369,7 +393,9 @@ export async function updateUploadPolicy(payload: {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error((data as { error?: string }).error || "Failed to update upload policy");
+    throw new Error(
+      (data as { error?: string }).error || "Failed to update upload policy",
+    );
   }
   return data as UploadPolicy;
 }
@@ -392,7 +418,10 @@ export async function getSMTPSettings(): Promise<SMTPSettings> {
     credentials: "include",
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to load SMTP settings");
+  if (!res.ok)
+    throw new Error(
+      (data as { error?: string }).error || "Failed to load SMTP settings",
+    );
   return data as SMTPSettings;
 }
 
@@ -411,17 +440,26 @@ export async function updateSMTPSettings(settings: {
     body: JSON.stringify(settings),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to save SMTP settings");
+  if (!res.ok)
+    throw new Error(
+      (data as { error?: string }).error || "Failed to save SMTP settings",
+    );
 }
 
-export async function testSMTPConnection(): Promise<{ success: boolean; message: string }> {
+export async function testSMTPConnection(): Promise<{
+  success: boolean;
+  message: string;
+}> {
   const res = await fetchWithTimeout(`${API_URL}/api/admin/smtp-test`, {
     method: "POST",
     headers: headers(),
     credentials: "include",
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to test SMTP");
+  if (!res.ok)
+    throw new Error(
+      (data as { error?: string }).error || "Failed to test SMTP",
+    );
   return data as { success: boolean; message: string };
 }
 
@@ -440,46 +478,67 @@ export async function getEmailTemplates(): Promise<EmailTemplate[]> {
     credentials: "include",
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to load email templates");
+  if (!res.ok)
+    throw new Error(
+      (data as { error?: string }).error || "Failed to load email templates",
+    );
   return data as EmailTemplate[];
 }
 
 export async function getEmailTemplate(key: string): Promise<EmailTemplate> {
-  const res = await fetchWithTimeout(`${API_URL}/api/admin/email-templates/${key}`, {
-    headers: headers(),
-    credentials: "include",
-  });
+  const res = await fetchWithTimeout(
+    `${API_URL}/api/admin/email-templates/${key}`,
+    {
+      headers: headers(),
+      credentials: "include",
+    },
+  );
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to load template");
+  if (!res.ok)
+    throw new Error(
+      (data as { error?: string }).error || "Failed to load template",
+    );
   return data as EmailTemplate;
 }
 
 export async function updateEmailTemplate(
   key: string,
-  payload: { subject: string; body_html: string }
+  payload: { subject: string; body_html: string },
 ): Promise<EmailTemplate> {
-  const res = await fetchWithTimeout(`${API_URL}/api/admin/email-templates/${key}`, {
-    method: "PUT",
-    headers: { ...headers(), "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify(payload),
-  });
+  const res = await fetchWithTimeout(
+    `${API_URL}/api/admin/email-templates/${key}`,
+    {
+      method: "PUT",
+      headers: { ...headers(), "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(payload),
+    },
+  );
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to update template");
+  if (!res.ok)
+    throw new Error(
+      (data as { error?: string }).error || "Failed to update template",
+    );
   return data as EmailTemplate;
 }
 
 export async function previewEmailTemplate(
   key: string,
-  draft?: { subject: string; body_html: string }
+  draft?: { subject: string; body_html: string },
 ): Promise<{ subject: string; html: string }> {
-  const res = await fetchWithTimeout(`${API_URL}/api/admin/email-templates/${key}/preview`, {
-    method: "POST",
-    headers: { ...headers(), "Content-Type": "application/json" },
-    credentials: "include",
-    body: draft ? JSON.stringify(draft) : "{}",
-  });
+  const res = await fetchWithTimeout(
+    `${API_URL}/api/admin/email-templates/${key}/preview`,
+    {
+      method: "POST",
+      headers: { ...headers(), "Content-Type": "application/json" },
+      credentials: "include",
+      body: draft ? JSON.stringify(draft) : "{}",
+    },
+  );
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error || "Failed to preview template");
+  if (!res.ok)
+    throw new Error(
+      (data as { error?: string }).error || "Failed to preview template",
+    );
   return data as { subject: string; html: string };
 }

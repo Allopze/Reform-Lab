@@ -24,17 +24,18 @@ type ExecutionLimits struct {
 
 // Capability is a declared operation the system can offer for a given format.
 type Capability struct {
-	ID               string          `json:"id"`
-	DisplayName      string          `json:"displayName"`
-	SourceFormats    []string        `json:"sourceFormats"`
-	OperationType    OperationType   `json:"operationType"`
-	TargetFormat     string          `json:"targetFormat"`
-	SizeLimits       SizeLimits      `json:"sizeLimits"`
-	ExecutionLimits  ExecutionLimits `json:"executionLimits"`
-	Engine           string          `json:"engine"`
-	ExpectedQuality  string          `json:"expectedQuality"`
-	KnownLimitations []string        `json:"knownLimitations,omitempty"`
-	Family           FormatFamily    `json:"family"`
+	ID                string          `json:"id"`
+	DisplayName       string          `json:"displayName"`
+	PresentationOrder int             `json:"presentationOrder"`
+	SourceFormats     []string        `json:"sourceFormats"`
+	OperationType     OperationType   `json:"operationType"`
+	TargetFormat      string          `json:"targetFormat"`
+	SizeLimits        SizeLimits      `json:"sizeLimits"`
+	ExecutionLimits   ExecutionLimits `json:"executionLimits"`
+	Engine            string          `json:"engine"`
+	ExpectedQuality   string          `json:"expectedQuality"`
+	KnownLimitations  []string        `json:"knownLimitations,omitempty"`
+	Family            FormatFamily    `json:"family"`
 }
 
 // IsSourceSupported checks whether a MIME type is in the capability's source list.

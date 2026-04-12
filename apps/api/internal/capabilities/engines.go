@@ -9,6 +9,7 @@ import (
 // binary that must be available on $PATH for the engine to work.
 var engineBinaries = map[string][]string{
 	"libreoffice":         {"libreoffice"},
+	"pdf2docx":            {"pdf2docx"},
 	"poppler":             {"pdftoppm", "pdftotext"},
 	"poppler-html":        {"pdftohtml"},
 	"ocr-pdf":             {"pdftoppm", "tesseract", "gs"},

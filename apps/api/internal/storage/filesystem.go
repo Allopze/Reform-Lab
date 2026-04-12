@@ -60,11 +60,15 @@ func (fs *Filesystem) SaveArtifact(_ context.Context, artifactID string, fileNam
 	if err := checkDiskSpace(fs.basePath, minFreeDiskBytes); err != nil {
 		return "", err
 	}
+	cleanFileName, err := validateArtifactFileName(fileName)
+	if err != nil {
+		return "", err
+	}
 	dir := filepath.Join(fs.basePath, "artifacts", artifactID)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", fmt.Errorf("create artifact dir: %w", err)
 	}
-	p := filepath.Join(dir, fileName)
+	p := filepath.Join(dir, cleanFileName)
 	if err := writeFile(p, r); err != nil {
 		_ = os.RemoveAll(dir)
 		return "", err
@@ -81,7 +85,11 @@ func (fs *Filesystem) GetArtifact(_ context.Context, artifactID string) (io.Read
 func (fs *Filesystem) GetArtifactByName(artifactID, fileName string) (io.ReadCloser, error) {
 	dir := filepath.Join(fs.basePath, "artifacts", artifactID)
 	if fileName != "" {
-		return os.Open(filepath.Join(dir, fileName))
+		cleanFileName, err := validateArtifactFileName(fileName)
+		if err != nil {
+			return nil, err
+		}
+		return os.Open(filepath.Join(dir, cleanFileName))
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -123,6 +131,14 @@ func writeFile(path string, r io.Reader) error {
 		return fmt.Errorf("write file %s: %w", path, err)
 	}
 	return nil
+}
+
+func validateArtifactFileName(fileName string) (string, error) {
+	clean := filepath.Base(fileName)
+	if fileName == "" || clean != fileName || clean == "." || clean == ".." {
+		return "", fmt.Errorf("invalid artifact file name: %q", fileName)
+	}
+	return clean, nil
 }
 
 // minFreeDiskBytes is the minimum free disk space (500 MB) required before

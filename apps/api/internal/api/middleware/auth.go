@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -108,7 +109,13 @@ func BearerTokenAuth(token string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			auth := r.Header.Get("Authorization")
-			if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != token {
+			if !strings.HasPrefix(auth, "Bearer ") {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="metrics"`)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			got := strings.TrimPrefix(auth, "Bearer ")
+			if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
 				w.Header().Set("WWW-Authenticate", `Bearer realm="metrics"`)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return

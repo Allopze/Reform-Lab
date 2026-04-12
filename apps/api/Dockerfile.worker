@@ -16,10 +16,15 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/tmp/reform-home
+ENV PATH=/opt/reform-lab-python/bin:${PATH}
+
+COPY requirements.txt /tmp/requirements.txt
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       ca-certificates \
+  python3 \
+  python3-venv \
       ghostscript \
       poppler-utils \
       librsvg2-bin \
@@ -31,7 +36,10 @@ RUN apt-get update && \
       libheif-examples \
       tesseract-ocr \
       tesseract-ocr-spa \
+    && python3 -m venv /opt/reform-lab-python \
+    && /opt/reform-lab-python/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
     && rm -rf /var/lib/apt/lists/* \
+    && rm -f /tmp/requirements.txt \
     && groupadd --system app \
     && useradd --system --gid app --create-home --home-dir /home/app app \
     && mkdir -p /data /tmp/reform-home /app \

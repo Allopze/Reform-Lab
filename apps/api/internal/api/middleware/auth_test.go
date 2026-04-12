@@ -62,3 +62,38 @@ func TestExtractTokenIgnoresAuthorizationHeader(t *testing.T) {
 		t.Fatalf("expected Authorization header to be ignored, got %q", got)
 	}
 }
+
+func TestBearerTokenAuthAcceptsMatchingToken(t *testing.T) {
+	handler := BearerTokenAuth("metrics-secret")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set("Authorization", "Bearer metrics-secret")
+	res := httptest.NewRecorder()
+
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", res.Code)
+	}
+}
+
+func TestBearerTokenAuthRejectsMismatchedToken(t *testing.T) {
+	handler := BearerTokenAuth("metrics-secret")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set("Authorization", "Bearer wrong-secret")
+	res := httptest.NewRecorder()
+
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", res.Code)
+	}
+	if got := res.Header().Get("WWW-Authenticate"); got == "" {
+		t.Fatal("expected WWW-Authenticate header on unauthorized response")
+	}
+}

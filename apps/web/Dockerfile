@@ -31,13 +31,15 @@ ENV HOSTNAME=0.0.0.0
 
 RUN addgroup -S app && adduser -S app -G app
 
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/messages ./messages
 COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./app/public
+COPY --from=builder /app/messages ./app/messages
+COPY --from=builder /app/.next/static ./app/.next/static
 
 USER app
 
 EXPOSE 5050
+
+WORKDIR /app/app
 
 CMD ["node", "server.js"]

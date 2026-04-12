@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 )
 
@@ -62,7 +63,9 @@ func (q *InProcessQueue) enqueueRaw(taskType string, data []byte, opts TaskOptio
 		defer func() { <-q.sem }()
 		taskCtx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 		defer cancel()
-		_ = q.handler(taskCtx, taskType, data)
+		if err := q.handler(taskCtx, taskType, data); err != nil {
+			log.Printf("[InProcessQueue] task %s failed: %v", taskType, err)
+		}
 	}()
 
 	return nil

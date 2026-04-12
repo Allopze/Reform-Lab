@@ -158,7 +158,7 @@
     "removeAria": "Eliminar archivo seleccionado"
   },
   "conversionCard": {
-    "outputLabel": "Salida disponible",
+    "outputLabel": "Opciones disponibles",
     "errorTitle": "Archivo no compatible con detección automática",
     "tryAnother": "Probar otro archivo",
     "noCapabilities": "Este archivo no tiene capacidades disponibles con la politica actual.",

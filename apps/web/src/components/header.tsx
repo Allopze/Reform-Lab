@@ -67,7 +67,7 @@ export default function Header({ toolbar }: HeaderProps) {
         <Link
           href="/"
           aria-label={t("logoAria")}
-          className="min-w-0 justify-self-start self-center ml-2 sm:ml-3"
+          className="col-start-1 min-w-0 justify-self-start self-center ml-2 sm:ml-3"
         >
           <Image
             src={logoSrc}
@@ -80,12 +80,12 @@ export default function Header({ toolbar }: HeaderProps) {
         </Link>
 
         {toolbar ? (
-          <div className="min-w-0 self-center">
+          <div className="col-start-2 min-w-0 self-center">
             {toolbar}
           </div>
         ) : null}
 
-        <div className="mr-2 flex items-center justify-self-end self-center gap-2 sm:mr-3">
+        <div className="col-start-3 mr-2 flex items-center justify-self-end self-center gap-2 sm:mr-3">
           <button
             type="button"
             aria-label={themeButtonLabel}

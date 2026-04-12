@@ -1,6 +1,7 @@
 package capabilities
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
@@ -14,6 +15,7 @@ func allEnginesAvailable(t *testing.T) func() {
 		"go-image":            true,
 		"go-html":             true,
 		"libreoffice":         true,
+		"pdf2docx":            true,
 		"librsvg":             true,
 		"libreoffice-poppler": true,
 		"libheif":             true,
@@ -38,6 +40,153 @@ func withFeatureFlags(t *testing.T, disabledCapabilities, disabledEngines []stri
 	return func() { DefaultFlags = old }
 }
 
+func capabilityIDs(caps []domain.Capability) []string {
+	ids := make([]string, len(caps))
+	for i, cap := range caps {
+		ids[i] = cap.ID
+	}
+	return ids
+}
+
+func assertCapabilityIDs(t *testing.T, caps []domain.Capability, want []string) {
+	t.Helper()
+
+	got := capabilityIDs(caps)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected capability order\nwant: %v\ngot:  %v", want, got)
+	}
+}
+
+func TestResolveOrdersPDFCapabilities(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	caps := Resolve(fakePDFFile())
+	assertCapabilityIDs(t, caps, []string{
+		"pdf-to-docx",
+		"pdf-to-jpg",
+		"pdf-to-png",
+		"pdf-to-txt",
+		"pdf-compress",
+		"pdf-to-html-preview",
+		"pdf-ocr-to-txt",
+		"pdf-ocr-searchable-pdf",
+		"pdf-ocr-to-json",
+	})
+}
+
+func TestResolveOrdersRasterImageCapabilities(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	caps := Resolve(fakeImageFile("image/png", "png"))
+	assertCapabilityIDs(t, caps, []string{
+		"image-to-jpg",
+		"image-to-webp",
+		"image-to-pdf",
+		"image-to-avif",
+		"image-compress-png",
+		"image-web-jpg-1600",
+		"image-web-webp-1600",
+		"image-web-avif-1600",
+		"image-web-jpg-640",
+		"image-web-webp-640",
+		"image-web-avif-640",
+		"image-thumbnail-png",
+		"image-ocr-to-txt",
+		"image-ocr-to-json",
+	})
+}
+
+func TestResolveOrdersHEICAndSVGCapabilities(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	assertCapabilityIDs(t, Resolve(fakeImageFile("image/heic", "heic")), []string{
+		"image-heic-to-jpg",
+		"image-heic-to-png",
+		"image-heic-to-webp",
+	})
+	assertCapabilityIDs(t, Resolve(fakeImageFile("image/svg+xml", "svg")), []string{
+		"image-svg-to-png",
+		"image-svg-to-webp",
+		"image-svg-to-pdf",
+	})
+}
+
+func TestResolveOrdersDocumentCapabilities(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	assertCapabilityIDs(t, Resolve(fakeDocumentFile("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx")), []string{
+		"doc-to-pdf",
+		"doc-to-txt",
+		"doc-to-html",
+		"docx-to-markdown",
+	})
+	assertCapabilityIDs(t, Resolve(fakeDocumentFile("text/html", "html")), []string{
+		"html-to-pdf",
+		"html-to-txt",
+	})
+	assertCapabilityIDs(t, Resolve(fakeTextFile("text/markdown", "md")), []string{
+		"markdown-to-html",
+		"markdown-to-pdf",
+		"markdown-to-docx",
+	})
+}
+
+func TestResolveOrdersPresentationAndSpreadsheetCapabilities(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	assertCapabilityIDs(t, Resolve(fakePresentationFile("application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx")), []string{
+		"presentation-to-pdf",
+		"presentation-to-jpg",
+		"presentation-to-png",
+	})
+	assertCapabilityIDs(t, Resolve(fakeSpreadsheetFile("text/csv", "csv")), []string{
+		"spreadsheet-to-pdf",
+		"spreadsheet-to-xlsx",
+		"spreadsheet-to-html",
+	})
+}
+
+func TestResolveOrdersAudioAndVideoCapabilities(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	assertCapabilityIDs(t, Resolve(fakeAudioFile("audio/wav", "wav")), []string{
+		"audio-to-mp3",
+		"audio-to-m4a",
+		"audio-to-flac",
+		"audio-to-aac",
+		"audio-to-ogg",
+		"audio-to-opus",
+		"audio-waveform-png",
+	})
+	assertCapabilityIDs(t, Resolve(fakeVideoFile("video/mp4", "mp4")), []string{
+		"video-to-webm",
+		"video-to-gif",
+		"video-to-mp3",
+		"video-to-m4a",
+		"video-to-wav",
+		"video-to-flac",
+		"video-to-aac",
+		"video-to-opus",
+		"video-preview-mp4",
+		"video-preview-webm",
+		"video-to-thumbnails",
+		"video-contact-sheet",
+		"video-waveform-png",
+	})
+}
+
+func TestSortCapabilitiesUsesIDAsTiebreaker(t *testing.T) {
+	caps := []domain.Capability{
+		{ID: "b", PresentationOrder: 10},
+		{ID: "a", PresentationOrder: 10},
+		{ID: "c", PresentationOrder: 20},
+	}
+
+	sortCapabilities(caps)
+
+	assertCapabilityIDs(t, caps, []string{"a", "b", "c"})
+}
+
 func TestResolveReturnsCapsForPDF(t *testing.T) {
 	defer allEnginesAvailable(t)()
 
@@ -46,10 +195,17 @@ func TestResolveReturnsCapsForPDF(t *testing.T) {
 	if len(caps) == 0 {
 		t.Fatal("expected at least one capability for PDF")
 	}
+	seenPDFToDocx := false
 	for _, c := range caps {
 		if c.TargetFormat == "pdf" && c.OperationType == domain.OpConvert {
 			t.Fatalf("should not offer same-format conversion, got %s", c.ID)
 		}
+		if c.ID == "pdf-to-docx" {
+			seenPDFToDocx = true
+		}
+	}
+	if !seenPDFToDocx {
+		t.Fatal("expected pdf-to-docx capability when dedicated engine is available")
 	}
 }
 

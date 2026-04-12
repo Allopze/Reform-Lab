@@ -6,8 +6,14 @@ Sentry.init({
 
   tracesSampleRate: process.env.NODE_ENV === "development" ? 1.0 : 0.1,
 
-  replaysSessionSampleRate: 0.1,
-  replaysOnErrorSampleRate: 1.0,
+  replaysSessionSampleRate: 0.02,
+  replaysOnErrorSampleRate: 0.2,
 
-  integrations: [Sentry.replayIntegration()],
+  integrations: [
+    Sentry.replayIntegration({
+      maskAllText: true,
+      maskAllInputs: true,
+      blockAllMedia: true,
+    }),
+  ],
 });

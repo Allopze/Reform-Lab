@@ -8,27 +8,104 @@ const (
 	mb500 = 500 * 1024 * 1024
 )
 
+var capabilityPresentationOrders = map[string]int{
+	"pdf-to-docx":            100,
+	"pdf-to-jpg":             110,
+	"pdf-to-png":             120,
+	"pdf-to-txt":             130,
+	"pdf-compress":           140,
+	"pdf-to-html-preview":    150,
+	"pdf-ocr-to-txt":         160,
+	"pdf-ocr-searchable-pdf": 170,
+	"pdf-ocr-to-json":        180,
+
+	"image-to-jpg":        200,
+	"image-to-png":        210,
+	"image-to-webp":       220,
+	"image-to-pdf":        230,
+	"image-to-avif":       240,
+	"image-compress-jpg":  250,
+	"image-compress-png":  260,
+	"image-web-jpg-1600":  270,
+	"image-web-webp-1600": 280,
+	"image-web-avif-1600": 290,
+	"image-web-jpg-640":   300,
+	"image-web-webp-640":  310,
+	"image-web-avif-640":  320,
+	"image-thumbnail-jpg": 330,
+	"image-thumbnail-png": 340,
+	"image-ocr-to-txt":    350,
+	"image-ocr-to-json":   360,
+
+	"image-heic-to-jpg":  400,
+	"image-heic-to-png":  410,
+	"image-heic-to-webp": 420,
+
+	"image-svg-to-png":  500,
+	"image-svg-to-webp": 510,
+	"image-svg-to-pdf":  520,
+
+	"doc-to-pdf":       600,
+	"txt-to-pdf":       600,
+	"html-to-pdf":      600,
+	"doc-to-docx":      610,
+	"doc-to-txt":       620,
+	"doc-to-html":      630,
+	"docx-to-markdown": 640,
+	"markdown-to-html": 650,
+	"markdown-to-pdf":  660,
+	"markdown-to-docx": 670,
+	"html-to-txt":      680,
+
+	"presentation-to-pdf": 700,
+	"presentation-to-jpg": 710,
+	"presentation-to-png": 720,
+
+	"spreadsheet-to-pdf":  800,
+	"spreadsheet-to-xlsx": 810,
+	"spreadsheet-to-csv":  820,
+	"spreadsheet-to-html": 830,
+
+	"audio-to-mp3":       900,
+	"audio-to-m4a":       910,
+	"audio-to-wav":       920,
+	"audio-to-flac":      930,
+	"audio-to-aac":       940,
+	"audio-to-ogg":       950,
+	"audio-to-opus":      960,
+	"audio-waveform-png": 970,
+
+	"video-to-mp4":        1000,
+	"video-to-webm":       1010,
+	"video-to-gif":        1020,
+	"video-to-mp3":        1030,
+	"video-to-m4a":        1040,
+	"video-to-wav":        1050,
+	"video-to-flac":       1060,
+	"video-to-aac":        1070,
+	"video-to-opus":       1080,
+	"video-preview-mp4":   1090,
+	"video-preview-webm":  1100,
+	"video-to-thumbnails": 1110,
+	"video-contact-sheet": 1120,
+	"video-waveform-png":  1130,
+}
+
+func withPresentationOrders(capabilities []domain.Capability) []domain.Capability {
+	for i := range capabilities {
+		order, ok := capabilityPresentationOrders[capabilities[i].ID]
+		if !ok {
+			panic("missing presentation order for capability " + capabilities[i].ID)
+		}
+		capabilities[i].PresentationOrder = order
+	}
+
+	return capabilities
+}
+
 // Catalog holds all declared capabilities for V1.
-var Catalog = []domain.Capability{
+var Catalog = withPresentationOrders([]domain.Capability{
 	// ── PDF ──────────────────────────────────────────────
-	{
-		ID:            "pdf-to-docx",
-		DisplayName:   "Convertir a Word",
-		SourceFormats: []string{"application/pdf"},
-		OperationType: domain.OpConvert,
-		TargetFormat:  "docx",
-		SizeLimits:    domain.SizeLimits{MaxInputBytes: mb100},
-		ExecutionLimits: domain.ExecutionLimits{
-			TimeoutSeconds: 120,
-			MaxRetries:     1,
-		},
-		Engine:          "libreoffice",
-		ExpectedQuality: "good",
-		KnownLimitations: []string{
-			"Complex layouts may lose formatting",
-		},
-		Family: domain.FamilyPDF,
-	},
 	{
 		ID:            "pdf-to-jpg",
 		DisplayName:   "Convertir a JPG",
@@ -62,6 +139,24 @@ var Catalog = []domain.Capability{
 		ExpectedQuality: "high",
 		KnownLimitations: []string{
 			"Multi-page PDFs produce a ZIP of images",
+		},
+		Family: domain.FamilyPDF,
+	},
+	{
+		ID:            "pdf-to-docx",
+		DisplayName:   "Convertir a Word",
+		SourceFormats: []string{"application/pdf"},
+		OperationType: domain.OpConvert,
+		TargetFormat:  "docx",
+		SizeLimits:    domain.SizeLimits{MaxInputBytes: mb100},
+		ExecutionLimits: domain.ExecutionLimits{
+			TimeoutSeconds: 180,
+			MaxRetries:     1,
+		},
+		Engine:          "pdf2docx",
+		ExpectedQuality: "good",
+		KnownLimitations: []string{
+			"Complex page layouts and scanned PDFs can lose fidelity or require OCR instead",
 		},
 		Family: domain.FamilyPDF,
 	},
@@ -1437,7 +1532,7 @@ var Catalog = []domain.Capability{
 		},
 		Family: domain.FamilyVideo,
 	},
-}
+})
 
 // ByID returns a capability by its ID, or nil if not found.
 func ByID(id string) *domain.Capability {

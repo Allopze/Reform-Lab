@@ -5,29 +5,61 @@ import FilePreview from "./file-preview";
 import { IntlWrapper } from "@/test/intl-wrapper";
 
 describe("FilePreview", () => {
-	const file = new File(["x".repeat(2048)], "report.pdf", { type: "application/pdf" });
+  const file = new File(["x".repeat(2048)], "report.pdf", {
+    type: "application/pdf",
+  });
 
-	it("renders file name and size", () => {
-		render(<IntlWrapper><FilePreview file={file} outputFormat="docx" onRemove={vi.fn()} /></IntlWrapper>);
+  it("renders file name and size", () => {
+    render(
+      <IntlWrapper>
+        <FilePreview
+          file={file}
+          selectionLabel="Convertir a DOCX"
+          outputFormat="docx"
+          onRemove={vi.fn()}
+        />
+      </IntlWrapper>,
+    );
 
-		expect(screen.getByText("report.pdf")).toBeInTheDocument();
-		expect(screen.getByText(/2\.0 KB/)).toBeInTheDocument();
-		expect(screen.getByText(".DOCX")).toBeInTheDocument();
-	});
+    expect(screen.getByText("report.pdf")).toBeInTheDocument();
+    expect(
+      screen.getByText("2.0 KB / Convertir a DOCX / .DOCX"),
+    ).toBeInTheDocument();
+  });
 
-	it("calls onRemove when the remove button is clicked", async () => {
-		const onRemove = vi.fn();
-		const user = userEvent.setup();
-		render(<IntlWrapper><FilePreview file={file} outputFormat="docx" onRemove={onRemove} /></IntlWrapper>);
+  it("calls onRemove when the remove button is clicked", async () => {
+    const onRemove = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <IntlWrapper>
+        <FilePreview
+          file={file}
+          selectionLabel="Convertir a DOCX"
+          outputFormat="docx"
+          onRemove={onRemove}
+        />
+      </IntlWrapper>,
+    );
 
-		await user.click(screen.getByRole("button", { name: "Eliminar archivo seleccionado" }));
+    await user.click(
+      screen.getByRole("button", { name: "Eliminar archivo seleccionado" }),
+    );
 
-		expect(onRemove).toHaveBeenCalledTimes(1);
-	});
+    expect(onRemove).toHaveBeenCalledTimes(1);
+  });
 
-	it("does not show output format badge when outputFormat is empty", () => {
-		render(<IntlWrapper><FilePreview file={file} outputFormat="" onRemove={vi.fn()} /></IntlWrapper>);
+  it("does not show output format badge when outputFormat is empty", () => {
+    render(
+      <IntlWrapper>
+        <FilePreview
+          file={file}
+          selectionLabel=""
+          outputFormat=""
+          onRemove={vi.fn()}
+        />
+      </IntlWrapper>,
+    );
 
-		expect(screen.queryByText(/ a /)).not.toBeInTheDocument();
-	});
+    expect(screen.getByText("2.0 KB")).toBeInTheDocument();
+  });
 });

@@ -28,15 +28,33 @@ export interface CategoryConfig {
 
 export type FileState =
   | { status: "idle" }
-  | { status: "selected"; file: File; outputFormat: string }
-  | { status: "converting"; file: File; outputFormat: string; progress: number }
+  | {
+      status: "selected";
+      file: File;
+      selectedCapabilityId: string;
+      outputFormat: string;
+    }
+  | {
+      status: "converting";
+      file: File;
+      selectedCapabilityId: string;
+      outputFormat: string;
+      progress: number;
+    }
   | {
       status: "done";
       file: File;
+      selectedCapabilityId: string;
       outputFormat: string;
       artifactId: string;
       artifactFileName?: string;
       artifactMimeType?: string;
       artifactSize?: number;
     }
-  | { status: "error"; file: File; outputFormat: string; message: string };
+  | {
+      status: "error";
+      file: File;
+      selectedCapabilityId: string;
+      outputFormat: string;
+      message: string;
+    };

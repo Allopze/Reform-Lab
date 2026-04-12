@@ -5,9 +5,12 @@ import { CheckCircle2 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import type { CategoryConfig, FileState } from "@/types";
 import { getCategoryById } from "@/config/categories";
-import type { UploadPolicy } from "@/lib/api";
+import type { Capability, UploadPolicy } from "@/lib/api";
 import { useUpload } from "./hooks/use-upload";
-import { useConversion } from "./hooks/use-conversion";
+import {
+  getConvertedArtifactName,
+  useConversion,
+} from "./hooks/use-conversion";
 import Dropzone from "./dropzone";
 import FormatSelector from "./format-selector";
 import FilePreview from "./file-preview";
@@ -18,20 +21,25 @@ interface ConversionCardProps {
 
 const BYTES_PER_MB = 1024 * 1024;
 
-function isArchiveArtifact(artifactFileName?: string, artifactMimeType?: string) {
+function isArchiveArtifact(
+  artifactFileName?: string,
+  artifactMimeType?: string,
+) {
   if (artifactMimeType === "application/zip") return true;
   return artifactFileName?.toLowerCase().endsWith(".zip") ?? false;
 }
 
-function artifactLabel(fileState: Extract<FileState, { status: "done" }>) {
-  return (
-    fileState.artifactFileName ||
-    `${fileState.file.name}.${fileState.outputFormat}`
-  );
-}
-
 function formatMegabytes(bytes: number) {
   return `${Math.round(bytes / BYTES_PER_MB)} MB`;
+}
+
+function getCapabilityByID(
+  capabilities: Capability[],
+  capabilityID: string,
+): Capability | null {
+  return (
+    capabilities.find((capability) => capability.id === capabilityID) ?? null
+  );
 }
 
 export default function ConversionCard({ category }: ConversionCardProps) {
@@ -40,9 +48,7 @@ export default function ConversionCard({ category }: ConversionCardProps) {
   const tCommon = useTranslations("common");
   const isAutoCategory = category.id === "auto";
   const [fileState, setFileState] = useState<FileState>({ status: "idle" });
-  const [outputFormat, setOutputFormat] = useState("");
-  const outputFormatRef = useRef(outputFormat);
-  outputFormatRef.current = outputFormat;
+  const [selectedCapabilityId, setSelectedCapabilityId] = useState("");
 
   const {
     uploadPolicy,
@@ -52,7 +58,7 @@ export default function ConversionCard({ category }: ConversionCardProps) {
     detectedCategoryId,
     handleFileSelected,
     resetUpload,
-  } = useUpload(setFileState, outputFormatRef, setOutputFormat);
+  } = useUpload(setFileState, setSelectedCapabilityId);
 
   const {
     downloadError,
@@ -61,27 +67,36 @@ export default function ConversionCard({ category }: ConversionCardProps) {
     handleCancel,
     clearDownloadError,
     stopPolling,
-  } = useConversion(fileState, setFileState, uploadedFileId, capabilities, outputFormat);
+  } = useConversion(
+    fileState,
+    setFileState,
+    uploadedFileId,
+    capabilities,
+    selectedCapabilityId,
+  );
 
   const detectedCategory = detectedCategoryId
     ? getCategoryById(detectedCategoryId)
     : null;
-  const effectiveCategory = isAutoCategory && detectedCategory
-    ? detectedCategory
-    : category;
+  const effectiveCategory =
+    isAutoCategory && detectedCategory ? detectedCategory : category;
   const effectiveCategoryId = effectiveCategory.id;
 
   function uploadSupportLabel(policy: UploadPolicy | null) {
     if (!policy) return tc(`${effectiveCategoryId}.supportLabel`);
     return policy.viewerType === "registered"
-      ? t("registeredSupport", { limit: formatMegabytes(policy.effectiveMaxBytes) })
+      ? t("registeredSupport", {
+          limit: formatMegabytes(policy.effectiveMaxBytes),
+        })
       : t("guestSupport", { limit: formatMegabytes(policy.effectiveMaxBytes) });
   }
 
   function uploadPolicyDetail(policy: UploadPolicy | null) {
     if (!policy) return null;
     if (policy.viewerType === "registered") {
-      return t("registeredLimit", { limit: formatMegabytes(policy.effectiveMaxBytes) });
+      return t("registeredLimit", {
+        limit: formatMegabytes(policy.effectiveMaxBytes),
+      });
     }
     return t("guestLimit", {
       guestLimit: formatMegabytes(policy.effectiveMaxBytes),
@@ -93,18 +108,43 @@ export default function ConversionCard({ category }: ConversionCardProps) {
     ? detectedCategory
       ? t("detectedDetail", {
           category: tc(`${detectedCategory.id}.label`).toLowerCase(),
-          formats: detectedCategory.targetFormats.map((f) => f.label).join(", "),
+          formats: detectedCategory.targetFormats
+            .map((f) => f.label)
+            .join(", "),
         })
       : t("defaultDetail")
     : t("categoryFormats", {
         formats: effectiveCategory.targetFormats.map((f) => f.label).join(", "),
       });
 
-  const availableTargetFormats = capabilities.map((capability) => ({
-    value: capability.targetFormat,
+  const availableCapabilities = capabilities.map((capability) => ({
+    value: capability.id,
     label: capability.displayName,
   }));
-  const canChooseOutput = availableTargetFormats.length > 0;
+  const canChooseOutput = availableCapabilities.length > 0;
+  const selectedCapability = getCapabilityByID(
+    capabilities,
+    selectedCapabilityId,
+  );
+  const displayedCapabilityId =
+    fileState.status === "selected" ||
+    fileState.status === "converting" ||
+    fileState.status === "done" ||
+    fileState.status === "error"
+      ? fileState.selectedCapabilityId
+      : selectedCapabilityId;
+  const displayedCapability = getCapabilityByID(
+    capabilities,
+    displayedCapabilityId,
+  );
+  const displayedOutputFormat =
+    fileState.status === "selected" ||
+    fileState.status === "converting" ||
+    fileState.status === "done" ||
+    fileState.status === "error"
+      ? fileState.outputFormat
+      : (selectedCapability?.targetFormat ?? "");
+  const displayedCapabilityLabel = displayedCapability?.displayName ?? "";
 
   // Fade transition on category change
   const [faded, setFaded] = useState(false);
@@ -117,7 +157,6 @@ export default function ConversionCard({ category }: ConversionCardProps) {
         stopPolling();
         resetUpload();
         clearDownloadError();
-        setOutputFormat("");
         setFileState({ status: "idle" });
         prevCategoryIdRef.current = category.id;
         setFaded(false);
@@ -130,32 +169,62 @@ export default function ConversionCard({ category }: ConversionCardProps) {
     stopPolling();
     resetUpload();
     clearDownloadError();
-    setOutputFormat("");
     setFileState({ status: "idle" });
   }, [stopPolling, resetUpload, clearDownloadError]);
 
-  const handleOutputFormatChange = useCallback(
+  const handleCapabilityChange = useCallback(
     (value: string) => {
-      setOutputFormat(value);
+      if (fileState.status !== "selected") {
+        return;
+      }
+
+      const nextCapability = getCapabilityByID(capabilities, value);
+      if (!nextCapability) {
+        return;
+      }
+
+      setSelectedCapabilityId(value);
       if (fileState.status === "selected") {
-        setFileState({ ...fileState, outputFormat: value });
+        setFileState({
+          ...fileState,
+          selectedCapabilityId: value,
+          outputFormat: nextCapability.targetFormat,
+        });
       }
     },
-    [fileState]
+    [capabilities, fileState],
   );
 
   const isConverting = fileState.status === "converting";
   const isDone = fileState.status === "done";
   const doneArtifactName =
-    fileState.status === "done" ? artifactLabel(fileState) : null;
+    fileState.status === "done"
+      ? getConvertedArtifactName(
+          fileState.file.name,
+          fileState.outputFormat,
+          fileState.artifactFileName,
+        )
+      : null;
   const doneIsArchive =
     fileState.status === "done"
-      ? isArchiveArtifact(fileState.artifactFileName, fileState.artifactMimeType)
+      ? isArchiveArtifact(
+          fileState.artifactFileName,
+          fileState.artifactMimeType,
+        )
       : false;
   const hasFile =
     fileState.status === "selected" ||
     fileState.status === "converting" ||
     fileState.status === "done";
+  const canStartConversion =
+    hasFile &&
+    !isConverting &&
+    !isDone &&
+    !!uploadedFileId &&
+    !!selectedCapabilityId &&
+    capabilities.length > 0;
+  const canDownload =
+    fileState.status === "done" && Boolean(fileState.artifactId);
   const effectiveDetailLabel = [detailLabel, uploadPolicyDetail(uploadPolicy)]
     .filter(Boolean)
     .join(" ");
@@ -196,14 +265,18 @@ export default function ConversionCard({ category }: ConversionCardProps) {
         ) : (
           <FilePreview
             file={fileState.file}
-            outputFormat={outputFormat}
+            selectionLabel={displayedCapabilityLabel}
+            outputFormat={displayedOutputFormat}
             onRemove={handleRemoveFile}
           />
         )}
 
         {isAutoCategory && detectedCategory ? (
           <p className="mt-6 text-sm font-medium text-stone-500">
-            {t("detectedFormat")} <span className="text-stone-800">{tc(`${detectedCategory.id}.label`)}</span>
+            {t("detectedFormat")}{" "}
+            <span className="text-stone-800">
+              {tc(`${detectedCategory.id}.label`)}
+            </span>
           </p>
         ) : null}
 
@@ -211,9 +284,9 @@ export default function ConversionCard({ category }: ConversionCardProps) {
           <div className="mt-6">
             <FormatSelector
               label={t("outputLabel")}
-              options={availableTargetFormats}
-              value={outputFormat}
-              onChange={handleOutputFormatChange}
+              options={availableCapabilities}
+              value={displayedCapabilityId}
+              onChange={handleCapabilityChange}
               id={`format-${category.id}`}
             />
           </div>
@@ -247,7 +320,10 @@ export default function ConversionCard({ category }: ConversionCardProps) {
             </div>
             <div className="mt-3 flex items-center justify-between">
               <p className="text-sm text-stone-500">
-                {t("converting", { progress: fileState.status === "converting" ? fileState.progress : 0 })}
+                {t("converting", {
+                  progress:
+                    fileState.status === "converting" ? fileState.progress : 0,
+                })}
               </p>
               <button
                 type="button"
@@ -274,16 +350,6 @@ export default function ConversionCard({ category }: ConversionCardProps) {
               </p>
             </div>
             <div className="flex items-center gap-3">
-              <a
-                href="#"
-                onClick={(event) => {
-                  event.preventDefault();
-                  void handleDownload();
-                }}
-                className="text-sm font-medium text-emerald-700 underline underline-offset-2 hover:text-emerald-900"
-              >
-                {doneIsArchive ? t("downloadZip") : t("downloadFile")}
-              </a>
               <button
                 type="button"
                 onClick={handleRemoveFile}
@@ -297,23 +363,32 @@ export default function ConversionCard({ category }: ConversionCardProps) {
 
         <button
           type="button"
-          disabled={!hasFile || isConverting || isDone || !uploadedFileId || capabilities.length === 0}
-          onClick={handleConvert}
+          disabled={!canStartConversion && !canDownload}
+          onClick={() => {
+            if (canDownload) {
+              void handleDownload();
+              return;
+            }
+
+            handleConvert();
+          }}
           className={`
             mt-6 w-full rounded-[22px] px-5 py-5 text-[16px] font-semibold
             transition-all duration-200
             ${
-              hasFile && !isConverting && !isDone
-                ? "bg-coral-400 text-white hover:bg-coral-500 active:bg-coral-600"
-                : "cursor-not-allowed bg-coral-200/75 text-white"
+              canDownload
+                ? "bg-emerald-500 text-white hover:bg-emerald-600 active:bg-emerald-700"
+                : canStartConversion
+                  ? "bg-coral-400 text-white hover:bg-coral-500 active:bg-coral-600"
+                  : "cursor-not-allowed bg-coral-200/75 text-white"
             }
           `}
         >
           {isConverting
             ? t("convertingButton")
             : isDone
-              ? t("completed")
-                : tc(`${effectiveCategoryId}.cta`)}
+              ? tCommon("download")
+              : tc(`${effectiveCategoryId}.cta`)}
         </button>
       </div>
     </div>

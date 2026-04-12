@@ -10,6 +10,7 @@ import (
 	"image/color"
 	"image/png"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
@@ -331,6 +332,30 @@ func decode(resp *http.Response) map[string]interface{} {
 
 func uploadPNG(baseURL, token string) (*http.Response, map[string]interface{}) {
 	return uploadPNGClient(nil, baseURL, token)
+}
+
+func uploadRawFileClient(
+	client *http.Client,
+	baseURL, token, fileName string,
+	data []byte,
+) (*http.Response, map[string]interface{}) {
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, _ := writer.CreateFormFile("file", fileName)
+	_, _ = part.Write(data)
+	writer.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/api/files", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if token != "" {
+		req.AddCookie(&http.Cookie{Name: "reform_session", Value: token})
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, _ := client.Do(req)
+	dataMap := decode(resp)
+	return resp, dataMap
 }
 
 func uploadPNGClient(client *http.Client, baseURL, token string) (*http.Response, map[string]interface{}) {
@@ -745,6 +770,71 @@ func TestE2E_UploadAndCapabilities(t *testing.T) {
 	if len(caps) == 0 {
 		t.Fatal("capabilities: expected at least one capability for PNG image")
 	}
+
+	lastOrder := -1
+	for _, item := range caps {
+		capability, ok := item.(map[string]interface{})
+		if !ok {
+			t.Fatalf("capabilities: expected object, got %T", item)
+		}
+		order, ok := capability["presentationOrder"].(float64)
+		if !ok {
+			t.Fatalf("capabilities: expected numeric presentationOrder, got %v", capability["presentationOrder"])
+		}
+		if int(order) < lastOrder {
+			t.Fatalf("capabilities: expected ascending presentationOrder, got %d after %d", int(order), lastOrder)
+		}
+		lastOrder = int(order)
+	}
+}
+
+func TestE2E_PNGCapabilitiesKeepDistinctSameTargetVariants(t *testing.T) {
+	if !capabilities.DefaultProber.IsAvailable("ffmpeg") || !capabilities.DefaultProber.IsAvailable("tesseract") {
+		t.Skip("ffmpeg and tesseract runtimes are required for PNG capability breadth")
+	}
+
+	env := setupE2E(t)
+	defer env.close()
+
+	client := registerUserClient(t, env, "OptionsPNG", "png-options@test.com")
+
+	_, fileData := uploadPNGClient(client, env.server.URL, "")
+	fileID := fileData["id"].(string)
+
+	_, capsData := doGetClient(client, fmt.Sprintf("%s/api/files/%s/capabilities", env.server.URL, fileID), "")
+
+	for _, capabilityID := range []string{
+		"image-to-jpg",
+		"image-compress-png",
+		"image-thumbnail-png",
+		"image-web-jpg-1600",
+		"image-ocr-to-txt",
+	} {
+		requireCapabilityID(t, capsData, capabilityID)
+	}
+}
+
+func TestE2E_PDFCapabilitiesKeepTextAndOCRDistinct(t *testing.T) {
+	if !capabilities.DefaultProber.IsAvailable("poppler") || !capabilities.DefaultProber.IsAvailable("ocr-pdf") {
+		t.Skip("poppler and ocr-pdf runtimes are required for PDF OCR capability coverage")
+	}
+
+	env := setupE2E(t)
+	defer env.close()
+
+	client := registerUserClient(t, env, "OptionsPDF", "pdf-options@test.com")
+	pdfData := []byte("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF")
+
+	resp, fileData := uploadRawFileClient(client, env.server.URL, "", "sample.pdf", pdfData)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("pdf upload: expected 201, got %d — %v", resp.StatusCode, fileData)
+	}
+	fileID := fileData["id"].(string)
+
+	_, capsData := doGetClient(client, fmt.Sprintf("%s/api/files/%s/capabilities", env.server.URL, fileID), "")
+
+	requireCapabilityID(t, capsData, "pdf-to-txt")
+	requireCapabilityID(t, capsData, "pdf-ocr-to-txt")
 }
 
 func TestE2E_ConversionCreatesJob(t *testing.T) {
@@ -1117,7 +1207,14 @@ func TestE2E_RealFixtureHEIFConversion(t *testing.T) {
 	if downloadResp.StatusCode != http.StatusOK {
 		t.Fatalf("download heif artifact: expected 200, got %d", downloadResp.StatusCode)
 	}
-	if !strings.Contains(downloadResp.Header.Get("Content-Disposition"), `filename="converted.png"`) {
+	disposition, params, err := mime.ParseMediaType(downloadResp.Header.Get("Content-Disposition"))
+	if err != nil {
+		t.Fatalf("parse content disposition: %v", err)
+	}
+	if disposition != "attachment" {
+		t.Fatalf("expected attachment disposition, got %q", disposition)
+	}
+	if params["filename"] != "converted.png" {
 		t.Fatalf("expected png download filename, got %q", downloadResp.Header.Get("Content-Disposition"))
 	}
 	if len(body) < 8 || !bytes.Equal(body[:8], []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}) {

@@ -26,10 +26,18 @@ func runLibreOfficeConvert(ctx context.Context, label, convertTo, inputPath, out
 		"libreoffice", "--headless", "-env:UserInstallation="+profileURL, "--convert-to", convertTo,
 		"--outdir", outputDir, inputPath,
 	)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := cmd.CombinedOutput()
+	if err != nil {
 		return fmt.Errorf("%s: %s: %w", label, strings.TrimSpace(string(out)), err)
 	}
+	if hasLibreOfficeFailureOutput(string(out)) {
+		return fmt.Errorf("%s: %s", label, strings.TrimSpace(string(out)))
+	}
 	return nil
+}
+
+func hasLibreOfficeFailureOutput(output string) bool {
+	return strings.Contains(strings.ToLower(output), "error:")
 }
 
 func ensureOutputFile(path string) error {

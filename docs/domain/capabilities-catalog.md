@@ -43,6 +43,7 @@ Toda capacidad debería definir como mínimo:
 
 - `id`
 - `displayName`
+- `presentationOrder`
 - `sourceFormat`
 - `operationType`
 - `targetFormat` cuando aplique
@@ -99,6 +100,10 @@ Una capacidad sin límites de tamaño, tiempo o complejidad está incompleta.
 ### 5. Observable
 Debe poder medirse su tasa de uso, éxito, error y latencia.
 
+### 6. Orden estable de presentación
+Cuando la UI necesite mostrar capacidades en lista plana, el backend debe entregar un `presentationOrder`
+estable para evitar que el frontend invente prioridades locales o colapse capacidades distintas que comparten formato de salida.
+
 ---
 
 ## Tipos sugeridos de operación
@@ -144,9 +149,9 @@ Notas relevantes del comportamiento actual:
 
 ### PDF
 
-- PDF -> DOCX
 - PDF -> JPG
 - PDF -> PNG
+- PDF -> DOCX
 - PDF -> TXT extraído
 - PDF -> PDF comprimido
 - PDF -> HTML para preview

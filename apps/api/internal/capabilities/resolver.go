@@ -1,6 +1,10 @@
 package capabilities
 
-import "github.com/allopze/reform-lab/apps/api/internal/domain"
+import (
+	"sort"
+
+	"github.com/allopze/reform-lab/apps/api/internal/domain"
+)
 
 // Resolve returns the list of capabilities available for a given file.
 // It filters by source format, excludes same-format conversions, checks limits,
@@ -38,6 +42,8 @@ func Resolve(file domain.OriginalFile) []domain.Capability {
 
 		result = append(result, cap)
 	}
+
+	sortCapabilities(result)
 
 	return result
 }
@@ -81,4 +87,13 @@ func rejectsSameFormat(file domain.OriginalFile, cap domain.Capability) bool {
 		return false
 	}
 	return cap.TargetFormat == file.DetectedFormat.Extension
+}
+
+func sortCapabilities(capabilities []domain.Capability) {
+	sort.Slice(capabilities, func(i, j int) bool {
+		if capabilities[i].PresentationOrder != capabilities[j].PresentationOrder {
+			return capabilities[i].PresentationOrder < capabilities[j].PresentationOrder
+		}
+		return capabilities[i].ID < capabilities[j].ID
+	})
 }

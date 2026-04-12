@@ -3,39 +3,7 @@ import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
 import createNextIntlPlugin from "next-intl/plugin";
 
-const isDev = process.env.NODE_ENV === "development";
 const hasSentry = !!process.env.NEXT_PUBLIC_SENTRY_DSN;
-const connectSrc = ["'self'"];
-
-if (process.env.NEXT_PUBLIC_API_URL) {
-	try {
-		connectSrc.push(new URL(process.env.NEXT_PUBLIC_API_URL).origin);
-	} catch {
-		// Ignore invalid user-provided URLs and keep the default safe policy.
-	}
-}
-
-if (isDev) {
-	connectSrc.push("http:", "ws:");
-}
-
-if (hasSentry) {
-	connectSrc.push("https://*.ingest.sentry.io");
-}
-
-const cspHeader = `
-	default-src 'self';
-	script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""};
-	style-src 'self' 'unsafe-inline';
-	img-src 'self' blob: data:;
-	font-src 'self';
-	connect-src ${connectSrc.join(" ")};
-	object-src 'none';
-	base-uri 'self';
-	form-action 'self';
-	frame-ancestors 'none';
-	${isDev ? "" : "upgrade-insecure-requests;"}
-`;
 
 const nextConfig: NextConfig = {
 	output: "standalone",
@@ -45,10 +13,6 @@ const nextConfig: NextConfig = {
 			{
 				source: "/(.*)",
 				headers: [
-					{
-						key: "Content-Security-Policy",
-						value: cspHeader.replace(/\n/g, " ").replace(/\s{2,}/g, " ").trim(),
-					},
 					{
 						key: "X-Content-Type-Options",
 						value: "nosniff",

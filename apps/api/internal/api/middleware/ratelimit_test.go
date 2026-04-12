@@ -143,19 +143,35 @@ func TestSecurityHeaders(t *testing.T) {
 	}))
 
 	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	handler.ServeHTTP(rr, req)
 
 	expected := map[string]string{
-		"X-Content-Type-Options": "nosniff",
-		"X-Frame-Options":        "DENY",
-		"X-XSS-Protection":       "0",
-		"Referrer-Policy":        "strict-origin-when-cross-origin",
+		"X-Content-Type-Options":    "nosniff",
+		"X-Frame-Options":           "DENY",
+		"X-XSS-Protection":          "0",
+		"Referrer-Policy":           "strict-origin-when-cross-origin",
+		"Strict-Transport-Security": "max-age=63072000; includeSubDomains",
 	}
 	for header, want := range expected {
 		got := rr.Header().Get(header)
 		if got != want {
 			t.Errorf("header %s: expected %q, got %q", header, want, got)
 		}
+	}
+}
+
+func TestSecurityHeadersSkipsHSTSForPlainHTTP(t *testing.T) {
+	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if got := rr.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Fatalf("expected no HSTS header for plain HTTP, got %q", got)
 	}
 }
 

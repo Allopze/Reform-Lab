@@ -92,3 +92,72 @@ func TestSanitizeHTMLBytes_PreservesInlineImages(t *testing.T) {
 		t.Error("expected data URI images to be preserved")
 	}
 }
+
+func TestSanitizeHTMLBytes_NeutralizesEntityEncodedRemoteSrc(t *testing.T) {
+	input := []byte(`<img src="&#x68;ttp://evil.com/pixel.png">`)
+	result := sanitizeHTMLBytes(input)
+	s := string(result)
+	if strings.Contains(s, "evil.com") {
+		t.Fatalf("expected entity-encoded remote URL to be neutralized, got %s", s)
+	}
+	if !strings.Contains(s, "about:blank") {
+		t.Fatalf("expected about:blank replacement, got %s", s)
+	}
+}
+
+func TestSanitizeHTMLBytes_RemovesEventHandlers(t *testing.T) {
+	input := []byte(`<img src="/safe.png" onload="alert('xss')"><p onclick="steal()">Hi</p>`)
+	result := sanitizeHTMLBytes(input)
+	s := string(result)
+	if strings.Contains(s, "onload=") || strings.Contains(s, "onclick=") {
+		t.Fatalf("expected event handlers to be removed, got %s", s)
+	}
+	if !strings.Contains(s, `/safe.png`) {
+		t.Fatalf("expected safe local resource to remain, got %s", s)
+	}
+}
+
+func TestSanitizeHTMLBytes_NeutralizesRemoteSVGHref(t *testing.T) {
+	input := []byte(`<svg><use xlink:href="https://evil.com/icons.svg#shape"></use></svg>`)
+	result := sanitizeHTMLBytes(input)
+	s := string(result)
+	if strings.Contains(s, "evil.com") {
+		t.Fatalf("expected remote SVG href to be neutralized, got %s", s)
+	}
+	if !strings.Contains(s, "about:blank") {
+		t.Fatalf("expected about:blank replacement, got %s", s)
+	}
+}
+
+func TestSanitizeHTMLBytes_NeutralizesJavascriptHref(t *testing.T) {
+	input := []byte(`<a href="javascript:alert('xss')">click</a>`)
+	result := sanitizeHTMLBytes(input)
+	s := string(result)
+	if strings.Contains(strings.ToLower(s), "javascript:") {
+		t.Fatalf("expected javascript href to be neutralized, got %s", s)
+	}
+	if !strings.Contains(s, `href="about:blank"`) {
+		t.Fatalf("expected about:blank replacement, got %s", s)
+	}
+}
+
+func TestSanitizeHTMLBytes_NeutralizesMixedSrcset(t *testing.T) {
+	input := []byte(`<img srcset="/safe.png 1x, https://evil.com/evil.png 2x">`)
+	result := sanitizeHTMLBytes(input)
+	s := string(result)
+	if strings.Contains(s, "evil.com") {
+		t.Fatalf("expected remote srcset candidate to be neutralized, got %s", s)
+	}
+	if !strings.Contains(s, `/safe.png 1x, about:blank 2x`) {
+		t.Fatalf("expected local srcset candidate to remain and remote one to be neutralized, got %s", s)
+	}
+}
+
+func TestSanitizeHTMLBytes_RemovesForeignObject(t *testing.T) {
+	input := []byte(`<svg><foreignObject><body><script>alert(1)</script><p>Hola</p></body></foreignObject></svg>`)
+	result := sanitizeHTMLBytes(input)
+	s := string(result)
+	if strings.Contains(strings.ToLower(s), "foreignobject") {
+		t.Fatalf("expected foreignObject to be removed, got %s", s)
+	}
+}
