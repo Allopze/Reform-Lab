@@ -12,6 +12,8 @@ type Metrics struct {
 	RateLimitHits       *prometheus.CounterVec
 	HTTPRequestDuration *prometheus.HistogramVec
 	ErrorsTotal         *prometheus.CounterVec
+	DiskFreeBytes       prometheus.Gauge
+	DiskTotalBytes      prometheus.Gauge
 }
 
 // NewMetrics registers and returns application metrics.
@@ -74,11 +76,24 @@ func NewMetrics() *Metrics {
 			},
 			[]string{"type"},
 		),
+		DiskFreeBytes: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "reform_disk_free_bytes",
+				Help: "Free disk bytes on the storage volume",
+			},
+		),
+		DiskTotalBytes: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "reform_disk_total_bytes",
+				Help: "Total disk bytes on the storage volume",
+			},
+		),
 	}
 
 	prometheus.MustRegister(
 		m.UploadsTotal, m.JobsTotal, m.JobDuration, m.ArtifactsTotal,
 		m.ActiveJobs, m.RateLimitHits, m.HTTPRequestDuration, m.ErrorsTotal,
+		m.DiskFreeBytes, m.DiskTotalBytes,
 	)
 	return m
 }

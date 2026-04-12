@@ -43,7 +43,7 @@ func Migrate(db *sql.DB, migrationsPath string) error {
 		return fmt.Errorf("create _migrations table: %w", err)
 	}
 
-	migrations := []string{"001_initial.sql", "002_users.sql", "003_owner_roles.sql", "004_site_settings.sql", "005_guest_sessions.sql", "006_email_templates.sql", "007_email_templates_conversion.sql"}
+	migrations := []string{"001_initial.sql", "002_users.sql", "003_owner_roles.sql", "004_site_settings.sql", "005_guest_sessions.sql", "006_email_templates.sql", "007_email_templates_conversion.sql", "008_file_expired_at.sql"}
 	for _, name := range migrations {
 		// Skip already-applied migrations.
 		var count int

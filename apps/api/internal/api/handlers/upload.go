@@ -24,12 +24,14 @@ const maxUploadSize = 500 * 1024 * 1024
 
 // UploadHandler handles POST /api/files.
 type UploadHandler struct {
-	Settings repository.SiteSettingRepository
-	Store    storage.Store
-	Files    repository.FileRepository
-	Audit    repository.AuditRepository
-	Logger   zerolog.Logger
-	Metrics  *observability.Metrics
+	Settings                       repository.SiteSettingRepository
+	Store                          storage.Store
+	Files                          repository.FileRepository
+	Audit                          repository.AuditRepository
+	Logger                         zerolog.Logger
+	Metrics                        *observability.Metrics
+	GuestCumulativeQuotaBytes      int64
+	RegisteredCumulativeQuotaBytes int64
 }
 
 func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +62,9 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		}
 		respondError(w, http.StatusBadRequest, "missing or invalid file field")
 		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
 	}
 	defer file.Close()
 
@@ -98,6 +103,18 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusRequestEntityTooLarge, "file exceeds size limit")
 		return
 	}
+
+	// Check cumulative disk quota for this user or guest session.
+	if err := h.enforceCumulativeQuota(r.Context(), u, guestSessionID, size); err != nil {
+		if errors.Is(err, domain.ErrQuotaExceeded) {
+			respondError(w, http.StatusRequestEntityTooLarge, "cumulative storage quota exceeded")
+			return
+		}
+		h.Logger.Error().Err(err).Msg("cumulative quota check failed")
+		respondError(w, http.StatusInternalServerError, "failed to check storage quota")
+		return
+	}
+
 	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to inspect uploaded file")
 		return
@@ -157,6 +174,10 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// Persist original file to storage only after validation succeeds.
 	storagePath, err := h.Store.SaveOriginal(r.Context(), fileID.String(), tempFile)
 	if err != nil {
+		if errors.Is(err, storage.ErrInsufficientDisk) {
+			respondError(w, http.StatusInsufficientStorage, "server storage is full")
+			return
+		}
 		h.Logger.Error().Err(err).Str("file_id", fileID.String()).Msg("save original failed")
 		respondError(w, http.StatusInternalServerError, "failed to save file")
 		return
@@ -206,4 +227,32 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	h.Metrics.UploadsTotal.WithLabelValues(string(detected.Family)).Inc()
 
 	respondJSON(w, http.StatusCreated, record)
+}
+
+// enforceCumulativeQuota checks that adding fileSize bytes would not exceed the
+// cumulative disk quota for the given user or guest session.
+func (h *UploadHandler) enforceCumulativeQuota(ctx context.Context, u *domain.User, guestSessionID *uuid.UUID, fileSize int64) error {
+	var used int64
+	var quota int64
+	var err error
+
+	if u != nil {
+		quota = h.RegisteredCumulativeQuotaBytes
+		used, err = h.Files.CumulativeBytesByUser(ctx, u.ID)
+	} else if guestSessionID != nil {
+		quota = h.GuestCumulativeQuotaBytes
+		used, err = h.Files.CumulativeBytesByGuestSession(ctx, *guestSessionID)
+	} else {
+		// No identity — allow the upload; rate-limits still apply.
+		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if quota > 0 && used+fileSize > quota {
+		return domain.ErrQuotaExceeded
+	}
+	return nil
 }

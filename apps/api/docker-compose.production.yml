@@ -1,0 +1,25 @@
+# docker-compose.production.yml
+#
+# Production overlay — activates the Redis profile so the API and worker
+# run as separate containers. The API never starts an embedded worker
+# when REDIS_URL is set, and config.go enforces REDIS_URL in production.
+#
+# Usage:
+#   docker compose --profile redis -f docker-compose.yml -f docker-compose.production.yml up -d
+
+services:
+  api:
+    environment:
+      APP_ENV: "production"
+      REDIS_URL: "redis://redis:6379"
+      EXPOSE_METRICS: "${EXPOSE_METRICS:-false}"
+      METRICS_TOKEN: "${METRICS_TOKEN:?METRICS_TOKEN is required when EXPOSE_METRICS is true}"
+      TRUST_PROXY_HEADERS: "true"
+      IN_PROCESS_WORKER_CONCURRENCY: "0"
+    networks:
+      - public
+      - worker_internal
+
+  worker:
+    environment:
+      APP_ENV: "production"

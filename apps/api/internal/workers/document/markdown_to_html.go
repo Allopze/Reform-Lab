@@ -21,6 +21,9 @@ func (e *MarkdownToHTMLEngine) Execute(_ context.Context, inputPath, outputDir, 
 		return "", err
 	}
 
+	// Neutralize remote references and scripts in the generated HTML.
+	htmlDoc = sanitizeHTMLBytes(htmlDoc)
+
 	outputPath := filepath.Join(outputDir, "converted.html")
 	if err := os.WriteFile(outputPath, htmlDoc, 0o644); err != nil {
 		return "", fmt.Errorf("write html: %w", err)

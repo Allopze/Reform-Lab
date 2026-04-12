@@ -14,30 +14,33 @@ import (
 
 // Config holds all application configuration loaded from environment variables.
 type Config struct {
-	AppEnv                   string
-	Port                     int
-	DatabasePath             string
-	MigrationsPath           string
-	RedisURL                 string // empty = use in-process queue (no Redis needed)
-	StorageBasePath          string
-	CORSOrigin               string
-	LogLevel                 string
-	JWTSecret                string
-	ExposeMetrics            bool
-	TrustProxyHeaders        bool
-	InProcessConcurrency     int
-	WorkerConcurrency        int
-	UserUploadsPerMinute     int
-	UserUploadBurst          int
-	UserConversionsPerMinute int
-	UserConversionBurst      int
-	MaxActiveJobsPerUser     int
-	ArtifactTTLHours         int // how many hours artifacts are retained before cleanup
-	OriginalTTLHours         int
-	TempTTLHours             int
-	ArtifactTTLByFamily      map[domain.FormatFamily]int
-	DisabledCapabilities     []string
-	DisabledEngines          []string
+	AppEnv                         string
+	Port                           int
+	DatabasePath                   string
+	MigrationsPath                 string
+	RedisURL                       string // empty = use in-process queue (no Redis needed)
+	StorageBasePath                string
+	CORSOrigin                     string
+	LogLevel                       string
+	JWTSecret                      string
+	ExposeMetrics                  bool
+	MetricsToken                   string // optional bearer token to protect /metrics
+	TrustProxyHeaders              bool
+	InProcessConcurrency           int
+	WorkerConcurrency              int
+	UserUploadsPerMinute           int
+	UserUploadBurst                int
+	UserConversionsPerMinute       int
+	UserConversionBurst            int
+	MaxActiveJobsPerUser           int
+	ArtifactTTLHours               int // how many hours artifacts are retained before cleanup
+	OriginalTTLHours               int
+	TempTTLHours                   int
+	ArtifactTTLByFamily            map[domain.FormatFamily]int
+	GuestCumulativeQuotaBytes      int64 // max total bytes across all files for a guest session
+	RegisteredCumulativeQuotaBytes int64 // max total bytes across all files for a registered user
+	DisabledCapabilities           []string
+	DisabledEngines                []string
 
 	AppURL string // public URL for email links; defaults to CORS_ORIGIN
 
@@ -100,14 +103,17 @@ func Load() (*Config, error) {
 	}
 
 	exposeMetrics := lookupBoolEnv("EXPOSE_METRICS", false)
+	metricsToken := os.Getenv("METRICS_TOKEN")
 	trustProxyHeaders := lookupBoolEnv("TRUST_PROXY_HEADERS", false)
 	inProcessConcurrency := lookupPositiveIntEnv("IN_PROCESS_WORKER_CONCURRENCY", 2)
 	workerConcurrency := lookupPositiveIntEnv("WORKER_CONCURRENCY", 2)
-	userUploadsPerMinute := lookupPositiveIntEnv("USER_UPLOADS_PER_MINUTE", 12)
-	userUploadBurst := lookupPositiveIntEnv("USER_UPLOAD_BURST", 4)
-	userConversionsPerMinute := lookupPositiveIntEnv("USER_CONVERSIONS_PER_MINUTE", 6)
-	userConversionBurst := lookupPositiveIntEnv("USER_CONVERSION_BURST", 3)
-	maxActiveJobsPerUser := lookupPositiveIntEnv("MAX_ACTIVE_JOBS_PER_USER", 3)
+	userUploadsPerMinute := lookupPositiveIntEnv("USER_UPLOADS_PER_MINUTE", 6)
+	userUploadBurst := lookupPositiveIntEnv("USER_UPLOAD_BURST", 2)
+	userConversionsPerMinute := lookupPositiveIntEnv("USER_CONVERSIONS_PER_MINUTE", 4)
+	userConversionBurst := lookupPositiveIntEnv("USER_CONVERSION_BURST", 2)
+	maxActiveJobsPerUser := lookupPositiveIntEnv("MAX_ACTIVE_JOBS_PER_USER", 2)
+	guestCumulativeQuota := lookupPositiveInt64Env("GUEST_CUMULATIVE_QUOTA_BYTES", 50*1024*1024)            // 50 MB
+	registeredCumulativeQuota := lookupPositiveInt64Env("REGISTERED_CUMULATIVE_QUOTA_BYTES", 500*1024*1024) // 500 MB
 
 	artifactTTL := 24
 	if v := os.Getenv("ARTIFACT_TTL_HOURS"); v != "" {
@@ -150,37 +156,40 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		AppEnv:                   appEnv,
-		Port:                     port,
-		DatabasePath:             dbPath,
-		MigrationsPath:           migrationsPath,
-		RedisURL:                 redisURL,
-		StorageBasePath:          storagePath,
-		CORSOrigin:               corsOrigin,
-		LogLevel:                 logLevel,
-		JWTSecret:                jwtSecret,
-		ExposeMetrics:            exposeMetrics,
-		TrustProxyHeaders:        trustProxyHeaders,
-		InProcessConcurrency:     inProcessConcurrency,
-		WorkerConcurrency:        workerConcurrency,
-		UserUploadsPerMinute:     userUploadsPerMinute,
-		UserUploadBurst:          userUploadBurst,
-		UserConversionsPerMinute: userConversionsPerMinute,
-		UserConversionBurst:      userConversionBurst,
-		MaxActiveJobsPerUser:     maxActiveJobsPerUser,
-		ArtifactTTLHours:         artifactTTL,
-		OriginalTTLHours:         originalTTL,
-		TempTTLHours:             tempTTL,
-		ArtifactTTLByFamily:      artifactTTLByFamily,
-		DisabledCapabilities:     disabledCapabilities,
-		DisabledEngines:          disabledEngines,
-		AppURL:                   appURL,
-		SMTPHost:                 smtpHost,
-		SMTPPort:                 smtpPort,
-		SMTPUser:                 smtpUser,
-		SMTPPassword:             smtpPassword,
-		SMTPFrom:                 smtpFrom,
-		SMTPUseTLS:               smtpUseTLS,
+		AppEnv:                         appEnv,
+		Port:                           port,
+		DatabasePath:                   dbPath,
+		MigrationsPath:                 migrationsPath,
+		RedisURL:                       redisURL,
+		StorageBasePath:                storagePath,
+		CORSOrigin:                     corsOrigin,
+		LogLevel:                       logLevel,
+		JWTSecret:                      jwtSecret,
+		ExposeMetrics:                  exposeMetrics,
+		MetricsToken:                   metricsToken,
+		TrustProxyHeaders:              trustProxyHeaders,
+		InProcessConcurrency:           inProcessConcurrency,
+		WorkerConcurrency:              workerConcurrency,
+		UserUploadsPerMinute:           userUploadsPerMinute,
+		UserUploadBurst:                userUploadBurst,
+		UserConversionsPerMinute:       userConversionsPerMinute,
+		UserConversionBurst:            userConversionBurst,
+		MaxActiveJobsPerUser:           maxActiveJobsPerUser,
+		GuestCumulativeQuotaBytes:      guestCumulativeQuota,
+		RegisteredCumulativeQuotaBytes: registeredCumulativeQuota,
+		ArtifactTTLHours:               artifactTTL,
+		OriginalTTLHours:               originalTTL,
+		TempTTLHours:                   tempTTL,
+		ArtifactTTLByFamily:            artifactTTLByFamily,
+		DisabledCapabilities:           disabledCapabilities,
+		DisabledEngines:                disabledEngines,
+		AppURL:                         appURL,
+		SMTPHost:                       smtpHost,
+		SMTPPort:                       smtpPort,
+		SMTPUser:                       smtpUser,
+		SMTPPassword:                   smtpPassword,
+		SMTPFrom:                       smtpFrom,
+		SMTPUseTLS:                     smtpUseTLS,
 	}, nil
 }
 
@@ -225,6 +234,15 @@ func loadEnvFile() {
 func lookupPositiveIntEnv(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return fallback
+}
+
+func lookupPositiveInt64Env(key string, fallback int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
 			return n
 		}
 	}

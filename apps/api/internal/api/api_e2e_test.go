@@ -191,29 +191,31 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 	emailSvc := emailpkg.NewService(&config.Config{}, siteSettingRepo, emailTemplateRepo, logger)
 
 	router := api.NewRouter(api.Deps{
-		Logger:                   logger,
-		Metrics:                  metrics,
-		Store:                    store,
-		Files:                    fileRepo,
-		Jobs:                     jobRepo,
-		Artifacts:                artifactRepo,
-		Audit:                    auditRepo,
-		Users:                    userRepo,
-		Dashboard:                dashboardRepo,
-		SiteSettings:             siteSettingRepo,
-		EmailTemplates:           emailTemplateRepo,
-		EmailService:             emailSvc,
-		Queue:                    jobQueue,
-		Orchestrator:             orch,
-		AuthService:              authSvc,
-		CORSOrigin:               "*",
-		ExposeMetrics:            false,
-		TrustProxyHeaders:        false,
-		UserUploadsPerMinute:     limits.userUploadsPerMinute,
-		UserUploadBurst:          limits.userUploadBurst,
-		UserConversionsPerMinute: limits.userConversionsPerMinute,
-		UserConversionBurst:      limits.userConversionBurst,
-		ArtifactTTLHours:         24,
+		Logger:                         logger,
+		Metrics:                        metrics,
+		Store:                          store,
+		Files:                          fileRepo,
+		Jobs:                           jobRepo,
+		Artifacts:                      artifactRepo,
+		Audit:                          auditRepo,
+		Users:                          userRepo,
+		Dashboard:                      dashboardRepo,
+		SiteSettings:                   siteSettingRepo,
+		EmailTemplates:                 emailTemplateRepo,
+		EmailService:                   emailSvc,
+		Queue:                          jobQueue,
+		Orchestrator:                   orch,
+		AuthService:                    authSvc,
+		CORSOrigin:                     "*",
+		ExposeMetrics:                  false,
+		TrustProxyHeaders:              false,
+		UserUploadsPerMinute:           limits.userUploadsPerMinute,
+		UserUploadBurst:                limits.userUploadBurst,
+		UserConversionsPerMinute:       limits.userConversionsPerMinute,
+		UserConversionBurst:            limits.userConversionBurst,
+		GuestCumulativeQuotaBytes:      500 * 1024 * 1024, // 500 MB for test
+		RegisteredCumulativeQuotaBytes: 500 * 1024 * 1024, // 500 MB for test
+		ArtifactTTLHours:               24,
 		ArtifactTTLByFamily: map[string]int{
 			"pdf":      48,
 			"image":    12,
@@ -580,7 +582,7 @@ func TestE2E_AdminCanUpdateUploadPolicy(t *testing.T) {
 	if data["viewerType"] != "guest" {
 		t.Fatalf("expected guest viewer type, got %v", data["viewerType"])
 	}
-	if data["guestMaxBytes"] != float64(25*1024*1024) {
+	if data["guestMaxBytes"] != float64(10*1024*1024) {
 		t.Fatalf("unexpected default guest limit: %v", data["guestMaxBytes"])
 	}
 	if data["registeredMaxBytes"] != float64(100*1024*1024) {
@@ -637,6 +639,17 @@ func TestE2E_AdminCanUpdateUploadPolicy(t *testing.T) {
 	}
 	if data["effectiveMaxBytes"] != float64(12*1024*1024) {
 		t.Fatalf("expected registered effective limit, got %v", data["effectiveMaxBytes"])
+	}
+
+	// Cumulative quota fields should appear in the response.
+	if _, ok := data["cumulativeQuotaBytes"]; !ok {
+		t.Fatal("expected cumulativeQuotaBytes in upload policy response")
+	}
+	if data["cumulativeQuotaBytes"] != float64(500*1024*1024) {
+		t.Fatalf("expected registered cumulative quota 500 MB, got %v", data["cumulativeQuotaBytes"])
+	}
+	if data["cumulativeUsedBytes"] != float64(0) {
+		t.Fatalf("expected 0 cumulative used bytes, got %v", data["cumulativeUsedBytes"])
 	}
 }
 

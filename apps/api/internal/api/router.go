@@ -18,30 +18,33 @@ import (
 
 // Deps groups all dependencies needed to wire up routes.
 type Deps struct {
-	Logger                   zerolog.Logger
-	Metrics                  *observability.Metrics
-	Store                    storage.Store
-	Files                    repository.FileRepository
-	Jobs                     repository.JobRepository
-	Artifacts                repository.ArtifactRepository
-	Audit                    repository.AuditRepository
-	Users                    repository.UserRepository
-	Dashboard                repository.DashboardRepository
-	SiteSettings             repository.SiteSettingRepository
-	EmailTemplates           repository.EmailTemplateRepository
-	EmailService             *email.Service
-	Queue                    queue.JobQueue
-	Orchestrator             *orchestrator.Service
-	AuthService              *auth.Service
-	CORSOrigin               string
-	ExposeMetrics            bool
-	TrustProxyHeaders        bool
-	ArtifactTTLHours         int
-	ArtifactTTLByFamily      map[string]int
-	UserUploadsPerMinute     int
-	UserUploadBurst          int
-	UserConversionsPerMinute int
-	UserConversionBurst      int
+	Logger                         zerolog.Logger
+	Metrics                        *observability.Metrics
+	Store                          storage.Store
+	Files                          repository.FileRepository
+	Jobs                           repository.JobRepository
+	Artifacts                      repository.ArtifactRepository
+	Audit                          repository.AuditRepository
+	Users                          repository.UserRepository
+	Dashboard                      repository.DashboardRepository
+	SiteSettings                   repository.SiteSettingRepository
+	EmailTemplates                 repository.EmailTemplateRepository
+	EmailService                   *email.Service
+	Queue                          queue.JobQueue
+	Orchestrator                   *orchestrator.Service
+	AuthService                    *auth.Service
+	CORSOrigin                     string
+	ExposeMetrics                  bool
+	MetricsToken                   string
+	TrustProxyHeaders              bool
+	ArtifactTTLHours               int
+	ArtifactTTLByFamily            map[string]int
+	UserUploadsPerMinute           int
+	UserUploadBurst                int
+	UserConversionsPerMinute       int
+	UserConversionBurst            int
+	GuestCumulativeQuotaBytes      int64
+	RegisteredCumulativeQuotaBytes int64
 }
 
 // NewRouter creates the chi router with all middleware and routes.
@@ -55,18 +58,28 @@ func NewRouter(d Deps) *chi.Mux {
 	r.Use(middleware.Logging(d.Logger))
 	r.Use(middleware.MetricsMiddleware(d.Metrics))
 	r.Use(middleware.CORS(d.CORSOrigin))
-	r.Use(middleware.RateLimit(20, 40, d.TrustProxyHeaders))
+	r.Use(middleware.RateLimit(20, 40, d.TrustProxyHeaders, d.Metrics))
 	r.Use(middleware.MaxBodySize(500 * 1024 * 1024)) // 500 MB global limit
 
 	if d.ExposeMetrics {
-		r.Handle("/metrics", promhttp.Handler())
+		metricsHandler := promhttp.Handler()
+		if d.MetricsToken != "" {
+			r.Handle("/metrics", middleware.BearerTokenAuth(d.MetricsToken)(metricsHandler))
+		} else {
+			r.Handle("/metrics", metricsHandler)
+		}
 	}
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", handlers.PublicHealth())
 		footer := &handlers.FooterHandler{Settings: d.SiteSettings}
-		uploadPolicy := &handlers.UploadPolicyHandler{Settings: d.SiteSettings}
+		uploadPolicy := &handlers.UploadPolicyHandler{
+			Settings:                       d.SiteSettings,
+			Files:                          d.Files,
+			GuestCumulativeQuotaBytes:      d.GuestCumulativeQuotaBytes,
+			RegisteredCumulativeQuotaBytes: d.RegisteredCumulativeQuotaBytes,
+		}
 		r.Get("/footer-message", footer.Get)
 
 		// Auth routes (public)
@@ -76,8 +89,8 @@ func NewRouter(d Deps) *chi.Mux {
 			Queue:  d.Queue,
 			Logger: d.Logger,
 		}
-		r.With(middleware.RateLimit(1, 5, d.TrustProxyHeaders)).Post("/auth/register", authH.Register)
-		r.With(middleware.RateLimit(1, 5, d.TrustProxyHeaders)).Post("/auth/login", authH.Login)
+		r.With(middleware.RateLimit(1, 5, d.TrustProxyHeaders, d.Metrics)).Post("/auth/register", authH.Register)
+		r.With(middleware.RateLimit(1, 5, d.TrustProxyHeaders, d.Metrics)).Post("/auth/login", authH.Login)
 		r.Post("/auth/logout", authH.Logout)
 
 		// File and conversion routes — optional authentication keeps ownership when
@@ -85,19 +98,21 @@ func NewRouter(d Deps) *chi.Mux {
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.OptionalAuth(d.AuthService, d.Users))
 			r.Use(middleware.OptionalGuestSession)
-			uploadQuota := middleware.UserOrIPRateLimit(d.UserUploadsPerMinute, d.UserUploadBurst, d.TrustProxyHeaders)
-			conversionQuota := middleware.UserOrIPRateLimit(d.UserConversionsPerMinute, d.UserConversionBurst, d.TrustProxyHeaders)
+			uploadQuota := middleware.UserOrIPRateLimit(d.UserUploadsPerMinute, d.UserUploadBurst, d.TrustProxyHeaders, d.Metrics)
+			conversionQuota := middleware.UserOrIPRateLimit(d.UserConversionsPerMinute, d.UserConversionBurst, d.TrustProxyHeaders, d.Metrics)
 
 			upload := &handlers.UploadHandler{
-				Settings: d.SiteSettings,
-				Store:    d.Store,
-				Files:    d.Files,
-				Audit:    d.Audit,
-				Logger:   d.Logger,
-				Metrics:  d.Metrics,
+				Settings:                       d.SiteSettings,
+				Store:                          d.Store,
+				Files:                          d.Files,
+				Audit:                          d.Audit,
+				Logger:                         d.Logger,
+				Metrics:                        d.Metrics,
+				GuestCumulativeQuotaBytes:      d.GuestCumulativeQuotaBytes,
+				RegisteredCumulativeQuotaBytes: d.RegisteredCumulativeQuotaBytes,
 			}
 			r.Get("/upload-policy", uploadPolicy.Get)
-			r.With(middleware.RateLimit(1, 2, d.TrustProxyHeaders), uploadQuota).Post("/files", upload.Handle)
+			r.With(middleware.RateLimit(1, 2, d.TrustProxyHeaders, d.Metrics), uploadQuota).Post("/files", upload.Handle)
 
 			caps := &handlers.CapabilitiesHandler{
 				Files: d.Files,
@@ -110,7 +125,7 @@ func NewRouter(d Deps) *chi.Mux {
 				Orchestrator: d.Orchestrator,
 				Logger:       d.Logger,
 			}
-			r.With(middleware.RateLimit(1, 3, d.TrustProxyHeaders), conversionQuota).Post("/conversions", conv.Handle)
+			r.With(middleware.RateLimit(1, 3, d.TrustProxyHeaders, d.Metrics), conversionQuota).Post("/conversions", conv.Handle)
 
 			jobs := &handlers.JobHandler{
 				Orchestrator: d.Orchestrator,

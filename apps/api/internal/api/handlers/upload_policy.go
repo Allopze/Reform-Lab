@@ -9,11 +9,12 @@ import (
 
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
+	"github.com/google/uuid"
 )
 
 const guestUploadMaxBytesSettingKey = "guest_upload_max_bytes"
 const registeredUploadMaxBytesSettingKey = "registered_upload_max_bytes"
-const defaultGuestUploadMaxBytes int64 = 25 * 1024 * 1024
+const defaultGuestUploadMaxBytes int64 = 10 * 1024 * 1024
 const defaultRegisteredUploadMaxBytes int64 = 100 * 1024 * 1024
 const minConfiguredUploadLimitBytes int64 = 1 * 1024 * 1024
 const maxMultipartBodyOverhead int64 = 1 * 1024 * 1024
@@ -24,11 +25,13 @@ type uploadPolicy struct {
 }
 
 type uploadPolicyResponse struct {
-	GuestMaxBytes      int64  `json:"guestMaxBytes"`
-	RegisteredMaxBytes int64  `json:"registeredMaxBytes"`
-	EffectiveMaxBytes  int64  `json:"effectiveMaxBytes"`
-	ViewerType         string `json:"viewerType"`
-	AbsoluteMaxBytes   int64  `json:"absoluteMaxBytes"`
+	GuestMaxBytes        int64  `json:"guestMaxBytes"`
+	RegisteredMaxBytes   int64  `json:"registeredMaxBytes"`
+	EffectiveMaxBytes    int64  `json:"effectiveMaxBytes"`
+	ViewerType           string `json:"viewerType"`
+	AbsoluteMaxBytes     int64  `json:"absoluteMaxBytes"`
+	CumulativeQuotaBytes int64  `json:"cumulativeQuotaBytes"`
+	CumulativeUsedBytes  int64  `json:"cumulativeUsedBytes"`
 }
 
 type updateUploadPolicyRequest struct {
@@ -37,7 +40,10 @@ type updateUploadPolicyRequest struct {
 }
 
 type UploadPolicyHandler struct {
-	Settings repository.SiteSettingRepository
+	Settings                       repository.SiteSettingRepository
+	Files                          repository.FileRepository
+	GuestCumulativeQuotaBytes      int64
+	RegisteredCumulativeQuotaBytes int64
 }
 
 func (h *UploadPolicyHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +53,14 @@ func (h *UploadPolicyHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondJSON(w, http.StatusOK, buildUploadPolicyResponse(policy, currentUser(r)))
+	u := currentUser(r)
+	guestSessionID := currentGuestSessionID(r)
+	quota, used := h.cumulativeQuotaInfo(r.Context(), u, guestSessionID)
+
+	resp := buildUploadPolicyResponse(policy, u)
+	resp.CumulativeQuotaBytes = quota
+	resp.CumulativeUsedBytes = used
+	respondJSON(w, http.StatusOK, resp)
 }
 
 func (h *UploadPolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -158,4 +171,24 @@ func uploadBodyLimitBytes(user *domain.User, policy uploadPolicy) int64 {
 		return maxUploadSize
 	}
 	return bodyLimit
+}
+
+// cumulativeQuotaInfo returns the applicable cumulative quota and the current
+// usage for the given user or guest session.  On errors it returns (0, 0) so
+// the caller still responds without crashing.
+func (h *UploadPolicyHandler) cumulativeQuotaInfo(ctx context.Context, u *domain.User, guestSessionID *uuid.UUID) (quota int64, used int64) {
+	if h.Files == nil {
+		return 0, 0
+	}
+	if u != nil {
+		quota = h.RegisteredCumulativeQuotaBytes
+		used, _ = h.Files.CumulativeBytesByUser(ctx, u.ID)
+		return quota, used
+	}
+	if guestSessionID != nil {
+		quota = h.GuestCumulativeQuotaBytes
+		used, _ = h.Files.CumulativeBytesByGuestSession(ctx, *guestSessionID)
+		return quota, used
+	}
+	return h.GuestCumulativeQuotaBytes, 0
 }

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -56,10 +57,6 @@ func NewService(jobs repository.JobRepository, audit repository.AuditRepository,
 // CreateAndEnqueue persists a new job and enqueues it for processing.
 // userID may be nil for system-owned work outside the public API.
 func (s *Service) CreateAndEnqueue(ctx context.Context, userID *uuid.UUID, fileID uuid.UUID, cap domain.Capability, inputPath string) (*domain.Job, error) {
-	if err := s.enforceActiveJobLimit(ctx, userID); err != nil {
-		return nil, err
-	}
-
 	now := time.Now().UTC()
 	job := domain.Job{
 		ID:           uuid.New(),
@@ -72,7 +69,11 @@ func (s *Service) CreateAndEnqueue(ctx context.Context, userID *uuid.UUID, fileI
 		CreatedAt:    now,
 	}
 
-	if err := s.jobs.Create(ctx, &job); err != nil {
+	// Atomically check the active job limit and create the job in a single transaction.
+	if err := s.jobs.CreateIfUnderLimit(ctx, &job, s.maxActiveJobsPerUser); err != nil {
+		if errors.Is(err, domain.ErrTooManyActiveJobs) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("persist job: %w", err)
 	}
 
@@ -115,20 +116,6 @@ func (s *Service) CreateAndEnqueue(ctx context.Context, userID *uuid.UUID, fileI
 	})
 
 	return &job, nil
-}
-
-func (s *Service) enforceActiveJobLimit(ctx context.Context, userID *uuid.UUID) error {
-	if userID == nil || s.maxActiveJobsPerUser <= 0 {
-		return nil
-	}
-	count, err := s.jobs.CountActiveByUser(ctx, *userID)
-	if err != nil {
-		return fmt.Errorf("count active jobs: %w", err)
-	}
-	if count >= s.maxActiveJobsPerUser {
-		return domain.ErrTooManyActiveJobs
-	}
-	return nil
 }
 
 // GetJob returns a job by ID.

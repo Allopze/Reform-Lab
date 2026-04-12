@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 
 	"github.com/allopze/reform-lab/apps/api/internal/capabilities"
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
@@ -70,6 +71,12 @@ func (h *ConversionHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	inputPath := h.Store.OriginalPath(fileID.String())
+
+	// Verify the original file still exists on disk (may have been purged by retention).
+	if _, statErr := os.Stat(inputPath); statErr != nil {
+		respondError(w, http.StatusGone, "original file expired or unavailable")
+		return
+	}
 
 	job, err := h.Orchestrator.CreateAndEnqueue(r.Context(), userIDPtr(u), fileID, *cap, inputPath)
 	if err != nil {

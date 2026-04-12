@@ -1,3 +1,8 @@
+# Development docker-compose — uses in-process embedded worker by default.
+# For production, use the redis profile with the production overlay:
+#   docker compose --profile redis -f docker-compose.yml -f docker-compose.production.yml up -d
+# The API will refuse to start in production mode without REDIS_URL set.
+
 services:
   # Redis is optional. Remove or comment out if not needed.
   redis:
@@ -29,6 +34,7 @@ services:
       LOG_LEVEL: "debug"
       JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set to a strong value}"
       EXPOSE_METRICS: "${EXPOSE_METRICS:-false}"
+      METRICS_TOKEN: "${METRICS_TOKEN:-}"
       TRUST_PROXY_HEADERS: "${TRUST_PROXY_HEADERS:-false}"
       IN_PROCESS_WORKER_CONCURRENCY: "${IN_PROCESS_WORKER_CONCURRENCY:-2}"
       WORKER_CONCURRENCY: "${WORKER_CONCURRENCY:-2}"

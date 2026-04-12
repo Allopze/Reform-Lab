@@ -53,3 +53,9 @@ logs/
 
 # Generated files
 *.lock
+
+# SQLite databases and backups (contain user data)
+apps/api/data/*.db
+apps/api/data/*.db-*
+apps/api/data/backups/
+apps/api/apps/

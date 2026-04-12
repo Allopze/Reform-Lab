@@ -20,6 +20,7 @@ func (e *MarkdownToDocxEngine) Execute(ctx context.Context, inputPath, outputDir
 	if err != nil {
 		return "", err
 	}
+	htmlDoc = sanitizeHTMLBytes(htmlDoc)
 
 	htmlPath := filepath.Join(outputDir, "rendered.html")
 	if err := os.WriteFile(htmlPath, htmlDoc, 0o644); err != nil {

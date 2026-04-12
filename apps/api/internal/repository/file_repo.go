@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
 	"github.com/google/uuid"
@@ -14,6 +15,10 @@ import (
 type FileRepository interface {
 	Create(ctx context.Context, f *domain.OriginalFile) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.OriginalFile, error)
+	MarkExpiredByInternalName(ctx context.Context, internalName string) error
+	DeleteExpiredBefore(ctx context.Context, cutoff time.Time) (int64, error)
+	CumulativeBytesByUser(ctx context.Context, userID uuid.UUID) (int64, error)
+	CumulativeBytesByGuestSession(ctx context.Context, sessionID uuid.UUID) (int64, error)
 }
 
 type sqliteFileRepo struct {
@@ -81,4 +86,47 @@ func (r *sqliteFileRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Ori
 	}
 	f.UploadedAt = t
 	return &f, nil
+}
+
+func (r *sqliteFileRepo) MarkExpiredByInternalName(ctx context.Context, internalName string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE files SET expired_at = ? WHERE internal_name = ? AND expired_at IS NULL`,
+		time.Now().UTC().Format(timeLayout), internalName,
+	)
+	return err
+}
+
+func (r *sqliteFileRepo) DeleteExpiredBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	res, err := r.db.ExecContext(ctx,
+		`DELETE FROM files WHERE expired_at IS NOT NULL AND expired_at < ?`,
+		cutoff.Format(timeLayout),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (r *sqliteFileRepo) CumulativeBytesByUser(ctx context.Context, userID uuid.UUID) (int64, error) {
+	var total sql.NullInt64
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(size), 0) FROM files WHERE user_id = ? AND expired_at IS NULL`,
+		userID.String(),
+	).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("cumulative bytes by user: %w", err)
+	}
+	return total.Int64, nil
+}
+
+func (r *sqliteFileRepo) CumulativeBytesByGuestSession(ctx context.Context, sessionID uuid.UUID) (int64, error) {
+	var total sql.NullInt64
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(size), 0) FROM files WHERE guest_session_id = ? AND expired_at IS NULL`,
+		sessionID.String(),
+	).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("cumulative bytes by guest session: %w", err)
+	}
+	return total.Int64, nil
 }

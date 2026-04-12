@@ -155,34 +155,55 @@ func main() {
 	defer stopRetention()
 	retention := orchestrator.NewRetentionService(artifactRepo, jobRepo, logger)
 	go retention.Start(retentionCtx, 15*time.Minute)
-	storageCleanup := storage.NewCleanupService(storageFS.BasePath(), logger, time.Duration(cfg.OriginalTTLHours)*time.Hour, time.Duration(cfg.TempTTLHours)*time.Hour)
+	storageCleanup := storage.NewCleanupService(storageFS.BasePath(), logger, time.Duration(cfg.OriginalTTLHours)*time.Hour, time.Duration(cfg.TempTTLHours)*time.Hour).
+		WithFileExpirer(fileRepo)
 	go storageCleanup.Start(retentionCtx, 30*time.Minute)
+
+	// Periodically update disk pressure gauges.
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			if free, total, err := storageFS.DiskStats(); err == nil {
+				metrics.DiskFreeBytes.Set(float64(free))
+				metrics.DiskTotalBytes.Set(float64(total))
+			}
+			select {
+			case <-retentionCtx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 
 	// Router
 	router := api.NewRouter(api.Deps{
-		Logger:                   logger,
-		Metrics:                  metrics,
-		Store:                    store,
-		Files:                    fileRepo,
-		Jobs:                     jobRepo,
-		Artifacts:                artifactRepo,
-		Audit:                    auditRepo,
-		Users:                    userRepo,
-		Dashboard:                dashboardRepo,
-		SiteSettings:             siteSettingRepo,
-		EmailTemplates:           emailTemplateRepo,
-		EmailService:             emailSvc,
-		Queue:                    jobQueue,
-		Orchestrator:             orch,
-		AuthService:              authSvc,
-		CORSOrigin:               cfg.CORSOrigin,
-		ExposeMetrics:            cfg.ExposeMetrics,
-		TrustProxyHeaders:        cfg.TrustProxyHeaders,
-		UserUploadsPerMinute:     cfg.UserUploadsPerMinute,
-		UserUploadBurst:          cfg.UserUploadBurst,
-		UserConversionsPerMinute: cfg.UserConversionsPerMinute,
-		UserConversionBurst:      cfg.UserConversionBurst,
-		ArtifactTTLHours:         cfg.ArtifactTTLHours,
+		Logger:                         logger,
+		Metrics:                        metrics,
+		Store:                          store,
+		Files:                          fileRepo,
+		Jobs:                           jobRepo,
+		Artifacts:                      artifactRepo,
+		Audit:                          auditRepo,
+		Users:                          userRepo,
+		Dashboard:                      dashboardRepo,
+		SiteSettings:                   siteSettingRepo,
+		EmailTemplates:                 emailTemplateRepo,
+		EmailService:                   emailSvc,
+		Queue:                          jobQueue,
+		Orchestrator:                   orch,
+		AuthService:                    authSvc,
+		CORSOrigin:                     cfg.CORSOrigin,
+		ExposeMetrics:                  cfg.ExposeMetrics,
+		MetricsToken:                   cfg.MetricsToken,
+		TrustProxyHeaders:              cfg.TrustProxyHeaders,
+		UserUploadsPerMinute:           cfg.UserUploadsPerMinute,
+		UserUploadBurst:                cfg.UserUploadBurst,
+		UserConversionsPerMinute:       cfg.UserConversionsPerMinute,
+		UserConversionBurst:            cfg.UserConversionBurst,
+		GuestCumulativeQuotaBytes:      cfg.GuestCumulativeQuotaBytes,
+		RegisteredCumulativeQuotaBytes: cfg.RegisteredCumulativeQuotaBytes,
+		ArtifactTTLHours:               cfg.ArtifactTTLHours,
 		ArtifactTTLByFamily: map[string]int{
 			"pdf":      cfg.ArtifactTTLByFamily[domain.FamilyPDF],
 			"image":    cfg.ArtifactTTLByFamily[domain.FamilyImage],

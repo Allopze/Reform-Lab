@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/allopze/reform-lab/apps/api/internal/observability"
 	"golang.org/x/time/rate"
 )
 
@@ -18,10 +19,14 @@ type rateLimiterEntry struct {
 // RateLimit applies a per-IP token-bucket rate limiter.
 // rps is requests per second per IP; burst is the maximum burst size per IP.
 // Stale entries are cleaned up every 3 minutes.
-func RateLimit(rps float64, burst int, trustProxyHeaders bool) func(http.Handler) http.Handler {
+func RateLimit(rps float64, burst int, trustProxyHeaders bool, m ...*observability.Metrics) func(http.Handler) http.Handler {
+	var reject func()
+	if len(m) > 0 && m[0] != nil {
+		reject = func() { m[0].RateLimitHits.WithLabelValues("ip").Inc() }
+	}
 	return keyedRateLimit(rps, burst, func(r *http.Request) (string, bool) {
 		return realIP(r, trustProxyHeaders), true
-	}, nil, "rate limit exceeded")
+	}, nil, "rate limit exceeded", reject)
 }
 
 // AuthenticatedUserRateLimit applies a token-bucket quota keyed by authenticated user ID.
@@ -43,9 +48,13 @@ func AuthenticatedUserRateLimit(perMinute, burst int) func(http.Handler) http.Ha
 
 // UserOrIPRateLimit applies a quota keyed by authenticated user ID when present,
 // and falls back to client IP for anonymous requests.
-func UserOrIPRateLimit(perMinute, burst int, trustProxyHeaders bool) func(http.Handler) http.Handler {
+func UserOrIPRateLimit(perMinute, burst int, trustProxyHeaders bool, m ...*observability.Metrics) func(http.Handler) http.Handler {
 	if perMinute <= 0 || burst <= 0 {
 		return func(next http.Handler) http.Handler { return next }
+	}
+	var reject func()
+	if len(m) > 0 && m[0] != nil {
+		reject = func() { m[0].RateLimitHits.WithLabelValues("user_or_ip").Inc() }
 	}
 	return keyedRateLimit(float64(perMinute)/60.0, burst, func(r *http.Request) (string, bool) {
 		u := UserFromContext(r.Context())
@@ -53,7 +62,7 @@ func UserOrIPRateLimit(perMinute, burst int, trustProxyHeaders bool) func(http.H
 			return "user:" + u.ID.String(), true
 		}
 		return "ip:" + realIP(r, trustProxyHeaders), true
-	}, nil, "user quota exceeded")
+	}, nil, "user quota exceeded", reject)
 }
 
 func keyedRateLimit(
@@ -62,6 +71,7 @@ func keyedRateLimit(
 	keyFn func(*http.Request) (string, bool),
 	onMissing func(http.ResponseWriter),
 	errorMessage string,
+	onReject ...func(), // optional callback when a request is rejected
 ) func(http.Handler) http.Handler {
 	var mu sync.Mutex
 	limiters := make(map[string]*rateLimiterEntry)
@@ -110,6 +120,9 @@ func keyedRateLimit(
 
 			limiter := getLimiter(key)
 			if !limiter.Allow() {
+				if len(onReject) > 0 && onReject[0] != nil {
+					onReject[0]()
+				}
 				w.Header().Set("Retry-After", "1")
 				respondJSON(w, http.StatusTooManyRequests, map[string]string{
 					"error": errorMessage,

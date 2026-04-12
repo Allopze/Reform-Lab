@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"golang.org/x/sys/unix"
 )
 
 // Filesystem implements Store using the local file system.
@@ -34,6 +36,9 @@ func (fs *Filesystem) BasePath() string {
 }
 
 func (fs *Filesystem) SaveOriginal(_ context.Context, fileID string, r io.Reader) (string, error) {
+	if err := checkDiskSpace(fs.basePath, minFreeDiskBytes); err != nil {
+		return "", err
+	}
 	dir := filepath.Join(fs.basePath, "originals", fileID)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", fmt.Errorf("create original dir: %w", err)
@@ -111,4 +116,32 @@ func writeFile(path string, r io.Reader) error {
 		return fmt.Errorf("write file %s: %w", path, err)
 	}
 	return nil
+}
+
+// minFreeDiskBytes is the minimum free disk space (500 MB) required before
+// accepting new files. This prevents the storage partition from filling up.
+const minFreeDiskBytes uint64 = 500 * 1024 * 1024
+
+// ErrInsufficientDisk is returned when available disk space is too low.
+var ErrInsufficientDisk = fmt.Errorf("insufficient disk space")
+
+func checkDiskSpace(path string, minFree uint64) error {
+	var stat unix.Statfs_t
+	if err := unix.Statfs(path, &stat); err != nil {
+		return fmt.Errorf("check disk space: %w", err)
+	}
+	available := stat.Bavail * uint64(stat.Bsize)
+	if available < minFree {
+		return ErrInsufficientDisk
+	}
+	return nil
+}
+
+// DiskStats returns (free bytes, total bytes) for the storage partition.
+func (fs *Filesystem) DiskStats() (free uint64, total uint64, err error) {
+	var stat unix.Statfs_t
+	if err := unix.Statfs(fs.basePath, &stat); err != nil {
+		return 0, 0, err
+	}
+	return stat.Bavail * uint64(stat.Bsize), stat.Blocks * uint64(stat.Bsize), nil
 }

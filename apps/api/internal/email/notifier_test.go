@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/allopze/reform-lab/apps/api/config"
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
@@ -65,6 +66,16 @@ func (r *stubFileRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Origina
 		return nil, errors.New("not found")
 	}
 	return f, nil
+}
+func (r *stubFileRepo) MarkExpiredByInternalName(_ context.Context, _ string) error { return nil }
+func (r *stubFileRepo) DeleteExpiredBefore(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
+func (r *stubFileRepo) CumulativeBytesByUser(_ context.Context, _ uuid.UUID) (int64, error) {
+	return 0, nil
+}
+func (r *stubFileRepo) CumulativeBytesByGuestSession(_ context.Context, _ uuid.UUID) (int64, error) {
+	return 0, nil
 }
 
 // --- Helpers ---
