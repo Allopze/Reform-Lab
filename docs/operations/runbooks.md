@@ -30,6 +30,38 @@ Es una guía para actuar sin improvisar.
 - el script espera `/api/health`, crea usuarios aislados por escenario y evita confundir cuotas anti-abuso con fallos funcionales
 - usar un `JWT_SECRET` válido y suficientemente largo al ejecutarlo fuera de un entorno ya configurado
 
+## Despliegue: Docker Compose en servidor
+
+### Stack esperado
+
+- `docker-compose.yml` en la raíz del repo es la referencia de despliegue full stack
+- expone `web` en `5050` y `api` en `8080` por defecto
+- usa Redis y worker standalone en modo `production`
+
+### Persistencia en host
+
+- SQLite, originales, temporales y artefactos viven en `./runtime/data` relativo al directorio donde se ejecuta `docker compose`
+- Redis persiste en `./runtime/redis`
+
+### Procedimiento base
+
+1. copiar `.env.production.example` a `.env`
+2. ajustar URLs públicas, `JWT_SECRET` y cualquier secreto adicional
+3. levantar con:
+   ```bash
+   docker compose up -d --build
+   ```
+4. verificar salud:
+   ```bash
+   curl http://127.0.0.1:8080/api/health
+   ```
+
+### Notas
+
+- cambios en `NEXT_PUBLIC_API_URL` requieren rebuild del servicio `web`
+- no borrar manualmente `./runtime/data` sin entender el impacto en SQLite y artefactos
+- si el servidor queda detrás de proxy, mantener `TRUST_PROXY_HEADERS=true` solo si ese proxy sanea `X-Forwarded-*`
+
 ---
 
 ## Incidente: la cola crece sin bajar

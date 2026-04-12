@@ -1,0 +1,5 @@
+.DS_Store
+apps/
+data/
+server
+tests/

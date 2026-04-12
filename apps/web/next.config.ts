@@ -38,6 +38,7 @@ const cspHeader = `
 `;
 
 const nextConfig: NextConfig = {
+	output: "standalone",
 	outputFileTracingRoot: path.resolve(process.cwd(), "../.."),
 	async headers() {
 		return [

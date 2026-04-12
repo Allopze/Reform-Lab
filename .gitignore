@@ -3,6 +3,7 @@ node_modules/
 pnpm-lock.yaml
 yarn.lock
 package-lock.json
+!apps/web/package-lock.json
 
 # Python
 __pycache__/
@@ -53,6 +54,10 @@ logs/
 
 # Generated files
 *.lock
+
+# Docker Compose runtime state
+runtime/
+releases/
 
 # SQLite databases and backups (contain user data)
 apps/api/data/*.db

@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "release": "node scripts/release.mjs",
     "dev": "concurrently -n web,api -c cyan,green \"npm run dev:web\" \"npm run dev:api\"",
     "dev:web": "cd apps/web && npm run dev",
     "dev:api": "cd apps/api && ENV_FILE=../../.env go run ./cmd/server"

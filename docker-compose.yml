@@ -1,0 +1,141 @@
+x-runtime-env: &runtime-env
+  APP_ENV: "${APP_ENV:-production}"
+  DATABASE_PATH: "/data/reform.db"
+  MIGRATIONS_PATH: "/app/migrations"
+  STORAGE_BASE_PATH: "/data"
+  REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
+  LOG_LEVEL: "${LOG_LEVEL:-info}"
+  JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set to a strong value}"
+  APP_URL: "${APP_URL:-http://localhost:${WEB_HOST_PORT:-5050}}"
+  BOOTSTRAP_ADMIN_EMAILS: "${BOOTSTRAP_ADMIN_EMAILS:-}"
+  ORIGINAL_RETENTION_HOURS: "${ORIGINAL_RETENTION_HOURS:-24}"
+  TEMP_RETENTION_HOURS: "${TEMP_RETENTION_HOURS:-6}"
+  ARTIFACT_TTL_HOURS: "${ARTIFACT_TTL_HOURS:-24}"
+  ARTIFACT_TTL_HOURS_PDF: "${ARTIFACT_TTL_HOURS_PDF:-48}"
+  ARTIFACT_TTL_HOURS_IMAGE: "${ARTIFACT_TTL_HOURS_IMAGE:-12}"
+  ARTIFACT_TTL_HOURS_DOCUMENT: "${ARTIFACT_TTL_HOURS_DOCUMENT:-24}"
+  ARTIFACT_TTL_HOURS_AUDIO: "${ARTIFACT_TTL_HOURS_AUDIO:-72}"
+  ARTIFACT_TTL_HOURS_VIDEO: "${ARTIFACT_TTL_HOURS_VIDEO:-96}"
+  FEATURE_DISABLE_CAPABILITIES: "${FEATURE_DISABLE_CAPABILITIES:-}"
+  FEATURE_DISABLE_ENGINES: "${FEATURE_DISABLE_ENGINES:-}"
+  SMTP_HOST: "${SMTP_HOST:-}"
+  SMTP_PORT: "${SMTP_PORT:-587}"
+  SMTP_USER: "${SMTP_USER:-}"
+  SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+  SMTP_FROM: "${SMTP_FROM:-noreply@example.com}"
+  SMTP_USE_TLS: "${SMTP_USE_TLS:-true}"
+
+services:
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL must point to the public API URL}"
+        NEXT_PUBLIC_SENTRY_DSN: "${NEXT_PUBLIC_SENTRY_DSN:-}"
+        SENTRY_ORG: "${SENTRY_ORG:-}"
+        SENTRY_PROJECT: "${SENTRY_PROJECT:-}"
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "${WEB_BIND_ADDRESS:-0.0.0.0}:${WEB_HOST_PORT:-5050}:5050"
+    environment:
+      PORT: "5050"
+      HOSTNAME: "0.0.0.0"
+      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL must point to the public API URL}"
+    networks:
+      - public
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - ./runtime/redis:/data
+    networks:
+      - worker_internal
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    init: true
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "${API_BIND_ADDRESS:-0.0.0.0}:${API_HOST_PORT:-8080}:8080"
+    environment:
+      <<: *runtime-env
+      PORT: "8080"
+      CORS_ORIGIN: "${CORS_ORIGIN:?CORS_ORIGIN must match the public web origin}"
+      EXPOSE_METRICS: "${EXPOSE_METRICS:-false}"
+      METRICS_TOKEN: "${METRICS_TOKEN:-}"
+      TRUST_PROXY_HEADERS: "${TRUST_PROXY_HEADERS:-true}"
+      IN_PROCESS_WORKER_CONCURRENCY: "0"
+      WORKER_CONCURRENCY: "${WORKER_CONCURRENCY:-2}"
+      USER_UPLOADS_PER_MINUTE: "${USER_UPLOADS_PER_MINUTE:-12}"
+      USER_UPLOAD_BURST: "${USER_UPLOAD_BURST:-4}"
+      USER_CONVERSIONS_PER_MINUTE: "${USER_CONVERSIONS_PER_MINUTE:-6}"
+      USER_CONVERSION_BURST: "${USER_CONVERSION_BURST:-3}"
+      MAX_ACTIVE_JOBS_PER_USER: "${MAX_ACTIVE_JOBS_PER_USER:-3}"
+      MAX_ACTIVE_JOBS_PER_GUEST_SESSION: "${MAX_ACTIVE_JOBS_PER_GUEST_SESSION:-1}"
+      GUEST_CUMULATIVE_QUOTA_BYTES: "${GUEST_CUMULATIVE_QUOTA_BYTES:-26214400}"
+      REGISTERED_CUMULATIVE_QUOTA_BYTES: "${REGISTERED_CUMULATIVE_QUOTA_BYTES:-524288000}"
+    volumes:
+      - ./runtime/data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=268435456,mode=1777
+      - /run:size=16777216,mode=755
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: "${API_MEMORY_LIMIT:-1024m}"
+    cpus: "${API_CPUS:-1.00}"
+    networks:
+      - public
+      - worker_internal
+
+  worker:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.worker
+    init: true
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *runtime-env
+      WORKER_CONCURRENCY: "${WORKER_CONCURRENCY:-2}"
+    volumes:
+      - ./runtime/data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=536870912,mode=1777
+      - /run:size=16777216,mode=755
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: "${WORKER_MEMORY_LIMIT:-2048m}"
+    cpus: "${WORKER_CPUS:-2.00}"
+    networks:
+      - worker_internal
+
+networks:
+  public:
+  worker_internal:
+    internal: true

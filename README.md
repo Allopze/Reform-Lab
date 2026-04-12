@@ -108,11 +108,74 @@ Servicios por defecto:
 | Comando | Qué hace |
 | --- | --- |
 | `npm run dev` | levanta frontend y API usando el `.env` raíz |
+| `npm run release` | genera `releases/release.zip` con los archivos necesarios para desplegar con Docker Compose |
 | `cd apps/web && npm test` | ejecuta la suite frontend |
 | `cd apps/web && npm run build` | build de Next.js |
 | `cd apps/api && go test ./...` | ejecuta la suite del backend |
 | `cd apps/api && ENV_FILE=../../.env go run ./cmd/server` | arranca solo el API |
 | `bash apps/api/scripts/docker-e2e-smoke.sh` | smoke test Docker del API |
+
+## Despliegue con Docker Compose
+
+El repositorio ahora incluye un `docker-compose.yml` en la raíz orientado a servidor.
+Ese stack levanta:
+
+- `web`: Next.js en `5050`
+- `api`: backend Go en `8080`
+- `worker`: worker standalone con Redis
+- `redis`: cola persistente
+
+Persistencia del despliegue:
+
+- archivos originales, temporales, artefactos y SQLite quedan en `./runtime/data`
+- Redis persiste en `./runtime/redis`
+
+Eso significa que, si despliegas el proyecto en `/opt/reform-lab`, los archivos subidos quedarán físicamente bajo `/opt/reform-lab/runtime/data/originals` y los artefactos bajo `/opt/reform-lab/runtime/data/artifacts`.
+
+### Pasos de despliegue
+
+1. crear el archivo de entorno de producción:
+
+```bash
+cp .env.production.example .env
+```
+
+2. editar al menos:
+
+- `JWT_SECRET`
+- `CORS_ORIGIN`
+- `NEXT_PUBLIC_API_URL`
+- `APP_URL`
+- `BOOTSTRAP_ADMIN_EMAILS` si quieres restringir el primer admin
+
+3. levantar el stack:
+
+```bash
+docker compose up -d --build
+```
+
+4. verificar salud del API:
+
+```bash
+curl http://127.0.0.1:8080/api/health
+```
+
+### Empaquetado de release
+
+Para generar un ZIP listo para mover al servidor:
+
+```bash
+npm run release
+```
+
+El comando crea `releases/release.zip` en la raíz del repo.
+Ese ZIP incluye únicamente los archivos necesarios para reconstruir y levantar el stack Docker de producción desde el servidor.
+
+Notas operativas:
+
+- si cambias `NEXT_PUBLIC_API_URL`, vuelve a construir la web con `docker compose up -d --build web`
+- si `EXPOSE_METRICS=true`, configura también `METRICS_TOKEN` para no dejar `/metrics` abierto
+- el compose de `apps/api/` sigue existiendo como stack de desarrollo y smoke del backend, no como despliegue full stack de servidor
 
 ## Variables de entorno
 
@@ -120,7 +183,8 @@ Servicios por defecto:
 
 - `.env` en la raíz: archivo principal para desarrollo local full stack
 - `.env.example` en la raíz: plantilla completa y sincronizada con el runtime real
-- `apps/web/.env.example`: plantilla mínima solo para arrancar el frontend por separado
+- `.env.production.example` en la raíz: plantilla orientada al despliegue con el `docker-compose.yml` root
+- `apps/web/.env.example`: plantilla mínima solo para arrancar el frontend por separado; no intenta documentar todo el sistema
 - `ENV_FILE`: override opcional para que el API cargue otro archivo distinto
 
 ### Runtime del API
@@ -128,7 +192,6 @@ Servicios por defecto:
 | Variable | Obligatoria | Default de código | Qué hace |
 | --- | --- | --- | --- |
 | `APP_ENV` | no | `development` | controla el modo general; `production` exige `REDIS_URL` y bloquea el auto-admin del primer registro |
-| `API_BIND_ADDRESS` | no | `127.0.0.1` | en el compose base liga la API a loopback para no exponer accidentalmente el modo de desarrollo |
 | `PORT` | no | `8080` | puerto HTTP del API |
 | `DATABASE_PATH` | no | `./data/reform.db` | ruta de la base SQLite |
 | `MIGRATIONS_PATH` | no | `./migrations` | ruta de migraciones SQL |
@@ -138,8 +201,10 @@ Servicios por defecto:
 | `JWT_SECRET` | sí | sin fallback válido | secreto para firmar sesión JWT; mínimo 32 caracteres y sin placeholders banales |
 | `REDIS_URL` | no en local, sí en producción | vacío | activa cola Redis; vacío usa cola en proceso |
 | `BOOTSTRAP_ADMIN_EMAILS` | no | vacío | lista separada por comas con los emails autorizados a reclamar el primer admin en `production` |
+| `APP_URL` | no | hereda `CORS_ORIGIN` | URL pública base usada por emails y links generados por backend |
 | `MAX_ACTIVE_JOBS_PER_GUEST_SESSION` | no | `1` | limita cuántas conversiones activas puede mantener una sesión anónima simultáneamente |
 | `EXPOSE_METRICS` | no | `false` | expone `/metrics` para Prometheus |
+| `METRICS_TOKEN` | no | vacío | protege `/metrics` con bearer token cuando está configurado |
 | `TRUST_PROXY_HEADERS` | no | `false` | usa headers tipo `X-Forwarded-*` al calcular IP y seguridad |
 
 ### Concurrencia y cuotas
@@ -153,6 +218,8 @@ Servicios por defecto:
 | `USER_CONVERSIONS_PER_MINUTE` | no | `6` | cuota por usuario o IP para conversiones |
 | `USER_CONVERSION_BURST` | no | `3` | burst permitido para conversiones |
 | `MAX_ACTIVE_JOBS_PER_USER` | no | `3` | límite de jobs activos por usuario |
+| `GUEST_CUMULATIVE_QUOTA_BYTES` | no | `26214400` | cuota acumulada total por sesión anónima, en bytes |
+| `REGISTERED_CUMULATIVE_QUOTA_BYTES` | no | `524288000` | cuota acumulada total por usuario registrado, en bytes |
 
 ### Retención y limpieza
 
@@ -174,16 +241,51 @@ Servicios por defecto:
 | `FEATURE_DISABLE_CAPABILITIES` | no | vacío | CSV de capability IDs deshabilitados |
 | `FEATURE_DISABLE_ENGINES` | no | vacío | CSV de engines deshabilitados |
 
+### Email y observabilidad
+
+| Variable | Obligatoria | Default de código | Qué hace |
+| --- | --- | --- | --- |
+| `SMTP_HOST` | no | vacío | host SMTP; vacío desactiva el envío de emails |
+| `SMTP_PORT` | no | `587` | puerto SMTP |
+| `SMTP_USER` | no | vacío | usuario SMTP |
+| `SMTP_PASSWORD` | no | vacío | password o token SMTP |
+| `SMTP_FROM` | no | `noreply@example.com` | remitente usado por el sistema |
+| `SMTP_USE_TLS` | no | `true` | activa TLS al conectar con SMTP |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | no | vacío | endpoint OTLP HTTP; vacío deja el tracing como no-op |
+
 ### Frontend
 
 | Variable | Obligatoria | Default de código | Qué hace |
 | --- | --- | --- | --- |
 | `NEXT_PUBLIC_API_URL` | no, pero recomendada | `http://localhost:8080` | base URL del API consumido por Next.js |
+| `NEXT_PUBLIC_SENTRY_DSN` | no | vacío | activa Sentry en cliente, edge y server cuando existe |
+| `SENTRY_ORG` | no | vacío | organización de Sentry usada en el build de Next cuando se habilita Sentry |
+| `SENTRY_PROJECT` | no | vacío | proyecto de Sentry usado en el build de Next cuando se habilita Sentry |
 
 Nota importante sobre `NEXT_PUBLIC_API_URL`:
 
 - si apunta a loopback (`localhost` o `127.0.0.1`) y abres la web desde una URL LAN, el frontend reutiliza el hostname actual para no morir en un precioso “Load failed”
 - eso no reemplaza `CORS_ORIGIN`; solo evita que el cliente intente hablar con el loopback equivocado
+
+Notas sobre Sentry:
+
+- `NEXT_PUBLIC_SENTRY_DSN` es la llave que realmente activa la integración
+- `SENTRY_ORG` y `SENTRY_PROJECT` solo tienen sentido si estás construyendo la web con soporte Sentry habilitado
+
+### Variables de despliegue Docker Compose
+
+Estas variables no las consume directamente `config.go`; las usa el `docker-compose.yml` root para puertos, recursos y build de imágenes.
+
+| Variable | Obligatoria | Default del compose | Qué hace |
+| --- | --- | --- | --- |
+| `WEB_BIND_ADDRESS` | no | `0.0.0.0` | IP de bind del contenedor `web` en el host |
+| `WEB_HOST_PORT` | no | `5050` | puerto expuesto para la web |
+| `API_BIND_ADDRESS` | no | `0.0.0.0` | IP de bind del contenedor `api` en el host |
+| `API_HOST_PORT` | no | `8080` | puerto expuesto para la API |
+| `API_MEMORY_LIMIT` | no | `1024m` | límite de memoria del contenedor `api` |
+| `API_CPUS` | no | `1.00` | límite de CPU del contenedor `api` |
+| `WORKER_MEMORY_LIMIT` | no | `2048m` | límite de memoria del contenedor `worker` |
+| `WORKER_CPUS` | no | `2.00` | límite de CPU del contenedor `worker` |
 
 ### Variables operativas adicionales
 

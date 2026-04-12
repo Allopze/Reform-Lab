@@ -12,6 +12,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@swc/helpers": "^0.5.21",
     "@codemirror/lang-html": "^6.4.11",
     "@sentry/nextjs": "^10.48.0",
     "@tailwindcss/typography": "^0.5.19",
