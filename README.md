@@ -129,6 +129,7 @@ Persistencia del despliegue:
 
 - archivos originales, temporales, artefactos y SQLite quedan en `./runtime/data`
 - Redis persiste en `./runtime/redis`
+- los contenedores `api` y `worker` reclaman la propiedad de `./runtime/data` al arrancar para que SQLite y storage puedan escribir aunque el bind mount se haya creado como `root:root`
 
 Eso significa que, si despliegas el proyecto en `/opt/reform-lab`, los archivos subidos quedarán físicamente bajo `/opt/reform-lab/runtime/data/originals` y los artefactos bajo `/opt/reform-lab/runtime/data/artifacts`.
 

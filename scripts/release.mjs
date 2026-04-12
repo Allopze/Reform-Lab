@@ -17,12 +17,15 @@ const manifest = [
   { path: "apps/api/.dockerignore" },
   { path: "apps/api/Dockerfile" },
   { path: "apps/api/Dockerfile.worker" },
+  { path: "apps/api/alerts.yml" },
   { path: "apps/api/go.mod" },
   { path: "apps/api/go.sum" },
   { path: "apps/api/cmd" },
   { path: "apps/api/config", exclude: [isGoTestFile] },
   { path: "apps/api/internal", exclude: [isGoTestFile, isTestDataPath] },
   { path: "apps/api/migrations" },
+  { path: "apps/api/scripts/backup-db.sh" },
+  { path: "apps/api/scripts/docker-entrypoint.sh" },
   { path: "apps/web/.dockerignore" },
   { path: "apps/web/Dockerfile" },
   { path: "apps/web/package.json" },
@@ -105,8 +108,8 @@ function isFrontendTestPath(relativePath) {
 }
 
 function createArchive() {
-  const zipfileResult = spawnSync("python3", ["-m", "zipfile", "-c", "release.zip", "release"], {
-    cwd: releasesDir,
+  const zipfileResult = spawnSync("python3", ["-m", "zipfile", "-c", archivePath, "."], {
+    cwd: stagingDir,
     stdio: "inherit",
   });
 
@@ -118,8 +121,8 @@ function createArchive() {
     throw zipfileResult.error;
   }
 
-  const zipResult = spawnSync("zip", ["-rq", "release.zip", "release"], {
-    cwd: releasesDir,
+  const zipResult = spawnSync("zip", ["-rq", archivePath, "."], {
+    cwd: stagingDir,
     stdio: "inherit",
   });
 

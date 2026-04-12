@@ -42,6 +42,7 @@ Es una guía para actuar sin improvisar.
 
 - SQLite, originales, temporales y artefactos viven en `./runtime/data` relativo al directorio donde se ejecuta `docker compose`
 - Redis persiste en `./runtime/redis`
+- `api` y `worker` corrigen la ownership de `./runtime/data` al arrancar para evitar fallos de SQLite en despliegues nuevos con bind mounts vacíos
 
 ### Procedimiento base
 

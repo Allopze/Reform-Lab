@@ -12,9 +12,8 @@ import (
 
 // Open opens (or creates) the SQLite database at the given path and runs migrations.
 func Open(dbPath string) (*sql.DB, error) {
-	dir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("create db directory: %w", err)
+	if err := ensureWritableDatabasePath(dbPath); err != nil {
+		return nil, err
 	}
 
 	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
@@ -31,6 +30,24 @@ func Open(dbPath string) (*sql.DB, error) {
 	db.SetMaxOpenConns(1)
 
 	return db, nil
+}
+
+func ensureWritableDatabasePath(dbPath string) error {
+	dir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create db directory: %w", err)
+	}
+
+	file, err := os.OpenFile(dbPath, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("prepare sqlite file %q: %w", dbPath, err)
+	}
+
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close sqlite file %q: %w", dbPath, err)
+	}
+
+	return nil
 }
 
 // Migrate runs all SQL migration files against the database.

@@ -39,8 +39,8 @@ RUN apt-get update && \
 WORKDIR /app
 COPY --from=builder /bin/server /app/server
 COPY migrations/ /app/migrations/
-
-USER app
+COPY scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod 755 /app/docker-entrypoint.sh
 
 EXPOSE 8080
-ENTRYPOINT ["/app/server"]
+ENTRYPOINT ["/app/docker-entrypoint.sh", "/app/server"]
