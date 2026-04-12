@@ -17,6 +17,7 @@ type JobRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Job, error)
 	Update(ctx context.Context, j *domain.Job) error
 	CountActiveByUser(ctx context.Context, userID uuid.UUID) (int, error)
+	CountActiveByGuestSession(ctx context.Context, sessionID uuid.UUID) (int, error)
 	ExpireArtifact(ctx context.Context, artifactID uuid.UUID, expiredAt time.Time) error
 }
 
@@ -144,6 +145,23 @@ func (r *sqliteJobRepo) CountActiveByUser(ctx context.Context, userID uuid.UUID)
 	).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count active jobs for user %s: %w", userID, err)
+	}
+	return count, nil
+}
+
+func (r *sqliteJobRepo) CountActiveByGuestSession(ctx context.Context, sessionID uuid.UUID) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*)
+		 FROM jobs j
+		 JOIN files f ON f.id = j.file_id
+		 WHERE f.guest_session_id = ?
+		   AND f.expired_at IS NULL
+		   AND j.status IN (?, ?)`,
+		sessionID.String(), string(domain.JobQueued), string(domain.JobRunning),
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count active jobs for guest session %s: %w", sessionID, err)
 	}
 	return count, nil
 }

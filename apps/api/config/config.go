@@ -33,6 +33,7 @@ type Config struct {
 	UserConversionsPerMinute       int
 	UserConversionBurst            int
 	MaxActiveJobsPerUser           int
+	MaxActiveJobsPerGuestSession   int
 	ArtifactTTLHours               int // how many hours artifacts are retained before cleanup
 	OriginalTTLHours               int
 	TempTTLHours                   int
@@ -41,6 +42,7 @@ type Config struct {
 	RegisteredCumulativeQuotaBytes int64 // max total bytes across all files for a registered user
 	DisabledCapabilities           []string
 	DisabledEngines                []string
+	BootstrapAdminEmails           []string
 
 	AppURL string // public URL for email links; defaults to CORS_ORIGIN
 
@@ -112,7 +114,8 @@ func Load() (*Config, error) {
 	userConversionsPerMinute := lookupPositiveIntEnv("USER_CONVERSIONS_PER_MINUTE", 4)
 	userConversionBurst := lookupPositiveIntEnv("USER_CONVERSION_BURST", 2)
 	maxActiveJobsPerUser := lookupPositiveIntEnv("MAX_ACTIVE_JOBS_PER_USER", 2)
-	guestCumulativeQuota := lookupPositiveInt64Env("GUEST_CUMULATIVE_QUOTA_BYTES", 50*1024*1024)            // 50 MB
+	maxActiveJobsPerGuestSession := lookupPositiveIntEnv("MAX_ACTIVE_JOBS_PER_GUEST_SESSION", 1)
+	guestCumulativeQuota := lookupPositiveInt64Env("GUEST_CUMULATIVE_QUOTA_BYTES", 25*1024*1024)            // 25 MB
 	registeredCumulativeQuota := lookupPositiveInt64Env("REGISTERED_CUMULATIVE_QUOTA_BYTES", 500*1024*1024) // 500 MB
 
 	artifactTTL := 24
@@ -134,6 +137,7 @@ func Load() (*Config, error) {
 
 	disabledCapabilities := parseCSVEnv("FEATURE_DISABLE_CAPABILITIES")
 	disabledEngines := parseCSVEnv("FEATURE_DISABLE_ENGINES")
+	bootstrapAdminEmails := parseCSVEnv("BOOTSTRAP_ADMIN_EMAILS")
 
 	appURL := os.Getenv("APP_URL")
 	if appURL == "" {
@@ -175,6 +179,7 @@ func Load() (*Config, error) {
 		UserConversionsPerMinute:       userConversionsPerMinute,
 		UserConversionBurst:            userConversionBurst,
 		MaxActiveJobsPerUser:           maxActiveJobsPerUser,
+		MaxActiveJobsPerGuestSession:   maxActiveJobsPerGuestSession,
 		GuestCumulativeQuotaBytes:      guestCumulativeQuota,
 		RegisteredCumulativeQuotaBytes: registeredCumulativeQuota,
 		ArtifactTTLHours:               artifactTTL,
@@ -183,6 +188,7 @@ func Load() (*Config, error) {
 		ArtifactTTLByFamily:            artifactTTLByFamily,
 		DisabledCapabilities:           disabledCapabilities,
 		DisabledEngines:                disabledEngines,
+		BootstrapAdminEmails:           bootstrapAdminEmails,
 		AppURL:                         appURL,
 		SMTPHost:                       smtpHost,
 		SMTPPort:                       smtpPort,

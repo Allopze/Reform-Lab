@@ -104,3 +104,47 @@ func TestLoadAppURL_ExplicitOverride(t *testing.T) {
 		t.Fatalf("expected AppURL to use APP_URL env, got %q", cfg.AppURL)
 	}
 }
+
+func TestLoadParsesBootstrapAdminEmails(t *testing.T) {
+	t.Setenv("ENV_FILE", "/tmp/reform-nonexistent.env")
+	t.Setenv("JWT_SECRET", "test-strong-jwt-secret-1234567890")
+	t.Setenv("BOOTSTRAP_ADMIN_EMAILS", "owner@example.com, admin@example.com, owner@example.com")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected valid config, got %v", err)
+	}
+	if len(cfg.BootstrapAdminEmails) != 2 {
+		t.Fatalf("expected 2 unique bootstrap admin emails, got %v", cfg.BootstrapAdminEmails)
+	}
+	if cfg.BootstrapAdminEmails[0] != "admin@example.com" || cfg.BootstrapAdminEmails[1] != "owner@example.com" {
+		t.Fatalf("unexpected bootstrap admin emails: %v", cfg.BootstrapAdminEmails)
+	}
+}
+
+func TestLoadUsesStricterDefaultGuestQuota(t *testing.T) {
+	t.Setenv("ENV_FILE", "/tmp/reform-nonexistent.env")
+	t.Setenv("JWT_SECRET", "test-strong-jwt-secret-1234567890")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected valid config, got %v", err)
+	}
+	if cfg.GuestCumulativeQuotaBytes != 25*1024*1024 {
+		t.Fatalf("expected default guest quota to be 25 MB, got %d", cfg.GuestCumulativeQuotaBytes)
+	}
+}
+
+func TestLoadParsesMaxActiveJobsPerGuestSession(t *testing.T) {
+	t.Setenv("ENV_FILE", "/tmp/reform-nonexistent.env")
+	t.Setenv("JWT_SECRET", "test-strong-jwt-secret-1234567890")
+	t.Setenv("MAX_ACTIVE_JOBS_PER_GUEST_SESSION", "2")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected valid config, got %v", err)
+	}
+	if cfg.MaxActiveJobsPerGuestSession != 2 {
+		t.Fatalf("unexpected guest-session active job limit: %d", cfg.MaxActiveJobsPerGuestSession)
+	}
+}

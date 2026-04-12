@@ -71,6 +71,10 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusConflict, "email already registered")
 			return
 		}
+		if errors.Is(err, domain.ErrBootstrapAdminRequired) {
+			respondError(w, http.StatusConflict, "initial admin must be bootstrapped explicitly before public registration")
+			return
+		}
 		respondError(w, http.StatusInternalServerError, "registration failed")
 		return
 	}
@@ -90,7 +94,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 			},
 		}, queue.TaskOptions{MaxRetries: 3, Timeout: 30 * time.Second})
 		if err != nil {
-			h.Logger.Warn().Err(err).Str("email", result.User.Email).Msg("failed to enqueue welcome email")
+			h.Logger.Warn().Err(err).Str("user_id", result.User.ID.String()).Msg("failed to enqueue welcome email")
 		}
 	}
 

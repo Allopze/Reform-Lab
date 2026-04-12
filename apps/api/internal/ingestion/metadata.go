@@ -8,6 +8,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -101,14 +102,17 @@ func extractImageMetadata(path string) domain.FileMetadata {
 // extractSVGDimensions reads the root <svg> element and extracts width/height
 // from viewBox or explicit width/height attributes. This avoids executing the SVG.
 func extractSVGDimensions(path string) (w, h int, ok bool) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0, false
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(io.LimitReader(f, 4096))
 	if err != nil {
 		return 0, 0, false
 	}
 	content := string(data)
-	if len(content) > 4096 {
-		content = content[:4096]
-	}
 
 	// Try viewBox first: viewBox="minX minY width height"
 	vbRe := regexp.MustCompile(`(?i)viewBox\s*=\s*["'][\s]*[\d.]+[\s,]+[\d.]+[\s,]+([\d.]+)[\s,]+([\d.]+)`)

@@ -163,6 +163,7 @@ func (h *Handler) ProcessPayload(ctx context.Context, _ string, data []byte) err
 	}
 
 	if err := h.Artifacts.Create(ctx, &artifact); err != nil {
+		_ = os.RemoveAll(filepath.Dir(storagePath))
 		return h.fail(ctx, jobID, logger, "persist artifact record", err)
 	}
 	if h.isCancelled(ctx, jobID) {

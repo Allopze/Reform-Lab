@@ -26,6 +26,7 @@ const (
 	SettingSMTPPassword = "smtp_password"
 	SettingSMTPFrom     = "smtp_from"
 	SettingSMTPUseTLS   = "smtp_use_tls"
+	smtpDialTimeout     = 10 * time.Second
 )
 
 // Service handles email template rendering and SMTP delivery.
@@ -136,7 +137,7 @@ func (s *Service) Send(ctx context.Context, msg *domain.EmailMessage) error {
 		return fmt.Errorf("SMTP not configured")
 	}
 
-	return s.sendViaSMTP(smtpCfg, msg)
+	return s.sendViaSMTP(ctx, smtpCfg, msg)
 }
 
 // SendTestEmail sends a test email to the given address.
@@ -152,7 +153,7 @@ func (s *Service) SendTestEmail(ctx context.Context, to string) error {
 		BodyHTML: "<p>Este es un correo de prueba desde Reform Lab. Si lo recibes, la configuración SMTP es correcta.</p>",
 	}
 
-	return s.sendViaSMTP(smtpCfg, msg)
+	return s.sendViaSMTP(ctx, smtpCfg, msg)
 }
 
 // Configured returns true if SMTP has enough config to attempt delivery.
@@ -160,7 +161,7 @@ func (s *Service) Configured(ctx context.Context) bool {
 	return s.ResolveSMTPConfig(ctx).Configured()
 }
 
-func (s *Service) sendViaSMTP(cfg domain.SMTPConfig, msg *domain.EmailMessage) error {
+func (s *Service) sendViaSMTP(ctx context.Context, cfg domain.SMTPConfig, msg *domain.EmailMessage) error {
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 
 	// Build RFC 2822 message
@@ -180,21 +181,24 @@ func (s *Service) sendViaSMTP(cfg domain.SMTPConfig, msg *domain.EmailMessage) e
 	}
 
 	if cfg.UseTLS {
-		return s.sendWithTLS(addr, cfg.Host, auth, cfg.From, msg.To, buf.Bytes())
+		return s.sendWithTLS(ctx, addr, cfg.Host, auth, cfg.From, msg.To, buf.Bytes())
 	}
-	return smtp.SendMail(addr, auth, cfg.From, []string{msg.To}, buf.Bytes())
+	return s.sendWithoutTLS(ctx, addr, cfg.Host, auth, cfg.From, msg.To, buf.Bytes())
 }
 
-func (s *Service) sendWithTLS(addr, host string, auth smtp.Auth, from, to string, body []byte) error {
+func (s *Service) sendWithTLS(ctx context.Context, addr, host string, auth smtp.Auth, from, to string, body []byte) error {
 	tlsCfg := &tls.Config{
 		ServerName: host,
 		MinVersion: tls.VersionTLS12,
 	}
 
-	conn, err := tls.Dial("tcp", addr, tlsCfg)
+	timeout := smtpTimeoutForContext(ctx)
+	dialer := &net.Dialer{Timeout: timeout}
+	conn, err := tls.DialWithDialer(dialer, "tcp", addr, tlsCfg)
 	if err != nil {
 		return fmt.Errorf("TLS dial: %w", err)
 	}
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 
 	client, err := smtp.NewClient(conn, host)
 	if err != nil {
@@ -203,6 +207,35 @@ func (s *Service) sendWithTLS(addr, host string, auth smtp.Auth, from, to string
 	}
 	defer client.Close()
 
+	return sendSMTPMessage(client, auth, from, to, body)
+}
+
+func (s *Service) sendWithoutTLS(ctx context.Context, addr, host string, auth smtp.Auth, from, to string, body []byte) error {
+	timeout := smtpTimeoutForContext(ctx)
+	dialer := &net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("SMTP dial: %w", err)
+	}
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("SMTP client: %w", err)
+	}
+	defer client.Close()
+
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		if err := client.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
+			return fmt.Errorf("SMTP STARTTLS: %w", err)
+		}
+	}
+
+	return sendSMTPMessage(client, auth, from, to, body)
+}
+
+func sendSMTPMessage(client *smtp.Client, auth smtp.Auth, from, to string, body []byte) error {
 	if auth != nil {
 		if err := client.Auth(auth); err != nil {
 			return fmt.Errorf("SMTP auth: %w", err)
@@ -227,4 +260,17 @@ func (s *Service) sendWithTLS(addr, host string, auth smtp.Auth, from, to string
 	}
 
 	return client.Quit()
+}
+
+func smtpTimeoutForContext(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		switch {
+		case remaining <= 0:
+			return time.Second
+		case remaining < smtpDialTimeout:
+			return remaining
+		}
+	}
+	return smtpDialTimeout
 }

@@ -17,10 +17,12 @@ import (
 
 // ConversionHandler handles POST /api/conversions.
 type ConversionHandler struct {
-	Files        repository.FileRepository
-	Store        storage.Store
-	Orchestrator *orchestrator.Service
-	Logger       zerolog.Logger
+	Files                        repository.FileRepository
+	Jobs                         repository.JobRepository
+	Store                        storage.Store
+	Orchestrator                 *orchestrator.Service
+	Logger                       zerolog.Logger
+	MaxActiveJobsPerGuestSession int
 }
 
 type conversionRequest struct {
@@ -76,6 +78,19 @@ func (h *ConversionHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	if _, statErr := os.Stat(inputPath); statErr != nil {
 		respondError(w, http.StatusGone, "original file expired or unavailable")
 		return
+	}
+
+	if u == nil && guestSessionID != nil && h.MaxActiveJobsPerGuestSession > 0 && h.Jobs != nil {
+		activeJobs, err := h.Jobs.CountActiveByGuestSession(r.Context(), *guestSessionID)
+		if err != nil {
+			h.Logger.Error().Err(err).Str("guest_session_id", guestSessionID.String()).Msg("failed to count active guest jobs")
+			respondError(w, http.StatusInternalServerError, "failed to create conversion job")
+			return
+		}
+		if activeJobs >= h.MaxActiveJobsPerGuestSession {
+			respondError(w, http.StatusTooManyRequests, "too many active jobs for this guest session")
+			return
+		}
 	}
 
 	job, err := h.Orchestrator.CreateAndEnqueue(r.Context(), userIDPtr(u), fileID, *cap, inputPath)

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
@@ -29,13 +30,54 @@ func (c Claims) Validate() error {
 
 // Service handles registration and authentication.
 type Service struct {
-	users     repository.UserRepository
-	jwtSecret []byte
+	users                    repository.UserRepository
+	jwtSecret                []byte
+	requireExplicitBootstrap bool
+	bootstrapAdminEmails     map[string]struct{}
 }
 
+// Option customizes the auth service.
+type Option func(*Service)
+
 // NewService creates an auth service.
-func NewService(users repository.UserRepository, jwtSecret string) *Service {
-	return &Service{users: users, jwtSecret: []byte(jwtSecret)}
+func NewService(users repository.UserRepository, jwtSecret string, opts ...Option) *Service {
+	svc := &Service{users: users, jwtSecret: []byte(jwtSecret)}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(svc)
+		}
+	}
+	return svc
+}
+
+// WithExplicitBootstrapRequired requires the first admin to be bootstrapped
+// explicitly instead of being granted to the first public registrant.
+func WithExplicitBootstrapRequired(required bool) Option {
+	return func(s *Service) {
+		s.requireExplicitBootstrap = required
+	}
+}
+
+// WithBootstrapAdminEmails allowlists the email addresses that may claim the
+// initial admin bootstrap when no users exist yet.
+func WithBootstrapAdminEmails(emails []string) Option {
+	return func(s *Service) {
+		if len(emails) == 0 {
+			s.bootstrapAdminEmails = nil
+			return
+		}
+		allowed := make(map[string]struct{}, len(emails))
+		for _, email := range emails {
+			if normalized := normalizeEmail(email); normalized != "" {
+				allowed[normalized] = struct{}{}
+			}
+		}
+		if len(allowed) == 0 {
+			s.bootstrapAdminEmails = nil
+			return
+		}
+		s.bootstrapAdminEmails = allowed
+	}
 }
 
 // RegisterInput carries validated registration data.
@@ -60,7 +102,14 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*AuthResult, 
 		return nil, err
 	}
 	if count == 0 {
-		role = domain.RoleAdmin
+		switch {
+		case s.canBootstrapInitialAdmin(in.Email):
+			role = domain.RoleAdmin
+		case s.requireExplicitBootstrap:
+			return nil, domain.ErrBootstrapAdminRequired
+		default:
+			role = domain.RoleAdmin
+		}
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
@@ -146,4 +195,16 @@ func (s *Service) issueToken(userID uuid.UUID, role domain.UserRole) (string, er
 		},
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(s.jwtSecret)
+}
+
+func (s *Service) canBootstrapInitialAdmin(email string) bool {
+	if len(s.bootstrapAdminEmails) == 0 {
+		return !s.requireExplicitBootstrap
+	}
+	_, ok := s.bootstrapAdminEmails[normalizeEmail(email)]
+	return ok
+}
+
+func normalizeEmail(email string) string {
+	return strings.TrimSpace(strings.ToLower(email))
 }

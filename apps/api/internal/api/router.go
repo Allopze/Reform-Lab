@@ -43,6 +43,7 @@ type Deps struct {
 	UserUploadBurst                int
 	UserConversionsPerMinute       int
 	UserConversionBurst            int
+	MaxActiveJobsPerGuestSession   int
 	GuestCumulativeQuotaBytes      int64
 	RegisteredCumulativeQuotaBytes int64
 }
@@ -120,10 +121,12 @@ func NewRouter(d Deps) *chi.Mux {
 			r.Get("/files/{fileId}/capabilities", caps.Handle)
 
 			conv := &handlers.ConversionHandler{
-				Files:        d.Files,
-				Store:        d.Store,
-				Orchestrator: d.Orchestrator,
-				Logger:       d.Logger,
+				Files:                        d.Files,
+				Jobs:                         d.Jobs,
+				Store:                        d.Store,
+				Orchestrator:                 d.Orchestrator,
+				Logger:                       d.Logger,
+				MaxActiveJobsPerGuestSession: d.MaxActiveJobsPerGuestSession,
 			}
 			r.With(middleware.RateLimit(1, 3, d.TrustProxyHeaders, d.Metrics), conversionQuota).Post("/conversions", conv.Handle)
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/allopze/reform-lab/apps/api/internal/email"
 	"github.com/allopze/reform-lab/apps/api/internal/queue"
@@ -25,7 +26,7 @@ func (h *EmailHandler) ProcessPayload(ctx context.Context, _ string, data []byte
 
 	logger := h.Logger.With().
 		Str("template", payload.TemplateKey).
-		Str("to", payload.To).
+		Str("recipient_domain", emailDomain(payload.To)).
 		Logger()
 
 	msg, err := h.Email.RenderTemplate(ctx, payload.TemplateKey, payload.Vars)
@@ -38,9 +39,17 @@ func (h *EmailHandler) ProcessPayload(ctx context.Context, _ string, data []byte
 
 	if err := h.Email.Send(ctx, msg); err != nil {
 		logger.Error().Err(err).Msg("email send failed")
-		return fmt.Errorf("send email to %s: %w", payload.To, err)
+		return fmt.Errorf("send email: %w", err)
 	}
 
 	logger.Info().Msg("email sent")
 	return nil
+}
+
+func emailDomain(address string) string {
+	parts := strings.SplitN(strings.TrimSpace(strings.ToLower(address)), "@", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		return "unknown"
+	}
+	return parts[1]
 }

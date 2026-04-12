@@ -59,6 +59,7 @@ type e2eLimits struct {
 	userConversionsPerMinute int
 	userConversionBurst      int
 	maxActiveJobsPerUser     int
+	maxActiveJobsPerGuest    int
 }
 
 func withFeatureFlags(t *testing.T, disabledCapabilities, disabledEngines []string) func() {
@@ -81,6 +82,7 @@ func setupE2E(t *testing.T) *testEnv {
 		userConversionsPerMinute: 6,
 		userConversionBurst:      3,
 		maxActiveJobsPerUser:     3,
+		maxActiveJobsPerGuest:    1,
 	}, false)
 }
 
@@ -92,6 +94,7 @@ func setupE2EWithWorker(t *testing.T) *testEnv {
 		userConversionsPerMinute: 6,
 		userConversionBurst:      3,
 		maxActiveJobsPerUser:     3,
+		maxActiveJobsPerGuest:    1,
 	}, true)
 }
 
@@ -213,6 +216,7 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 		UserUploadBurst:                limits.userUploadBurst,
 		UserConversionsPerMinute:       limits.userConversionsPerMinute,
 		UserConversionBurst:            limits.userConversionBurst,
+		MaxActiveJobsPerGuestSession:   limits.maxActiveJobsPerGuest,
 		GuestCumulativeQuotaBytes:      500 * 1024 * 1024, // 500 MB for test
 		RegisteredCumulativeQuotaBytes: 500 * 1024 * 1024, // 500 MB for test
 		ArtifactTTLHours:               24,
@@ -1453,6 +1457,7 @@ func TestE2E_MaxActiveJobsPerUser(t *testing.T) {
 		userConversionsPerMinute: 60,
 		userConversionBurst:      10,
 		maxActiveJobsPerUser:     1,
+		maxActiveJobsPerGuest:    1,
 	})
 	defer env.close()
 
@@ -1479,6 +1484,49 @@ func TestE2E_MaxActiveJobsPerUser(t *testing.T) {
 	}
 	if data["error"] != "too many active jobs for this user" {
 		t.Fatalf("unexpected active job error: %v", data["error"])
+	}
+}
+
+func TestE2E_MaxActiveJobsPerGuestSession(t *testing.T) {
+	env := setupE2EWithLimits(t, e2eLimits{
+		userUploadsPerMinute:     60,
+		userUploadBurst:          10,
+		userConversionsPerMinute: 60,
+		userConversionBurst:      10,
+		maxActiveJobsPerUser:     10,
+		maxActiveJobsPerGuest:    1,
+	})
+	defer env.close()
+
+	client := newCookieClient(t)
+
+	_, fileData1 := uploadPNGClient(client, env.server.URL, "")
+	fileID1 := fileData1["id"].(string)
+	_, capsData1 := doGetClient(client, fmt.Sprintf("%s/api/files/%s/capabilities", env.server.URL, fileID1), "")
+	capID1 := capsData1["capabilities"].([]interface{})[0].(map[string]interface{})["id"].(string)
+
+	resp, _ := doPostClient(client, env.server.URL+"/api/conversions", map[string]string{
+		"fileId":       fileID1,
+		"capabilityId": capID1,
+	}, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("first guest job: expected 201, got %d", resp.StatusCode)
+	}
+
+	_, fileData2 := uploadPNGClient(client, env.server.URL, "")
+	fileID2 := fileData2["id"].(string)
+	_, capsData2 := doGetClient(client, fmt.Sprintf("%s/api/files/%s/capabilities", env.server.URL, fileID2), "")
+	capID2 := capsData2["capabilities"].([]interface{})[0].(map[string]interface{})["id"].(string)
+
+	resp, data := doPostClient(client, env.server.URL+"/api/conversions", map[string]string{
+		"fileId":       fileID2,
+		"capabilityId": capID2,
+	}, "")
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("second guest job should be blocked, got %d — %v", resp.StatusCode, data)
+	}
+	if data["error"] != "too many active jobs for this guest session" {
+		t.Fatalf("unexpected guest active job error: %v", data["error"])
 	}
 }
 

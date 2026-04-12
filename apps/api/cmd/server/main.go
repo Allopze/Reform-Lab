@@ -87,7 +87,12 @@ func main() {
 	emailTemplateRepo := repository.NewEmailTemplateRepository(db)
 
 	// Auth
-	authSvc := auth.NewService(userRepo, cfg.JWTSecret)
+	authSvc := auth.NewService(
+		userRepo,
+		cfg.JWTSecret,
+		auth.WithExplicitBootstrapRequired(cfg.AppEnv == "production"),
+		auth.WithBootstrapAdminEmails(cfg.BootstrapAdminEmails),
+	)
 
 	// Email
 	emailSvc := email.NewService(cfg, siteSettingRepo, emailTemplateRepo, logger)
@@ -201,6 +206,7 @@ func main() {
 		UserUploadBurst:                cfg.UserUploadBurst,
 		UserConversionsPerMinute:       cfg.UserConversionsPerMinute,
 		UserConversionBurst:            cfg.UserConversionBurst,
+		MaxActiveJobsPerGuestSession:   cfg.MaxActiveJobsPerGuestSession,
 		GuestCumulativeQuotaBytes:      cfg.GuestCumulativeQuotaBytes,
 		RegisteredCumulativeQuotaBytes: cfg.RegisteredCumulativeQuotaBytes,
 		ArtifactTTLHours:               cfg.ArtifactTTLHours,

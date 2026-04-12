@@ -57,12 +57,19 @@ func (fs *Filesystem) OriginalPath(fileID string) string {
 }
 
 func (fs *Filesystem) SaveArtifact(_ context.Context, artifactID string, fileName string, r io.Reader) (string, error) {
+	if err := checkDiskSpace(fs.basePath, minFreeDiskBytes); err != nil {
+		return "", err
+	}
 	dir := filepath.Join(fs.basePath, "artifacts", artifactID)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", fmt.Errorf("create artifact dir: %w", err)
 	}
 	p := filepath.Join(dir, fileName)
-	return p, writeFile(p, r)
+	if err := writeFile(p, r); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", err
+	}
+	return p, nil
 }
 
 func (fs *Filesystem) GetArtifact(_ context.Context, artifactID string) (io.ReadCloser, error) {

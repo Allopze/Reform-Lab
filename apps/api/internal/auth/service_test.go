@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -81,5 +82,41 @@ func TestRegisterFirstUserBecomesAdmin(t *testing.T) {
 	}
 	if first.SessionToken == "" || second.SessionToken == "" {
 		t.Fatal("expected both registrations to issue tokens")
+	}
+}
+
+func TestRegisterRequiresExplicitBootstrapWhenConfigured(t *testing.T) {
+	svc, _ := newTestAuthService(t)
+	svc = NewService(svc.users, "test-secret", WithExplicitBootstrapRequired(true))
+
+	_, err := svc.Register(context.Background(), RegisterInput{
+		Name:     "Blocked Admin",
+		Email:    "blocked@example.com",
+		Password: "secret123",
+	})
+	if !errors.Is(err, domain.ErrBootstrapAdminRequired) {
+		t.Fatalf("expected ErrBootstrapAdminRequired, got %v", err)
+	}
+}
+
+func TestRegisterAllowsBootstrapAdminEmailWhenConfigured(t *testing.T) {
+	svc, users := newTestAuthService(t)
+	svc = NewService(
+		users,
+		"test-secret",
+		WithExplicitBootstrapRequired(true),
+		WithBootstrapAdminEmails([]string{" owner@example.com "}),
+	)
+
+	result, err := svc.Register(context.Background(), RegisterInput{
+		Name:     "Owner",
+		Email:    "OWNER@example.com",
+		Password: "secret123",
+	})
+	if err != nil {
+		t.Fatalf("register bootstrap admin: %v", err)
+	}
+	if result.User.Role != domain.RoleAdmin {
+		t.Fatalf("expected bootstrap email to become admin, got %q", result.User.Role)
 	}
 }

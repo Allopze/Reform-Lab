@@ -127,7 +127,8 @@ Servicios por defecto:
 
 | Variable | Obligatoria | Default de código | Qué hace |
 | --- | --- | --- | --- |
-| `APP_ENV` | no | `development` | controla el modo general; `production` exige `REDIS_URL` |
+| `APP_ENV` | no | `development` | controla el modo general; `production` exige `REDIS_URL` y bloquea el auto-admin del primer registro |
+| `API_BIND_ADDRESS` | no | `127.0.0.1` | en el compose base liga la API a loopback para no exponer accidentalmente el modo de desarrollo |
 | `PORT` | no | `8080` | puerto HTTP del API |
 | `DATABASE_PATH` | no | `./data/reform.db` | ruta de la base SQLite |
 | `MIGRATIONS_PATH` | no | `./migrations` | ruta de migraciones SQL |
@@ -136,6 +137,8 @@ Servicios por defecto:
 | `LOG_LEVEL` | no | `info` | nivel de logs estructurados |
 | `JWT_SECRET` | sí | sin fallback válido | secreto para firmar sesión JWT; mínimo 32 caracteres y sin placeholders banales |
 | `REDIS_URL` | no en local, sí en producción | vacío | activa cola Redis; vacío usa cola en proceso |
+| `BOOTSTRAP_ADMIN_EMAILS` | no | vacío | lista separada por comas con los emails autorizados a reclamar el primer admin en `production` |
+| `MAX_ACTIVE_JOBS_PER_GUEST_SESSION` | no | `1` | limita cuántas conversiones activas puede mantener una sesión anónima simultáneamente |
 | `EXPOSE_METRICS` | no | `false` | expone `/metrics` para Prometheus |
 | `TRUST_PROXY_HEADERS` | no | `false` | usa headers tipo `X-Forwarded-*` al calcular IP y seguridad |
 
