@@ -80,6 +80,7 @@ func TestLoadAppURL_DefaultsToCORSOrigin(t *testing.T) {
 	t.Setenv("ENV_FILE", "/tmp/reform-nonexistent.env")
 	t.Setenv("JWT_SECRET", "test-strong-jwt-secret-1234567890")
 	t.Setenv("CORS_ORIGIN", "https://myapp.example.com")
+	t.Setenv("APP_URL", "")
 
 	cfg, err := Load()
 	if err != nil {

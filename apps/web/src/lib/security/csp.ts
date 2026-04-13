@@ -13,10 +13,12 @@ function buildConnectSrc({
   const connectSrc = ["'self'"];
 
   if (apiUrl) {
-    try {
-      connectSrc.push(new URL(apiUrl).origin);
-    } catch {
-      // Ignore invalid user-provided URLs and keep the default safe policy.
+    for (const candidate of apiUrl.split(",")) {
+      try {
+        connectSrc.push(new URL(candidate.trim()).origin);
+      } catch {
+        // Ignore invalid user-provided URLs and keep the default safe policy.
+      }
     }
   }
 

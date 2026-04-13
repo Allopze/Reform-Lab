@@ -20,6 +20,7 @@ const manifest = [
   { path: "apps/api/alerts.yml" },
   { path: "apps/api/go.mod" },
   { path: "apps/api/go.sum" },
+  { path: "apps/api/requirements.txt" },
   { path: "apps/api/cmd" },
   { path: "apps/api/config", exclude: [isGoTestFile] },
   { path: "apps/api/internal", exclude: [isGoTestFile, isTestDataPath] },

@@ -48,6 +48,7 @@ const policy: UploadPolicy = {
   guestMaxBytes: 104857600,
   registeredMaxBytes: 524288000,
   effectiveMaxBytes: 524288000,
+  absoluteMaxBytes: 524288000,
   viewerType: "registered",
 };
 

@@ -38,7 +38,7 @@ services:
     restart: unless-stopped
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "${WEB_BIND_ADDRESS:-0.0.0.0}:${WEB_HOST_PORT:-5050}:5050"
     environment:
@@ -109,8 +109,20 @@ services:
       - /run:size=16777216,mode=755
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
     security_opt:
       - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 15s
     pids_limit: 256
     mem_limit: "${API_MEMORY_LIMIT:-1024m}"
     cpus: "${API_CPUS:-1.00}"
@@ -127,6 +139,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      api:
+        condition: service_healthy
     environment:
       <<: *runtime-env
       WORKER_CONCURRENCY: "${WORKER_CONCURRENCY:-2}"
@@ -138,6 +152,12 @@ services:
       - /run:size=16777216,mode=755
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
     security_opt:
       - no-new-privileges:true
     pids_limit: 512
