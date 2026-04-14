@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -53,7 +54,7 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, uploadBodyLimitBytes(u, policy))
 
-	file, header, err := r.FormFile("file")
+	file, originalFileName, err := uploadFilePart(r)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
@@ -62,9 +63,6 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		}
 		respondError(w, http.StatusBadRequest, "missing or invalid file field")
 		return
-	}
-	if r.MultipartForm != nil {
-		defer r.MultipartForm.RemoveAll()
 	}
 	defer file.Close()
 
@@ -134,7 +132,7 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// Assign internal identity.
 	fileID := uuid.New()
 	internalName := fileID.String()
-	originalName := security.SanitizeFileName(header.Filename)
+	originalName := security.SanitizeFileName(originalFileName)
 
 	// Extract metadata from the staged file before committing it to long-lived storage.
 	meta, err := ingestion.ExtractMetadata(r.Context(), tempPath, detected)
@@ -227,6 +225,28 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	h.Metrics.UploadsTotal.WithLabelValues(string(detected.Family)).Inc()
 
 	respondJSON(w, http.StatusCreated, record)
+}
+
+func uploadFilePart(r *http.Request) (*multipart.Part, string, error) {
+	reader, err := r.MultipartReader()
+	if err != nil {
+		return nil, "", err
+	}
+
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			return nil, "", errString("missing file field")
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		if part.FormName() != "file" || part.FileName() == "" {
+			part.Close()
+			continue
+		}
+		return part, part.FileName(), nil
+	}
 }
 
 // enforceCumulativeQuota checks that adding fileSize bytes would not exceed the

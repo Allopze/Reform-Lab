@@ -149,3 +149,17 @@ func TestLoadParsesMaxActiveJobsPerGuestSession(t *testing.T) {
 		t.Fatalf("unexpected guest-session active job limit: %d", cfg.MaxActiveJobsPerGuestSession)
 	}
 }
+
+func TestLoadReadsSecretEncryptionKey(t *testing.T) {
+	t.Setenv("ENV_FILE", "/tmp/reform-nonexistent.env")
+	t.Setenv("JWT_SECRET", "test-strong-jwt-secret-1234567890")
+	t.Setenv("SECRET_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected valid config, got %v", err)
+	}
+	if cfg.SecretEncryptionKey != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("unexpected secret encryption key: %q", cfg.SecretEncryptionKey)
+	}
+}

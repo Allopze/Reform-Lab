@@ -47,12 +47,13 @@ type Config struct {
 	AppURL string // public URL for email links; defaults to CORS_ORIGIN
 
 	// SMTP configuration — empty SMTPHost disables email sending.
-	SMTPHost     string
-	SMTPPort     int
-	SMTPUser     string
-	SMTPPassword string
-	SMTPFrom     string
-	SMTPUseTLS   bool
+	SMTPHost            string
+	SMTPPort            int
+	SMTPUser            string
+	SMTPPassword        string
+	SMTPFrom            string
+	SMTPUseTLS          bool
+	SecretEncryptionKey string
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -154,6 +155,7 @@ func Load() (*Config, error) {
 		smtpFrom = "noreply@example.com"
 	}
 	smtpUseTLS := lookupBoolEnv("SMTP_USE_TLS", true)
+	secretEncryptionKey := os.Getenv("SECRET_ENCRYPTION_KEY")
 
 	if appEnv == "production" && redisURL == "" {
 		return nil, fmt.Errorf("REDIS_URL is required when APP_ENV=production")
@@ -196,6 +198,7 @@ func Load() (*Config, error) {
 		SMTPPassword:                   smtpPassword,
 		SMTPFrom:                       smtpFrom,
 		SMTPUseTLS:                     smtpUseTLS,
+		SecretEncryptionKey:            secretEncryptionKey,
 	}, nil
 }
 

@@ -27,11 +27,12 @@ type BatchRequest struct {
 
 // Service manages job lifecycle: creation, status updates, and queuing.
 type Service struct {
-	jobs                 repository.JobRepository
-	audit                repository.AuditRepository
-	q                    queue.JobQueue
-	maxActiveJobsPerUser int
-	notifier             JobNotifier
+	jobs                  repository.JobRepository
+	audit                 repository.AuditRepository
+	q                     queue.JobQueue
+	maxActiveJobsPerUser  int
+	maxActiveJobsPerGuest int
+	notifier              JobNotifier
 }
 
 type Option func(*Service)
@@ -39,6 +40,12 @@ type Option func(*Service)
 func WithMaxActiveJobsPerUser(limit int) Option {
 	return func(s *Service) {
 		s.maxActiveJobsPerUser = limit
+	}
+}
+
+func WithMaxActiveJobsPerGuestSession(limit int) Option {
+	return func(s *Service) {
+		s.maxActiveJobsPerGuest = limit
 	}
 }
 
@@ -94,6 +101,14 @@ func (m multiNotifier) NotifyJobFailed(ctx context.Context, job *domain.Job) err
 // CreateAndEnqueue persists a new job and enqueues it for processing.
 // userID may be nil for system-owned work outside the public API.
 func (s *Service) CreateAndEnqueue(ctx context.Context, userID *uuid.UUID, fileID uuid.UUID, cap domain.Capability, inputPath string) (*domain.Job, error) {
+	return s.createAndEnqueue(ctx, userID, nil, fileID, cap, inputPath)
+}
+
+func (s *Service) CreateAndEnqueueForGuest(ctx context.Context, guestSessionID uuid.UUID, fileID uuid.UUID, cap domain.Capability, inputPath string) (*domain.Job, error) {
+	return s.createAndEnqueue(ctx, nil, &guestSessionID, fileID, cap, inputPath)
+}
+
+func (s *Service) createAndEnqueue(ctx context.Context, userID *uuid.UUID, guestSessionID *uuid.UUID, fileID uuid.UUID, cap domain.Capability, inputPath string) (*domain.Job, error) {
 	now := time.Now().UTC()
 	job := domain.Job{
 		ID:           uuid.New(),
@@ -107,7 +122,13 @@ func (s *Service) CreateAndEnqueue(ctx context.Context, userID *uuid.UUID, fileI
 	}
 
 	// Atomically check the active job limit and create the job in a single transaction.
-	if err := s.jobs.CreateIfUnderLimit(ctx, &job, s.maxActiveJobsPerUser); err != nil {
+	var err error
+	if guestSessionID != nil {
+		err = s.jobs.CreateIfUnderGuestLimit(ctx, *guestSessionID, &job, s.maxActiveJobsPerGuest)
+	} else {
+		err = s.jobs.CreateIfUnderLimit(ctx, &job, s.maxActiveJobsPerUser)
+	}
+	if err != nil {
 		if errors.Is(err, domain.ErrTooManyActiveJobs) {
 			return nil, err
 		}
@@ -156,6 +177,14 @@ func (s *Service) CreateAndEnqueue(ctx context.Context, userID *uuid.UUID, fileI
 }
 
 func (s *Service) CreateAndEnqueueBatch(ctx context.Context, userID *uuid.UUID, requests []BatchRequest) ([]domain.Job, error) {
+	return s.createAndEnqueueBatch(ctx, userID, nil, requests)
+}
+
+func (s *Service) CreateAndEnqueueBatchForGuest(ctx context.Context, guestSessionID uuid.UUID, requests []BatchRequest) ([]domain.Job, error) {
+	return s.createAndEnqueueBatch(ctx, nil, &guestSessionID, requests)
+}
+
+func (s *Service) createAndEnqueueBatch(ctx context.Context, userID *uuid.UUID, guestSessionID *uuid.UUID, requests []BatchRequest) ([]domain.Job, error) {
 	if len(requests) == 0 {
 		return nil, nil
 	}
@@ -177,7 +206,13 @@ func (s *Service) CreateAndEnqueueBatch(ctx context.Context, userID *uuid.UUID, 
 		jobRefs = append(jobRefs, &jobs[index])
 	}
 
-	if err := s.jobs.CreateManyIfUnderLimit(ctx, jobRefs, s.maxActiveJobsPerUser); err != nil {
+	var err error
+	if guestSessionID != nil {
+		err = s.jobs.CreateManyIfUnderGuestLimit(ctx, *guestSessionID, jobRefs, s.maxActiveJobsPerGuest)
+	} else {
+		err = s.jobs.CreateManyIfUnderLimit(ctx, jobRefs, s.maxActiveJobsPerUser)
+	}
+	if err != nil {
 		if errors.Is(err, domain.ErrTooManyActiveJobs) {
 			return nil, err
 		}

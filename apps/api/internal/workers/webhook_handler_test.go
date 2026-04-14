@@ -165,3 +165,33 @@ func TestWebhookHandlerRecordsFailure(t *testing.T) {
 		t.Fatalf("expected summary error to be recorded, got %#v", repo.markedError)
 	}
 }
+
+func TestWebhookHandlerRejectsDisallowedTarget(t *testing.T) {
+	repo := &webhookRepoSpy{}
+	handler := &WebhookHandler{
+		Webhooks: repo,
+		Logger:   zerolog.New(io.Discard),
+	}
+
+	webhookID := uuid.New()
+	payload, err := json.Marshal(queue.WebhookTaskPayload{
+		WebhookID: webhookID.String(),
+		URL:       "http://localhost:8080/webhook",
+		EventID:   "evt-3",
+		EventType: "job.failed",
+		Payload:   map[string]interface{}{"id": "evt-3"},
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	if err := handler.ProcessPayload(context.Background(), queue.WebhookTaskType, payload); err == nil {
+		t.Fatal("expected disallowed webhook target to be rejected")
+	}
+	if len(repo.createdDeliveries) != 1 {
+		t.Fatalf("expected 1 delivery, got %d", len(repo.createdDeliveries))
+	}
+	if repo.markedError == nil || !strings.Contains(*repo.markedError, "not allowed") {
+		t.Fatalf("expected summary error for blocked target, got %#v", repo.markedError)
+	}
+}

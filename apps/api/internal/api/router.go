@@ -9,6 +9,7 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/orchestrator"
 	"github.com/allopze/reform-lab/apps/api/internal/queue"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
+	"github.com/allopze/reform-lab/apps/api/internal/security"
 	"github.com/allopze/reform-lab/apps/api/internal/storage"
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -31,6 +32,7 @@ type Deps struct {
 	EmailTemplates                 repository.EmailTemplateRepository
 	Webhooks                       repository.WebhookRepository
 	EmailService                   *email.Service
+	SecretKeeper                   *security.SecretKeeper
 	Queue                          queue.JobQueue
 	Orchestrator                   *orchestrator.Service
 	AuthService                    *auth.Service
@@ -44,7 +46,6 @@ type Deps struct {
 	UserUploadBurst                int
 	UserConversionsPerMinute       int
 	UserConversionBurst            int
-	MaxActiveJobsPerGuestSession   int
 	GuestCumulativeQuotaBytes      int64
 	RegisteredCumulativeQuotaBytes int64
 }
@@ -123,12 +124,10 @@ func NewRouter(d Deps) *chi.Mux {
 			r.Post("/files/capabilities/batch", caps.HandleBatch)
 
 			conv := &handlers.ConversionHandler{
-				Files:                        d.Files,
-				Jobs:                         d.Jobs,
-				Store:                        d.Store,
-				Orchestrator:                 d.Orchestrator,
-				Logger:                       d.Logger,
-				MaxActiveJobsPerGuestSession: d.MaxActiveJobsPerGuestSession,
+				Files:        d.Files,
+				Store:        d.Store,
+				Orchestrator: d.Orchestrator,
+				Logger:       d.Logger,
 			}
 			r.With(middleware.RateLimit(1, 3, d.TrustProxyHeaders, d.Metrics), conversionQuota).Post("/conversions", conv.Handle)
 			r.With(middleware.RateLimit(1, 3, d.TrustProxyHeaders, d.Metrics), conversionQuota).Post("/conversions/batch", conv.HandleBatch)
@@ -173,6 +172,7 @@ func NewRouter(d Deps) *chi.Mux {
 				smtpH := &handlers.SMTPSettingsHandler{
 					Email:    d.EmailService,
 					Settings: d.SiteSettings,
+					Secrets:  d.SecretKeeper,
 				}
 				r.Get("/admin/smtp-settings", smtpH.Get)
 				r.Put("/admin/smtp-settings", smtpH.Update)

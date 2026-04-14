@@ -2,12 +2,14 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
+	"github.com/allopze/reform-lab/apps/api/internal/security"
+	webhookpkg "github.com/allopze/reform-lab/apps/api/internal/webhook"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
@@ -79,7 +81,7 @@ func (h *WebhookHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := validateWebhookURL(req.URL); err != nil {
+	if err := webhookpkg.ValidateConfiguredURL(req.URL); err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -100,6 +102,10 @@ func (h *WebhookHandler) Create(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:  now,
 	}
 	if err := h.Webhooks.Create(r.Context(), webhook); err != nil {
+		if errors.Is(err, security.ErrSecretEncryptionUnavailable) {
+			respondError(w, http.StatusServiceUnavailable, "secret storage is not configured")
+			return
+		}
 		respondError(w, http.StatusInternalServerError, "failed to create webhook")
 		return
 	}
@@ -131,7 +137,7 @@ func (h *WebhookHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := validateWebhookURL(req.URL); err != nil {
+	if err := webhookpkg.ValidateConfiguredURL(req.URL); err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -147,6 +153,10 @@ func (h *WebhookHandler) Update(w http.ResponseWriter, r *http.Request) {
 	current.UpdatedAt = time.Now().UTC()
 
 	if err := h.Webhooks.Update(r.Context(), current); err != nil {
+		if errors.Is(err, security.ErrSecretEncryptionUnavailable) {
+			respondError(w, http.StatusServiceUnavailable, "secret storage is not configured")
+			return
+		}
 		respondError(w, http.StatusInternalServerError, "failed to update webhook")
 		return
 	}
@@ -232,20 +242,6 @@ func parseWebhookEventTypes(raw []string) ([]domain.WebhookEventType, error) {
 		eventTypes = append(eventTypes, eventType)
 	}
 	return eventTypes, nil
-}
-
-func validateWebhookURL(raw string) error {
-	parsed, err := url.ParseRequestURI(raw)
-	if err != nil {
-		return errString("invalid webhook URL")
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return errString("webhook URL must use http or https")
-	}
-	if parsed.Host == "" {
-		return errString("invalid webhook URL")
-	}
-	return nil
 }
 
 type errString string

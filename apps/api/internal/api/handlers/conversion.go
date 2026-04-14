@@ -17,12 +17,10 @@ import (
 
 // ConversionHandler handles POST /api/conversions.
 type ConversionHandler struct {
-	Files                        repository.FileRepository
-	Jobs                         repository.JobRepository
-	Store                        storage.Store
-	Orchestrator                 *orchestrator.Service
-	Logger                       zerolog.Logger
-	MaxActiveJobsPerGuestSession int
+	Files        repository.FileRepository
+	Store        storage.Store
+	Orchestrator *orchestrator.Service
+	Logger       zerolog.Logger
 }
 
 type conversionRequest struct {
@@ -85,22 +83,18 @@ func (h *ConversionHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if u == nil && guestSessionID != nil && h.MaxActiveJobsPerGuestSession > 0 && h.Jobs != nil {
-		activeJobs, err := h.Jobs.CountActiveByGuestSession(r.Context(), *guestSessionID)
-		if err != nil {
-			h.Logger.Error().Err(err).Str("guest_session_id", guestSessionID.String()).Msg("failed to count active guest jobs")
-			respondError(w, http.StatusInternalServerError, "failed to create conversion job")
-			return
-		}
-		if activeJobs >= h.MaxActiveJobsPerGuestSession {
-			respondError(w, http.StatusTooManyRequests, "too many active jobs for this guest session")
-			return
-		}
+	var job *domain.Job
+	if u == nil && guestSessionID != nil {
+		job, err = h.Orchestrator.CreateAndEnqueueForGuest(r.Context(), *guestSessionID, fileID, *cap, inputPath)
+	} else {
+		job, err = h.Orchestrator.CreateAndEnqueue(r.Context(), userIDPtr(u), fileID, *cap, inputPath)
 	}
-
-	job, err := h.Orchestrator.CreateAndEnqueue(r.Context(), userIDPtr(u), fileID, *cap, inputPath)
 	if err != nil {
 		if errors.Is(err, domain.ErrTooManyActiveJobs) {
+			if u == nil && guestSessionID != nil {
+				respondError(w, http.StatusTooManyRequests, "too many active jobs for this guest session")
+				return
+			}
 			respondError(w, http.StatusTooManyRequests, "too many active jobs for this user")
 			return
 		}
@@ -134,19 +128,6 @@ func (h *ConversionHandler) HandleBatch(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "invalid file ID")
 		return
-	}
-
-	if u == nil && guestSessionID != nil && h.MaxActiveJobsPerGuestSession > 0 && h.Jobs != nil {
-		activeJobs, err := h.Jobs.CountActiveByGuestSession(r.Context(), *guestSessionID)
-		if err != nil {
-			h.Logger.Error().Err(err).Str("guest_session_id", guestSessionID.String()).Msg("failed to count active guest jobs")
-			respondError(w, http.StatusInternalServerError, "failed to create conversion jobs")
-			return
-		}
-		if activeJobs+len(fileIDs) > h.MaxActiveJobsPerGuestSession {
-			respondError(w, http.StatusTooManyRequests, "too many active jobs for this guest session")
-			return
-		}
 	}
 
 	requests := make([]orchestrator.BatchRequest, 0, len(fileIDs))
@@ -189,9 +170,18 @@ func (h *ConversionHandler) HandleBatch(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 
-	jobs, err := h.Orchestrator.CreateAndEnqueueBatch(r.Context(), userIDPtr(u), requests)
+	var jobs []domain.Job
+	if u == nil && guestSessionID != nil {
+		jobs, err = h.Orchestrator.CreateAndEnqueueBatchForGuest(r.Context(), *guestSessionID, requests)
+	} else {
+		jobs, err = h.Orchestrator.CreateAndEnqueueBatch(r.Context(), userIDPtr(u), requests)
+	}
 	if err != nil {
 		if errors.Is(err, domain.ErrTooManyActiveJobs) {
+			if u == nil && guestSessionID != nil {
+				respondError(w, http.StatusTooManyRequests, "too many active jobs for this guest session")
+				return
+			}
 			respondError(w, http.StatusTooManyRequests, "too many active jobs for this user")
 			return
 		}

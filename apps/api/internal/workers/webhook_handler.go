@@ -15,6 +15,7 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
 	"github.com/allopze/reform-lab/apps/api/internal/queue"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
+	webhookpkg "github.com/allopze/reform-lab/apps/api/internal/webhook"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
@@ -41,6 +42,11 @@ func (h *WebhookHandler) ProcessPayload(ctx context.Context, _ string, data []by
 	if err != nil {
 		return fmt.Errorf("marshal webhook body: %w", err)
 	}
+	if err := webhookpkg.ValidateDeliveryTarget(ctx, payload.URL); err != nil {
+		message := err.Error()
+		h.recordDeliveryResult(ctx, webhookID, payload, attemptedAt, nil, nil, &message)
+		return fmt.Errorf("deliver webhook: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, payload.URL, bytes.NewReader(body))
 	if err != nil {
@@ -55,7 +61,7 @@ func (h *WebhookHandler) ProcessPayload(ctx context.Context, _ string, data []by
 
 	client := h.Client
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = webhookpkg.NewRestrictedHTTPClient(10 * time.Second)
 	}
 
 	resp, err := client.Do(req)

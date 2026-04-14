@@ -15,6 +15,8 @@ type JobRepository interface {
 	Create(ctx context.Context, j *domain.Job) error
 	CreateIfUnderLimit(ctx context.Context, j *domain.Job, maxActive int) error
 	CreateManyIfUnderLimit(ctx context.Context, jobs []*domain.Job, maxActive int) error
+	CreateIfUnderGuestLimit(ctx context.Context, sessionID uuid.UUID, j *domain.Job, maxActive int) error
+	CreateManyIfUnderGuestLimit(ctx context.Context, sessionID uuid.UUID, jobs []*domain.Job, maxActive int) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Job, error)
 	Update(ctx context.Context, j *domain.Job) error
 	CountActiveByUser(ctx context.Context, userID uuid.UUID) (int, error)
@@ -45,14 +47,22 @@ func (r *sqliteJobRepo) Create(ctx context.Context, j *domain.Job) error {
 // inserts the job only if the count is below maxActive. Returns
 // domain.ErrTooManyActiveJobs if the limit would be exceeded.
 func (r *sqliteJobRepo) CreateIfUnderLimit(ctx context.Context, j *domain.Job, maxActive int) error {
-	return r.createManyIfUnderLimit(ctx, []*domain.Job{j}, maxActive)
+	return r.createManyIfUnderLimit(ctx, []*domain.Job{j}, maxActive, nil)
 }
 
 func (r *sqliteJobRepo) CreateManyIfUnderLimit(ctx context.Context, jobs []*domain.Job, maxActive int) error {
-	return r.createManyIfUnderLimit(ctx, jobs, maxActive)
+	return r.createManyIfUnderLimit(ctx, jobs, maxActive, nil)
 }
 
-func (r *sqliteJobRepo) createManyIfUnderLimit(ctx context.Context, jobs []*domain.Job, maxActive int) error {
+func (r *sqliteJobRepo) CreateIfUnderGuestLimit(ctx context.Context, sessionID uuid.UUID, j *domain.Job, maxActive int) error {
+	return r.createManyIfUnderLimit(ctx, []*domain.Job{j}, maxActive, &sessionID)
+}
+
+func (r *sqliteJobRepo) CreateManyIfUnderGuestLimit(ctx context.Context, sessionID uuid.UUID, jobs []*domain.Job, maxActive int) error {
+	return r.createManyIfUnderLimit(ctx, jobs, maxActive, &sessionID)
+}
+
+func (r *sqliteJobRepo) createManyIfUnderLimit(ctx context.Context, jobs []*domain.Job, maxActive int, guestSessionID *uuid.UUID) error {
 	if len(jobs) == 0 {
 		return nil
 	}
@@ -71,6 +81,23 @@ func (r *sqliteJobRepo) createManyIfUnderLimit(ctx context.Context, jobs []*doma
 		).Scan(&count)
 		if err != nil {
 			return fmt.Errorf("count active jobs: %w", err)
+		}
+		if count+len(jobs) > maxActive {
+			return domain.ErrTooManyActiveJobs
+		}
+	} else if guestSessionID != nil && maxActive > 0 {
+		var count int
+		err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*)
+			 FROM jobs j
+			 JOIN files f ON f.id = j.file_id
+			 WHERE f.guest_session_id = ?
+			   AND f.expired_at IS NULL
+			   AND j.status IN (?, ?)`,
+			guestSessionID.String(), string(domain.JobQueued), string(domain.JobRunning),
+		).Scan(&count)
+		if err != nil {
+			return fmt.Errorf("count active guest jobs: %w", err)
 		}
 		if count+len(jobs) > maxActive {
 			return domain.ErrTooManyActiveJobs

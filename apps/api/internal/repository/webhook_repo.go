@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
+	"github.com/allopze/reform-lab/apps/api/internal/security"
 	"github.com/google/uuid"
 )
 
@@ -24,15 +25,34 @@ type WebhookRepository interface {
 }
 
 type sqliteWebhookRepo struct {
-	db *sql.DB
+	db      *sql.DB
+	secrets *security.SecretKeeper
 }
 
-func NewWebhookRepository(db *sql.DB) WebhookRepository {
-	return &sqliteWebhookRepo{db: db}
+type WebhookRepoOption func(*sqliteWebhookRepo)
+
+func WithSecretKeeper(keeper *security.SecretKeeper) WebhookRepoOption {
+	return func(repo *sqliteWebhookRepo) {
+		repo.secrets = keeper
+	}
+}
+
+func NewWebhookRepository(db *sql.DB, opts ...WebhookRepoOption) WebhookRepository {
+	repo := &sqliteWebhookRepo{db: db}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(repo)
+		}
+	}
+	return repo
 }
 
 func (r *sqliteWebhookRepo) Create(ctx context.Context, webhook *domain.WebhookSubscription) error {
 	eventTypes, err := marshalWebhookEventTypes(webhook.EventTypes)
+	if err != nil {
+		return err
+	}
+	secret, err := r.encryptSecret(webhook.Secret)
 	if err != nil {
 		return err
 	}
@@ -42,7 +62,7 @@ func (r *sqliteWebhookRepo) Create(ctx context.Context, webhook *domain.WebhookS
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		webhook.ID.String(),
 		webhook.URL,
-		webhook.Secret,
+		secret,
 		eventTypes,
 		boolToInt(webhook.Enabled),
 		fmtTimePtr(webhook.LastDeliveredAt),
@@ -58,13 +78,17 @@ func (r *sqliteWebhookRepo) Update(ctx context.Context, webhook *domain.WebhookS
 	if err != nil {
 		return err
 	}
+	secret, err := r.encryptSecret(webhook.Secret)
+	if err != nil {
+		return err
+	}
 
 	_, err = r.db.ExecContext(ctx,
 		`UPDATE webhooks
 		 SET url = ?, secret = ?, event_types = ?, enabled = ?, updated_at = ?
 		 WHERE id = ?`,
 		webhook.URL,
-		webhook.Secret,
+		secret,
 		eventTypes,
 		boolToInt(webhook.Enabled),
 		webhook.UpdatedAt.Format(timeLayout),
@@ -80,7 +104,7 @@ func (r *sqliteWebhookRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.
 		id.String(),
 	)
 
-	webhook, err := scanWebhook(row)
+	webhook, err := r.scanWebhook(row)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +123,7 @@ func (r *sqliteWebhookRepo) ListAll(ctx context.Context) ([]domain.WebhookSubscr
 
 	var webhooks []domain.WebhookSubscription
 	for rows.Next() {
-		webhook, scanErr := scanWebhook(rows)
+		webhook, scanErr := r.scanWebhook(rows)
 		if scanErr != nil {
 			return nil, scanErr
 		}
@@ -196,7 +220,7 @@ type webhookScanner interface {
 	Scan(dest ...interface{}) error
 }
 
-func scanWebhook(scanner webhookScanner) (*domain.WebhookSubscription, error) {
+func (r *sqliteWebhookRepo) scanWebhook(scanner webhookScanner) (*domain.WebhookSubscription, error) {
 	var webhook domain.WebhookSubscription
 	var idStr, url, secret, eventTypesRaw, createdAt, updatedAt string
 	var enabled int
@@ -233,11 +257,15 @@ func scanWebhook(scanner webhookScanner) (*domain.WebhookSubscription, error) {
 	if err != nil {
 		return nil, err
 	}
+	decryptedSecret, err := r.decryptSecret(secret)
+	if err != nil {
+		return nil, err
+	}
 
 	webhook = domain.WebhookSubscription{
 		ID:              webhookID,
 		URL:             url,
-		Secret:          secret,
+		Secret:          decryptedSecret,
 		EventTypes:      eventTypes,
 		Enabled:         enabled == 1,
 		LastDeliveredAt: timePtr(lastDeliveredAt),
@@ -246,6 +274,29 @@ func scanWebhook(scanner webhookScanner) (*domain.WebhookSubscription, error) {
 		UpdatedAt:       updated,
 	}
 	return &webhook, nil
+}
+
+func (r *sqliteWebhookRepo) encryptSecret(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	if r.secrets == nil {
+		return "", security.ErrSecretEncryptionUnavailable
+	}
+	return r.secrets.Encrypt(value)
+}
+
+func (r *sqliteWebhookRepo) decryptSecret(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	if r.secrets == nil {
+		if security.IsEncryptedSecret(value) {
+			return "", security.ErrSecretEncryptionUnavailable
+		}
+		return value, nil
+	}
+	return r.secrets.Decrypt(value)
 }
 
 func scanWebhookDelivery(scanner webhookScanner) (*domain.WebhookDelivery, error) {

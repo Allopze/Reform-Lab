@@ -34,6 +34,7 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/orchestrator"
 	"github.com/allopze/reform-lab/apps/api/internal/queue"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
+	"github.com/allopze/reform-lab/apps/api/internal/security"
 	"github.com/allopze/reform-lab/apps/api/internal/storage"
 	"github.com/allopze/reform-lab/apps/api/internal/workers"
 	"github.com/allopze/reform-lab/apps/api/internal/workers/document"
@@ -138,6 +139,11 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 	userRepo := repository.NewUserRepository(db)
 	dashboardRepo := repository.NewDashboardRepository(db)
 	siteSettingRepo := repository.NewSiteSettingRepository(db)
+	secretKeeper, err := security.NewSecretKeeper("0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("init secret keeper: %v", err)
+	}
+	webhookRepo := repository.NewWebhookRepository(db, repository.WithSecretKeeper(secretKeeper))
 
 	// Auth
 	authSvc := auth.NewService(userRepo, "test-secret-key-for-e2e-tests")
@@ -182,7 +188,13 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 	t.Cleanup(func() { jobQueue.Close() })
 
 	// Orchestrator
-	orch := orchestrator.NewService(jobRepo, auditRepo, jobQueue, orchestrator.WithMaxActiveJobsPerUser(limits.maxActiveJobsPerUser))
+	orch := orchestrator.NewService(
+		jobRepo,
+		auditRepo,
+		jobQueue,
+		orchestrator.WithMaxActiveJobsPerUser(limits.maxActiveJobsPerUser),
+		orchestrator.WithMaxActiveJobsPerGuestSession(limits.maxActiveJobsPerGuest),
+	)
 	if workerHandler != nil {
 		workerHandler.Orch = orch
 	}
@@ -192,7 +204,7 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 
 	// Email
 	emailTemplateRepo := repository.NewEmailTemplateRepository(db)
-	emailSvc := emailpkg.NewService(&config.Config{}, siteSettingRepo, emailTemplateRepo, logger)
+	emailSvc := emailpkg.NewService(&config.Config{SecretEncryptionKey: "0123456789abcdef0123456789abcdef"}, siteSettingRepo, emailTemplateRepo, logger, emailpkg.WithSecretKeeper(secretKeeper))
 
 	router := api.NewRouter(api.Deps{
 		Logger:                         logger,
@@ -206,7 +218,9 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 		Dashboard:                      dashboardRepo,
 		SiteSettings:                   siteSettingRepo,
 		EmailTemplates:                 emailTemplateRepo,
+		Webhooks:                       webhookRepo,
 		EmailService:                   emailSvc,
+		SecretKeeper:                   secretKeeper,
 		Queue:                          jobQueue,
 		Orchestrator:                   orch,
 		AuthService:                    authSvc,
@@ -217,7 +231,6 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 		UserUploadBurst:                limits.userUploadBurst,
 		UserConversionsPerMinute:       limits.userConversionsPerMinute,
 		UserConversionBurst:            limits.userConversionBurst,
-		MaxActiveJobsPerGuestSession:   limits.maxActiveJobsPerGuest,
 		GuestCumulativeQuotaBytes:      500 * 1024 * 1024, // 500 MB for test
 		RegisteredCumulativeQuotaBytes: 500 * 1024 * 1024, // 500 MB for test
 		ArtifactTTLHours:               24,

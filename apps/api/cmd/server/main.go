@@ -20,6 +20,7 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/orchestrator"
 	"github.com/allopze/reform-lab/apps/api/internal/queue"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
+	"github.com/allopze/reform-lab/apps/api/internal/security"
 	"github.com/allopze/reform-lab/apps/api/internal/storage"
 	webhookpkg "github.com/allopze/reform-lab/apps/api/internal/webhook"
 	"github.com/allopze/reform-lab/apps/api/internal/workers"
@@ -76,6 +77,10 @@ func main() {
 		logger.Fatal().Err(err).Msg("init storage")
 	}
 	store := storage.Store(storageFS)
+	secretKeeper, err := security.NewSecretKeeper(cfg.SecretEncryptionKey)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("init secret keeper")
+	}
 
 	// Repositories
 	fileRepo := repository.NewFileRepository(db)
@@ -86,7 +91,7 @@ func main() {
 	dashboardRepo := repository.NewDashboardRepository(db)
 	siteSettingRepo := repository.NewSiteSettingRepository(db)
 	emailTemplateRepo := repository.NewEmailTemplateRepository(db)
-	webhookRepo := repository.NewWebhookRepository(db)
+	webhookRepo := repository.NewWebhookRepository(db, repository.WithSecretKeeper(secretKeeper))
 
 	// Auth
 	authSvc := auth.NewService(
@@ -97,7 +102,7 @@ func main() {
 	)
 
 	// Email
-	emailSvc := email.NewService(cfg, siteSettingRepo, emailTemplateRepo, logger)
+	emailSvc := email.NewService(cfg, siteSettingRepo, emailTemplateRepo, logger, email.WithSecretKeeper(secretKeeper))
 	emailHandler := &workers.EmailHandler{
 		Email:  emailSvc,
 		Logger: logger.With().Str("component", "email_worker").Logger(),
@@ -162,7 +167,14 @@ func main() {
 	emailNotifier := email.NewJobNotifier(cfg, emailSvc, jobQueue, userRepo, fileRepo, logger)
 	webhookNotifier := webhookpkg.NewNotifier(jobQueue, webhookRepo, fileRepo, logger)
 	notifier := orchestrator.NewMultiNotifier(emailNotifier, webhookNotifier)
-	orch := orchestrator.NewService(jobRepo, auditRepo, jobQueue, orchestrator.WithMaxActiveJobsPerUser(cfg.MaxActiveJobsPerUser), orchestrator.WithNotifier(notifier))
+	orch := orchestrator.NewService(
+		jobRepo,
+		auditRepo,
+		jobQueue,
+		orchestrator.WithMaxActiveJobsPerUser(cfg.MaxActiveJobsPerUser),
+		orchestrator.WithMaxActiveJobsPerGuestSession(cfg.MaxActiveJobsPerGuestSession),
+		orchestrator.WithNotifier(notifier),
+	)
 	if workerHandler != nil {
 		workerHandler.Orch = orch
 	}
@@ -207,6 +219,7 @@ func main() {
 		EmailTemplates:                 emailTemplateRepo,
 		Webhooks:                       webhookRepo,
 		EmailService:                   emailSvc,
+		SecretKeeper:                   secretKeeper,
 		Queue:                          jobQueue,
 		Orchestrator:                   orch,
 		AuthService:                    authSvc,
@@ -218,7 +231,6 @@ func main() {
 		UserUploadBurst:                cfg.UserUploadBurst,
 		UserConversionsPerMinute:       cfg.UserConversionsPerMinute,
 		UserConversionBurst:            cfg.UserConversionBurst,
-		MaxActiveJobsPerGuestSession:   cfg.MaxActiveJobsPerGuestSession,
 		GuestCumulativeQuotaBytes:      cfg.GuestCumulativeQuotaBytes,
 		RegisteredCumulativeQuotaBytes: cfg.RegisteredCumulativeQuotaBytes,
 		ArtifactTTLHours:               cfg.ArtifactTTLHours,

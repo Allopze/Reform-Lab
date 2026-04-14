@@ -17,6 +17,7 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/orchestrator"
 	"github.com/allopze/reform-lab/apps/api/internal/queue"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
+	"github.com/allopze/reform-lab/apps/api/internal/security"
 	"github.com/allopze/reform-lab/apps/api/internal/storage"
 	webhookpkg "github.com/allopze/reform-lab/apps/api/internal/webhook"
 	"github.com/allopze/reform-lab/apps/api/internal/workers"
@@ -71,6 +72,10 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("init storage")
 	}
+	secretKeeper, err := security.NewSecretKeeper(cfg.SecretEncryptionKey)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("init secret keeper")
+	}
 
 	// Repositories
 	jobRepo := repository.NewJobRepository(db)
@@ -78,10 +83,10 @@ func main() {
 	auditRepo := repository.NewAuditRepository(db)
 	siteSettingRepo := repository.NewSiteSettingRepository(db)
 	emailTemplateRepo := repository.NewEmailTemplateRepository(db)
-	webhookRepo := repository.NewWebhookRepository(db)
+	webhookRepo := repository.NewWebhookRepository(db, repository.WithSecretKeeper(secretKeeper))
 
 	// Email
-	emailSvc := email.NewService(cfg, siteSettingRepo, emailTemplateRepo, logger)
+	emailSvc := email.NewService(cfg, siteSettingRepo, emailTemplateRepo, logger, email.WithSecretKeeper(secretKeeper))
 	emailWorker := &workers.EmailHandler{
 		Email:  emailSvc,
 		Logger: logger.With().Str("component", "email_worker").Logger(),

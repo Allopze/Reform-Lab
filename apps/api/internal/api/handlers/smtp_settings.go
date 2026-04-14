@@ -9,12 +9,14 @@ import (
 
 	emailpkg "github.com/allopze/reform-lab/apps/api/internal/email"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
+	"github.com/allopze/reform-lab/apps/api/internal/security"
 )
 
 // SMTPSettingsHandler manages SMTP configuration via admin panel.
 type SMTPSettingsHandler struct {
 	Email    *emailpkg.Service
 	Settings repository.SiteSettingRepository
+	Secrets  *security.SecretKeeper
 }
 
 type smtpSettingsResponse struct {
@@ -104,7 +106,12 @@ func (h *SMTPSettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	// Only update password if not the mask placeholder.
 	if req.Password != "" && req.Password != "****" {
-		if err := h.Settings.UpsertValue(ctx, emailpkg.SettingSMTPPassword, req.Password, now); err != nil {
+		encryptedPassword, err := h.Secrets.Encrypt(req.Password)
+		if err != nil {
+			respondError(w, http.StatusServiceUnavailable, "secret storage is not configured")
+			return
+		}
+		if err := h.Settings.UpsertValue(ctx, emailpkg.SettingSMTPPassword, encryptedPassword, now); err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to save SMTP password")
 			return
 		}

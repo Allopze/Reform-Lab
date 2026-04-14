@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -60,7 +61,10 @@ func Migrate(db *sql.DB, migrationsPath string) error {
 		return fmt.Errorf("create _migrations table: %w", err)
 	}
 
-	migrations := []string{"001_initial.sql", "002_users.sql", "003_owner_roles.sql", "004_site_settings.sql", "005_guest_sessions.sql", "006_email_templates.sql", "007_email_templates_conversion.sql", "008_file_expired_at.sql"}
+	migrations, err := listMigrationFiles(migrationsPath)
+	if err != nil {
+		return err
+	}
 	for _, name := range migrations {
 		// Skip already-applied migrations.
 		var count int
@@ -83,6 +87,32 @@ func Migrate(db *sql.DB, migrationsPath string) error {
 		}
 	}
 	return nil
+}
+
+func listMigrationFiles(migrationsPath string) ([]string, error) {
+	entries, err := os.ReadDir(migrationsPath)
+	if err != nil {
+		return nil, fmt.Errorf("read migrations directory: %w", err)
+	}
+
+	migrations := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if filepath.Ext(name) != ".sql" {
+			continue
+		}
+		migrations = append(migrations, name)
+	}
+
+	if len(migrations) == 0 {
+		return nil, fmt.Errorf("no migration files found in %q", migrationsPath)
+	}
+
+	sort.Strings(migrations)
+	return migrations, nil
 }
 
 func execMigrationStatements(db *sql.DB, rawSQL string) error {

@@ -15,6 +15,7 @@ import (
 	"github.com/allopze/reform-lab/apps/api/config"
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
+	"github.com/allopze/reform-lab/apps/api/internal/security"
 	"github.com/rs/zerolog"
 )
 
@@ -35,6 +36,15 @@ type Service struct {
 	settings  repository.SiteSettingRepository
 	templates repository.EmailTemplateRepository
 	logger    zerolog.Logger
+	secrets   *security.SecretKeeper
+}
+
+type Option func(*Service)
+
+func WithSecretKeeper(keeper *security.SecretKeeper) Option {
+	return func(s *Service) {
+		s.secrets = keeper
+	}
 }
 
 // NewService creates an email service.
@@ -43,13 +53,20 @@ func NewService(
 	settings repository.SiteSettingRepository,
 	templates repository.EmailTemplateRepository,
 	logger zerolog.Logger,
+	opts ...Option,
 ) *Service {
-	return &Service{
+	svc := &Service{
 		cfg:       cfg,
 		settings:  settings,
 		templates: templates,
 		logger:    logger.With().Str("component", "email").Logger(),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(svc)
+		}
+	}
+	return svc
 }
 
 // ResolveSMTPConfig reads SMTP config from .env defaults, then overrides
@@ -77,7 +94,12 @@ func (s *Service) ResolveSMTPConfig(ctx context.Context) domain.SMTPConfig {
 		cfg.User = v
 	}
 	if v, ok, _ := s.settings.GetValue(ctx, SettingSMTPPassword); ok && v != "" {
-		cfg.Password = v
+		decrypted, err := s.decryptStoredSecret(v)
+		if err != nil {
+			s.logger.Warn().Err(err).Msg("failed to decrypt stored SMTP password")
+		} else {
+			cfg.Password = decrypted
+		}
 	}
 	if v, ok, _ := s.settings.GetValue(ctx, SettingSMTPFrom); ok && v != "" {
 		cfg.From = v
@@ -92,6 +114,16 @@ func (s *Service) ResolveSMTPConfig(ctx context.Context) domain.SMTPConfig {
 	}
 
 	return cfg
+}
+
+func (s *Service) decryptStoredSecret(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	if s.secrets == nil {
+		return value, nil
+	}
+	return s.secrets.Decrypt(value)
 }
 
 // RenderTemplate loads the template by key and renders it with the given variables.

@@ -144,10 +144,17 @@ cp .env.production.example .env
 2. editar al menos:
 
 - `JWT_SECRET`
+- `SECRET_ENCRYPTION_KEY` si vas a guardar secretos admin-managed en SQLite como SMTP o firmas de webhook
 - `CORS_ORIGIN`
 - `NEXT_PUBLIC_API_URL`
 - `APP_URL`
 - `BOOTSTRAP_ADMIN_EMAILS` si quieres restringir el primer admin
+
+Modelo recomendado de produccion:
+
+- termina TLS en un reverse proxy delante de `web` y `api`
+- deja `WEB_BIND_ADDRESS` y `API_BIND_ADDRESS` en loopback salvo que tengas una razon fuerte para exponerlos
+- usa URLs publicas `https://...` en `CORS_ORIGIN`, `NEXT_PUBLIC_API_URL` y `APP_URL`
 
 3. levantar el stack:
 
@@ -159,6 +166,12 @@ docker compose up -d --build
 
 ```bash
 curl http://127.0.0.1:8080/api/health
+```
+
+5. verificar el acceso publico a traves del proxy:
+
+```bash
+curl -I https://YOUR_SERVER_OR_DOMAIN
 ```
 
 ### Empaquetado de release
@@ -197,16 +210,17 @@ Notas operativas:
 | `DATABASE_PATH` | no | `./data/reform.db` | ruta de la base SQLite |
 | `MIGRATIONS_PATH` | no | `./migrations` | ruta de migraciones SQL |
 | `STORAGE_BASE_PATH` | no | `./data` | base para originales, temporales y artefactos |
-| `CORS_ORIGIN` | no, pero muy recomendable | `http://localhost:3000` | lista separada por comas con orígenes exactos permitidos para la web |
+| `CORS_ORIGIN` | no, pero muy recomendable | `http://localhost:3000` | lista separada por comas con orígenes exactos permitidos para la web; en producción normal debería ser un origen `https://` del proxy público |
 | `LOG_LEVEL` | no | `info` | nivel de logs estructurados |
 | `JWT_SECRET` | sí | sin fallback válido | secreto para firmar sesión JWT; mínimo 32 caracteres y sin placeholders banales |
+| `SECRET_ENCRYPTION_KEY` | no, pero muy recomendable si usas SMTP/webhooks configurados desde admin | vacío | clave para cifrar en reposo secretos persistidos por panel admin; acepta 32 bytes raw o base64 de 32 bytes |
 | `REDIS_URL` | no en local, sí en producción | vacío | activa cola Redis; vacío usa cola en proceso |
 | `BOOTSTRAP_ADMIN_EMAILS` | no | vacío | lista separada por comas con los emails autorizados a reclamar el primer admin en `production` |
-| `APP_URL` | no | hereda `CORS_ORIGIN` | URL pública base usada por emails y links generados por backend |
+| `APP_URL` | no | hereda `CORS_ORIGIN` | URL pública base usada por emails y links generados por backend; en producción debería ser la URL HTTPS pública del proxy |
 | `MAX_ACTIVE_JOBS_PER_GUEST_SESSION` | no | `1` | limita cuántas conversiones activas puede mantener una sesión anónima simultáneamente |
 | `EXPOSE_METRICS` | no | `false` | expone `/metrics` para Prometheus |
 | `METRICS_TOKEN` | no | vacío | protege `/metrics` con bearer token cuando está configurado |
-| `TRUST_PROXY_HEADERS` | no | `false` | usa headers tipo `X-Forwarded-*` al calcular IP y seguridad |
+| `TRUST_PROXY_HEADERS` | no | `false` | usa headers tipo `X-Forwarded-*` al calcular IP y seguridad; actívalo solo si la API recibe tráfico exclusivamente desde un proxy de confianza que sobrescribe esas cabeceras |
 
 ### Concurrencia y cuotas
 
@@ -258,7 +272,7 @@ Notas operativas:
 
 | Variable | Obligatoria | Default de código | Qué hace |
 | --- | --- | --- | --- |
-| `NEXT_PUBLIC_API_URL` | no, pero recomendada | `http://localhost:8080` | base URL del API consumido por Next.js |
+| `NEXT_PUBLIC_API_URL` | no, pero recomendada | `http://localhost:8080` | base URL del API consumido por Next.js; en producción detrás de proxy suele ser la misma origin pública `https://...` |
 | `NEXT_PUBLIC_SENTRY_DSN` | no | vacío | activa Sentry en cliente, edge y server cuando existe |
 | `SENTRY_ORG` | no | vacío | organización de Sentry usada en el build de Next cuando se habilita Sentry |
 | `SENTRY_PROJECT` | no | vacío | proyecto de Sentry usado en el build de Next cuando se habilita Sentry |
