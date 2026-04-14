@@ -29,6 +29,7 @@ type Deps struct {
 	Dashboard                      repository.DashboardRepository
 	SiteSettings                   repository.SiteSettingRepository
 	EmailTemplates                 repository.EmailTemplateRepository
+	Webhooks                       repository.WebhookRepository
 	EmailService                   *email.Service
 	Queue                          queue.JobQueue
 	Orchestrator                   *orchestrator.Service
@@ -119,6 +120,7 @@ func NewRouter(d Deps) *chi.Mux {
 				Files: d.Files,
 			}
 			r.Get("/files/{fileId}/capabilities", caps.Handle)
+			r.Post("/files/capabilities/batch", caps.HandleBatch)
 
 			conv := &handlers.ConversionHandler{
 				Files:                        d.Files,
@@ -129,6 +131,7 @@ func NewRouter(d Deps) *chi.Mux {
 				MaxActiveJobsPerGuestSession: d.MaxActiveJobsPerGuestSession,
 			}
 			r.With(middleware.RateLimit(1, 3, d.TrustProxyHeaders, d.Metrics), conversionQuota).Post("/conversions", conv.Handle)
+			r.With(middleware.RateLimit(1, 3, d.TrustProxyHeaders, d.Metrics), conversionQuota).Post("/conversions/batch", conv.HandleBatch)
 
 			jobs := &handlers.JobHandler{
 				Orchestrator: d.Orchestrator,
@@ -138,7 +141,9 @@ func NewRouter(d Deps) *chi.Mux {
 			}
 			r.Get("/jobs/{jobId}", jobs.Handle)
 			r.Post("/jobs/{jobId}/cancel", jobs.Cancel)
+			r.Post("/jobs/batch/cancel", jobs.CancelBatch)
 			r.With(conversionQuota).Post("/jobs/{jobId}/retry", jobs.Retry)
+			r.With(conversionQuota).Post("/jobs/batch/retry", jobs.RetryBatch)
 
 			art := &handlers.ArtifactHandler{
 				Artifacts: d.Artifacts,
@@ -178,10 +183,15 @@ func NewRouter(d Deps) *chi.Mux {
 					Email:     d.EmailService,
 					Templates: d.EmailTemplates,
 				}
+				webhookH := &handlers.WebhookHandler{Webhooks: d.Webhooks}
 				r.Get("/admin/email-templates", emailTmplH.List)
 				r.Get("/admin/email-templates/{key}", emailTmplH.Get)
 				r.Put("/admin/email-templates/{key}", emailTmplH.Update)
 				r.Post("/admin/email-templates/{key}/preview", emailTmplH.Preview)
+				r.Get("/admin/webhooks", webhookH.List)
+				r.Post("/admin/webhooks", webhookH.Create)
+				r.Put("/admin/webhooks/{webhookId}", webhookH.Update)
+				r.Delete("/admin/webhooks/{webhookId}", webhookH.Delete)
 			})
 		})
 	})

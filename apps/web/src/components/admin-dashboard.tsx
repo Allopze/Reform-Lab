@@ -19,6 +19,7 @@ import {
 } from "@/lib/footer-message";
 import SMTPSettingsSection from "@/components/smtp-settings";
 import EmailTemplatesSection from "@/components/email-templates";
+import WebhookSettings from "@/components/webhook-settings";
 
 const BYTES_PER_MB = 1024 * 1024;
 
@@ -402,6 +403,8 @@ export default function AdminDashboard() {
           </section>
 
           <SMTPSettingsSection />
+
+          <WebhookSettings />
 
           <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
             <h2 className="text-base font-semibold text-stone-900">{t("summaryTitle")}</h2>

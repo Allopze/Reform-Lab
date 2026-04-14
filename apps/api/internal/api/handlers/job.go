@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -26,6 +27,10 @@ type jobResponse struct {
 	ArtifactFileName *string `json:"artifactFileName,omitempty"`
 	ArtifactMIMEType *string `json:"artifactMimeType,omitempty"`
 	ArtifactSize     *int64  `json:"artifactSize,omitempty"`
+}
+
+type batchJobActionRequest struct {
+	JobIDs []string `json:"jobIds"`
 }
 
 func (h *JobHandler) Handle(w http.ResponseWriter, r *http.Request) {
@@ -138,6 +143,129 @@ func (h *JobHandler) Retry(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusCreated, retryJob)
+}
+
+func (h *JobHandler) CancelBatch(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	guestSessionID := currentGuestSessionID(r)
+
+	jobIDs, jobs, _, err := h.batchTargetJobs(r, u, guestSessionID)
+	if err != nil {
+		respondError(w, err.status, err.message)
+		return
+	}
+
+	for _, job := range jobs {
+		if err := h.Orchestrator.CancelJob(r.Context(), job.ID); err != nil {
+			respondError(w, http.StatusConflict, "cannot cancel one or more jobs in current state")
+			return
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{"cancelledJobIds": jobIDs})
+}
+
+func (h *JobHandler) RetryBatch(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	guestSessionID := currentGuestSessionID(r)
+
+	_, jobs, fileOwner, err := h.batchTargetJobs(r, u, guestSessionID)
+	if err != nil {
+		respondError(w, err.status, err.message)
+		return
+	}
+
+	requests := make([]orchestrator.BatchRequest, 0, len(jobs))
+	for _, job := range jobs {
+		if job.Status != domain.JobFailed {
+			respondError(w, http.StatusConflict, "only failed jobs can be retried in batch")
+			return
+		}
+
+		file, getErr := h.Files.GetByID(r.Context(), job.FileID)
+		if getErr != nil {
+			respondError(w, http.StatusNotFound, "file not found")
+			return
+		}
+
+		capability, capErr := capabilities.IsEligible(*file, job.CapabilityID)
+		if capErr != nil {
+			respondError(w, http.StatusConflict, "capability no longer eligible for one or more retries")
+			return
+		}
+
+		requests = append(requests, orchestrator.BatchRequest{
+			FileID:     job.FileID,
+			Capability: *capability,
+			InputPath:  h.Store.OriginalPath(job.FileID.String()),
+		})
+	}
+
+	retriedJobs, retryErr := h.Orchestrator.CreateAndEnqueueBatch(r.Context(), fileOwner, requests)
+	if retryErr != nil {
+		if errors.Is(retryErr, domain.ErrTooManyActiveJobs) {
+			respondError(w, http.StatusTooManyRequests, "too many active jobs for this user")
+			return
+		}
+		respondError(w, http.StatusConflict, "failed to retry jobs")
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, map[string]interface{}{"jobs": retriedJobs})
+}
+
+type batchJobTargetsError struct {
+	status  int
+	message string
+}
+
+func (h *JobHandler) batchTargetJobs(r *http.Request, u *domain.User, guestSessionID *uuid.UUID) ([]string, []*domain.Job, *uuid.UUID, *batchJobTargetsError) {
+	var req batchJobActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return nil, nil, nil, &batchJobTargetsError{status: http.StatusBadRequest, message: "invalid request body"}
+	}
+	if len(req.JobIDs) == 0 {
+		return nil, nil, nil, &batchJobTargetsError{status: http.StatusBadRequest, message: "at least one job ID is required"}
+	}
+
+	jobIDs := make([]string, 0, len(req.JobIDs))
+	jobs := make([]*domain.Job, 0, len(req.JobIDs))
+	var ownerID *uuid.UUID
+	for _, rawID := range req.JobIDs {
+		jobID, err := uuid.Parse(rawID)
+		if err != nil {
+			return nil, nil, nil, &batchJobTargetsError{status: http.StatusBadRequest, message: "invalid job ID"}
+		}
+
+		job, err := h.Orchestrator.GetJob(r.Context(), jobID)
+		if err != nil {
+			return nil, nil, nil, &batchJobTargetsError{status: http.StatusNotFound, message: "job not found"}
+		}
+		file, err := h.Files.GetByID(r.Context(), job.FileID)
+		if err != nil {
+			return nil, nil, nil, &batchJobTargetsError{status: http.StatusNotFound, message: "file not found"}
+		}
+		if !canAccessResource(u, guestSessionID, file.UserID, file.GuestSessionID) {
+			return nil, nil, nil, &batchJobTargetsError{status: http.StatusForbidden, message: "forbidden"}
+		}
+		if len(jobs) == 0 {
+			ownerID = job.UserID
+		} else if !sameOptionalUUID(ownerID, job.UserID) {
+			return nil, nil, nil, &batchJobTargetsError{status: http.StatusBadRequest, message: "all jobs in a batch action must share the same owner"}
+		}
+
+		jobIDs = append(jobIDs, jobID.String())
+		jobs = append(jobs, job)
+	}
+
+	return jobIDs, jobs, ownerID, nil
+}
+
+func sameOptionalUUID(left, right *uuid.UUID) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func (h *JobHandler) buildJobResponse(r *http.Request, job *domain.Job) *jobResponse {

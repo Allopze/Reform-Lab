@@ -16,6 +16,7 @@ type UserRepository interface {
 	GetByEmail(ctx context.Context, email string) (*domain.User, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error)
 	Count(ctx context.Context) (int, error)
+	HasAdmin(ctx context.Context) (bool, error)
 }
 
 type sqliteUserRepo struct {
@@ -84,6 +85,14 @@ func (r *sqliteUserRepo) Count(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return count, nil
+}
+
+func (r *sqliteUserRepo) HasAdmin(ctx context.Context) (bool, error) {
+	var count int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = 'admin'`).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // isUniqueViolation checks if a SQLite error is a UNIQUE constraint violation.

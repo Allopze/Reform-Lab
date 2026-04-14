@@ -1,15 +1,15 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import {
-  createConversion,
-  getJob,
+  cancelJobs,
+  createBatchConversion,
   downloadArtifact,
-  cancelJob,
+  getJob,
   type Capability,
 } from "@/lib/api";
-import type { FileState } from "@/types";
+import type { BatchFileItem } from "@/types";
 
 function findCapabilityByID(
   capabilities: Capability[],
@@ -41,30 +41,32 @@ export function getConvertedArtifactName(
 }
 
 export interface UseConversionReturn {
-  activeJobId: string | null;
+  activeJobIds: string[];
   downloadError: string | null;
+  isConverting: boolean;
   handleConvert: () => Promise<void>;
-  handleDownload: () => Promise<void>;
+  handleDownload: (item: BatchFileItem) => Promise<void>;
   handleCancel: () => Promise<void>;
   clearDownloadError: () => void;
   stopPolling: () => void;
 }
 
 export function useConversion(
-  fileState: FileState,
-  setFileState: (state: FileState) => void,
-  uploadedFileId: string | null,
+  items: BatchFileItem[],
+  setItems: React.Dispatch<React.SetStateAction<BatchFileItem[]>>,
   capabilities: Capability[],
   selectedCapabilityId: string,
 ): UseConversionReturn {
   const t = useTranslations("conversion");
-  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [activeJobIds, setActiveJobIds] = useState<string[]>([]);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     return () => {
-      if (pollingRef.current) clearTimeout(pollingRef.current);
+      if (pollingRef.current) {
+        clearTimeout(pollingRef.current);
+      }
     };
   }, []);
 
@@ -75,164 +77,229 @@ export function useConversion(
     }
   }, []);
 
-  const handleConvert = useCallback(async () => {
-    if (fileState.status !== "selected" || !uploadedFileId) return;
+  const isConverting = useMemo(
+    () => items.some((item) => item.status === "converting"),
+    [items],
+  );
 
-    const cap = findCapabilityByID(capabilities, selectedCapabilityId);
-    if (!cap) {
-      setFileState({
-        status: "error",
-        file: fileState.file,
-        selectedCapabilityId,
-        outputFormat: "",
-        message: t("noCapability"),
-      });
+  const handleConvert = useCallback(async () => {
+    const selectedItems = items.filter(
+      (item) => item.uploadedFileId && item.status === "selected",
+    );
+    if (selectedItems.length === 0) {
       return;
     }
 
-    const outputFormat = cap.targetFormat;
+    const cap = findCapabilityByID(capabilities, selectedCapabilityId);
+    if (!cap) {
+      setItems((current) =>
+        current.map((item) =>
+          item.status === "selected"
+            ? { ...item, status: "error", message: t("noCapability") }
+            : item,
+        ),
+      );
+      return;
+    }
 
-    setFileState({
-      status: "converting",
-      file: fileState.file,
-      selectedCapabilityId: cap.id,
-      outputFormat,
-      progress: 0,
-    });
+    const fileIds = selectedItems
+      .map((item) => item.uploadedFileId)
+      .filter(Boolean) as string[];
+
+    setItems((current) =>
+      current.map((item) =>
+        item.uploadedFileId && fileIds.includes(item.uploadedFileId)
+          ? {
+              ...item,
+              status: "converting",
+              progress: 0,
+              message: undefined,
+              selectedCapabilityId: cap.id,
+              outputFormat: cap.targetFormat,
+            }
+          : item,
+      ),
+    );
 
     try {
-      const job = await createConversion(uploadedFileId, cap.id);
-      setActiveJobId(job.id);
-      const timeoutMs = ((cap.timeoutSeconds ?? 90) + 30) * 1000;
+      const jobs = await createBatchConversion(fileIds, cap.id);
+      const nextJobIds = jobs.map((job) => job.id);
+      setActiveJobIds(nextJobIds);
 
-      const INITIAL_DELAY = 1000;
-      const MAX_DELAY = 15000;
-      let elapsed = 0;
-      let delay = INITIAL_DELAY;
-
-      const pollOnce = async () => {
-        elapsed += delay;
-        if (elapsed > timeoutMs) {
-          pollingRef.current = null;
-          setActiveJobId(null);
-          setFileState({
-            status: "error",
-            file: fileState.file,
-            selectedCapabilityId: cap.id,
-            outputFormat,
-            message: t("timeout"),
-          });
-          return;
-        }
-
-        try {
-          const updated = await getJob(job.id);
-
-          if (updated.status === "succeeded" && updated.artifactId) {
-            pollingRef.current = null;
-            setActiveJobId(null);
-            setFileState({
-              status: "done",
-              file: fileState.file,
-              selectedCapabilityId: cap.id,
-              outputFormat,
-              artifactId: updated.artifactId,
-              artifactFileName: updated.artifactFileName,
-              artifactMimeType: updated.artifactMimeType,
-              artifactSize: updated.artifactSize,
-            });
-          } else if (updated.status === "failed") {
-            pollingRef.current = null;
-            setActiveJobId(null);
-            setFileState({
-              status: "error",
-              file: fileState.file,
-              selectedCapabilityId: cap.id,
-              outputFormat,
-              message: updated.error || t("failed"),
-            });
-          } else if (updated.status === "cancelled") {
-            pollingRef.current = null;
-            setActiveJobId(null);
-            setFileState({ status: "idle" });
-          } else {
-            setFileState({
-              status: "converting",
-              file: fileState.file,
-              selectedCapabilityId: cap.id,
-              outputFormat,
-              progress: updated.progress,
-            });
-            delay = Math.min(delay * 2, MAX_DELAY);
-            pollingRef.current = setTimeout(pollOnce, delay);
+      setItems((current) =>
+        current.map((item) => {
+          if (!item.uploadedFileId) {
+            return item;
           }
+
+          const job = jobs.find((candidate) => candidate.fileId === item.uploadedFileId);
+          if (!job) {
+            return item;
+          }
+
+          return {
+            ...item,
+            jobId: job.id,
+            progress: job.progress,
+            status: job.status === "failed" ? "error" : "converting",
+            message: job.error,
+          };
+        }),
+      );
+
+      const poll = async () => {
+        try {
+          const updatedJobs = await Promise.all(
+            nextJobIds.map((jobId) => getJob(jobId)),
+          );
+          const pendingJobs = updatedJobs.filter(
+            (job) => job.status === "queued" || job.status === "running",
+          );
+
+          setItems((current) =>
+            current.map((item) => {
+              if (!item.jobId) {
+                return item;
+              }
+
+              const job = updatedJobs.find(
+                (candidate) => candidate.id === item.jobId,
+              );
+              if (!job) {
+                return item;
+              }
+
+              if (job.status === "succeeded" && job.artifactId) {
+                return {
+                  ...item,
+                  status: "done",
+                  progress: 100,
+                  artifactId: job.artifactId,
+                  artifactFileName: job.artifactFileName,
+                  artifactMimeType: job.artifactMimeType,
+                  artifactSize: job.artifactSize,
+                  message: undefined,
+                };
+              }
+
+              if (job.status === "failed") {
+                return {
+                  ...item,
+                  status: "error",
+                  message: job.error || t("failed"),
+                };
+              }
+
+              if (job.status === "cancelled") {
+                return {
+                  ...item,
+                  status: "selected",
+                  progress: 0,
+                  jobId: undefined,
+                  message: undefined,
+                };
+              }
+
+              return {
+                ...item,
+                status: "converting",
+                progress: job.progress,
+              };
+            }),
+          );
+
+          if (pendingJobs.length > 0) {
+            pollingRef.current = setTimeout(poll, 1500);
+            return;
+          }
+
+          pollingRef.current = null;
+          setActiveJobIds([]);
         } catch {
           pollingRef.current = null;
-          setActiveJobId(null);
-          setFileState({
-            status: "error",
-            file: fileState.file,
-            selectedCapabilityId: cap.id,
-            outputFormat,
-            message: t("pollingError"),
-          });
+          setActiveJobIds([]);
+          setItems((current) =>
+            current.map((item) =>
+              item.status === "converting"
+                ? { ...item, status: "error", message: t("pollingError") }
+                : item,
+            ),
+          );
         }
       };
 
-      pollingRef.current = setTimeout(pollOnce, delay);
+      pollingRef.current = setTimeout(poll, 1000);
     } catch (err: unknown) {
-      setFileState({
-        status: "error",
-        file: fileState.file,
-        selectedCapabilityId: cap.id,
-        outputFormat,
-        message: err instanceof Error ? err.message : t("startError"),
-      });
-    }
-  }, [
-    fileState,
-    uploadedFileId,
-    capabilities,
-    selectedCapabilityId,
-    setFileState,
-    t,
-  ]);
-
-  const handleDownload = useCallback(async () => {
-    if (fileState.status !== "done") return;
-
-    try {
-      setDownloadError(null);
-      await downloadArtifact(
-        fileState.artifactId,
-        getConvertedArtifactName(
-          fileState.file.name,
-          fileState.outputFormat,
-          fileState.artifactFileName,
+      setItems((current) =>
+        current.map((item) =>
+          item.status === "converting"
+            ? {
+                ...item,
+                status: "error",
+                message: err instanceof Error ? err.message : t("startError"),
+              }
+            : item,
         ),
       );
-    } catch (err) {
-      setDownloadError(err instanceof Error ? err.message : t("downloadError"));
     }
-  }, [fileState, t]);
+  }, [capabilities, items, selectedCapabilityId, setItems, t]);
+
+  const handleDownload = useCallback(
+    async (item: BatchFileItem) => {
+      if (!item.artifactId) {
+        return;
+      }
+
+      try {
+        setDownloadError(null);
+        await downloadArtifact(
+          item.artifactId,
+          getConvertedArtifactName(
+            item.file.name,
+            item.outputFormat,
+            item.artifactFileName,
+          ),
+        );
+      } catch (err) {
+        setDownloadError(err instanceof Error ? err.message : t("downloadError"));
+      }
+    },
+    [t],
+  );
 
   const handleCancel = useCallback(async () => {
-    if (!activeJobId) return;
-    try {
-      await cancelJob(activeJobId);
-      stopPolling();
-      setActiveJobId(null);
-      setFileState({ status: "idle" });
-    } catch {
-      // If cancel fails (e.g. already completed), ignore — polling will handle it.
+    if (activeJobIds.length === 0) {
+      return;
     }
-  }, [activeJobId, stopPolling, setFileState]);
+
+    try {
+      await cancelJobs(activeJobIds);
+      stopPolling();
+      setActiveJobIds([]);
+      setItems((current) =>
+        current.map((item) =>
+          item.jobId && activeJobIds.includes(item.jobId)
+            ? {
+                ...item,
+                status: "selected",
+                progress: 0,
+                jobId: undefined,
+                message: undefined,
+              }
+            : item,
+        ),
+      );
+    } catch {
+      // If cancellation races with completion, polling or the next refresh will settle state.
+    }
+  }, [activeJobIds, setItems, stopPolling]);
 
   const clearDownloadError = useCallback(() => setDownloadError(null), []);
 
   return {
-    activeJobId,
+    activeJobIds,
     downloadError,
+    isConverting,
     handleConvert,
     handleDownload,
     handleCancel,

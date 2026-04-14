@@ -21,6 +21,7 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/queue"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
 	"github.com/allopze/reform-lab/apps/api/internal/storage"
+	webhookpkg "github.com/allopze/reform-lab/apps/api/internal/webhook"
 	"github.com/allopze/reform-lab/apps/api/internal/workers"
 	"github.com/allopze/reform-lab/apps/api/internal/workers/audio"
 	"github.com/allopze/reform-lab/apps/api/internal/workers/document"
@@ -85,6 +86,7 @@ func main() {
 	dashboardRepo := repository.NewDashboardRepository(db)
 	siteSettingRepo := repository.NewSiteSettingRepository(db)
 	emailTemplateRepo := repository.NewEmailTemplateRepository(db)
+	webhookRepo := repository.NewWebhookRepository(db)
 
 	// Auth
 	authSvc := auth.NewService(
@@ -99,6 +101,10 @@ func main() {
 	emailHandler := &workers.EmailHandler{
 		Email:  emailSvc,
 		Logger: logger.With().Str("component", "email_worker").Logger(),
+	}
+	webhookHandler := &workers.WebhookHandler{
+		Webhooks: webhookRepo,
+		Logger:   logger.With().Str("component", "webhook_worker").Logger(),
 	}
 
 	// Queue — use Redis if configured, otherwise in-process with embedded worker.
@@ -138,6 +144,9 @@ func main() {
 			if taskType == queue.EmailTaskType {
 				return emailHandler.ProcessPayload(ctx, taskType, payload)
 			}
+			if taskType == queue.WebhookTaskType {
+				return webhookHandler.ProcessPayload(ctx, taskType, payload)
+			}
 			return workerHandler.ProcessPayload(ctx, taskType, payload)
 		}
 		ipq := queue.NewInProcessQueueWithLimit(dispatcher, cfg.InProcessConcurrency)
@@ -151,7 +160,9 @@ func main() {
 
 	// Orchestrator — single instance shared by router and worker handler.
 	emailNotifier := email.NewJobNotifier(cfg, emailSvc, jobQueue, userRepo, fileRepo, logger)
-	orch := orchestrator.NewService(jobRepo, auditRepo, jobQueue, orchestrator.WithMaxActiveJobsPerUser(cfg.MaxActiveJobsPerUser), orchestrator.WithNotifier(emailNotifier))
+	webhookNotifier := webhookpkg.NewNotifier(jobQueue, webhookRepo, fileRepo, logger)
+	notifier := orchestrator.NewMultiNotifier(emailNotifier, webhookNotifier)
+	orch := orchestrator.NewService(jobRepo, auditRepo, jobQueue, orchestrator.WithMaxActiveJobsPerUser(cfg.MaxActiveJobsPerUser), orchestrator.WithNotifier(notifier))
 	if workerHandler != nil {
 		workerHandler.Orch = orch
 	}
@@ -194,6 +205,7 @@ func main() {
 		Dashboard:                      dashboardRepo,
 		SiteSettings:                   siteSettingRepo,
 		EmailTemplates:                 emailTemplateRepo,
+		Webhooks:                       webhookRepo,
 		EmailService:                   emailSvc,
 		Queue:                          jobQueue,
 		Orchestrator:                   orch,

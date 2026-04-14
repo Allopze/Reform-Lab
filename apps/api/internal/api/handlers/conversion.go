@@ -30,6 +30,11 @@ type conversionRequest struct {
 	CapabilityID string `json:"capabilityId"`
 }
 
+type batchConversionRequest struct {
+	FileIDs      []string `json:"fileIds"`
+	CapabilityID string   `json:"capabilityId"`
+}
+
 func (h *ConversionHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r) // may be nil for anonymous users
 	guestSessionID := currentGuestSessionID(r)
@@ -105,4 +110,112 @@ func (h *ConversionHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusCreated, job)
+}
+
+func (h *ConversionHandler) HandleBatch(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	guestSessionID := currentGuestSessionID(r)
+
+	var req batchConversionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.FileIDs) == 0 {
+		respondError(w, http.StatusBadRequest, "at least one file ID is required")
+		return
+	}
+	if req.CapabilityID == "" {
+		respondError(w, http.StatusBadRequest, "capability ID is required")
+		return
+	}
+
+	fileIDs, err := parseUniqueUUIDList(req.FileIDs)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid file ID")
+		return
+	}
+
+	if u == nil && guestSessionID != nil && h.MaxActiveJobsPerGuestSession > 0 && h.Jobs != nil {
+		activeJobs, err := h.Jobs.CountActiveByGuestSession(r.Context(), *guestSessionID)
+		if err != nil {
+			h.Logger.Error().Err(err).Str("guest_session_id", guestSessionID.String()).Msg("failed to count active guest jobs")
+			respondError(w, http.StatusInternalServerError, "failed to create conversion jobs")
+			return
+		}
+		if activeJobs+len(fileIDs) > h.MaxActiveJobsPerGuestSession {
+			respondError(w, http.StatusTooManyRequests, "too many active jobs for this guest session")
+			return
+		}
+	}
+
+	requests := make([]orchestrator.BatchRequest, 0, len(fileIDs))
+	for _, fileID := range fileIDs {
+		file, err := h.Files.GetByID(r.Context(), fileID)
+		if err != nil {
+			respondError(w, http.StatusNotFound, "file not found")
+			return
+		}
+		if !canAccessResource(u, guestSessionID, file.UserID, file.GuestSessionID) {
+			respondError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+
+		cap, err := capabilities.IsEligible(*file, req.CapabilityID)
+		if err != nil {
+			switch err {
+			case domain.ErrCapabilityNotFound:
+				respondError(w, http.StatusBadRequest, "unknown capability")
+			case domain.ErrCapabilityIneligible:
+				respondError(w, http.StatusBadRequest, "capability not available for all selected files")
+			case domain.ErrLimitExceeded:
+				respondError(w, http.StatusRequestEntityTooLarge, "file exceeds capability limits")
+			default:
+				respondError(w, http.StatusBadRequest, "capability check failed")
+			}
+			return
+		}
+
+		inputPath := h.Store.OriginalPath(fileID.String())
+		if _, statErr := os.Stat(inputPath); statErr != nil {
+			respondError(w, http.StatusGone, "original file expired or unavailable")
+			return
+		}
+
+		requests = append(requests, orchestrator.BatchRequest{
+			FileID:     fileID,
+			Capability: *cap,
+			InputPath:  inputPath,
+		})
+	}
+
+	jobs, err := h.Orchestrator.CreateAndEnqueueBatch(r.Context(), userIDPtr(u), requests)
+	if err != nil {
+		if errors.Is(err, domain.ErrTooManyActiveJobs) {
+			respondError(w, http.StatusTooManyRequests, "too many active jobs for this user")
+			return
+		}
+		h.Logger.Error().Err(err).Msg("failed to create batch conversion jobs")
+		respondError(w, http.StatusInternalServerError, "failed to create conversion jobs")
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, map[string]interface{}{"jobs": jobs})
+}
+
+func parseUniqueUUIDList(rawIDs []string) ([]uuid.UUID, error) {
+	seen := make(map[uuid.UUID]struct{}, len(rawIDs))
+	ids := make([]uuid.UUID, 0, len(rawIDs))
+	for _, rawID := range rawIDs {
+		id, err := uuid.Parse(rawID)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }

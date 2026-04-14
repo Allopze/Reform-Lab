@@ -17,7 +17,7 @@ const baseProps = {
 	supportLabel: "PDF, DOCX, PPTX",
 	detailLabel: "Hasta 25 MB por archivo.",
 	accept: ".pdf,.docx,.pptx",
-	onFileSelected: vi.fn(),
+	onFilesSelected: vi.fn(),
 };
 
 describe("Dropzone", () => {
@@ -41,24 +41,26 @@ describe("Dropzone", () => {
 		const input = document.querySelector("input[type='file']") as HTMLInputElement;
 		expect(input).toBeInTheDocument();
 		expect(input.accept).toBe(".pdf,.docx,.pptx");
+		expect(input.multiple).toBe(true);
 	});
 
-	it("calls onFileSelected when a file is picked via input", async () => {
-		const onFileSelected = vi.fn();
-		render(<IntlWrapper><Dropzone {...baseProps} onFileSelected={onFileSelected} /></IntlWrapper>);
+	it("calls onFilesSelected when files are picked via input", async () => {
+		const onFilesSelected = vi.fn();
+		render(<IntlWrapper><Dropzone {...baseProps} onFilesSelected={onFilesSelected} /></IntlWrapper>);
 
 		const input = document.querySelector("input[type='file']") as HTMLInputElement;
-		const file = new File(["content"], "test.pdf", { type: "application/pdf" });
+		const firstFile = new File(["content"], "test.pdf", { type: "application/pdf" });
+		const secondFile = new File(["content"], "deck.pptx", { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" });
 
-		await userEvent.upload(input, file);
+		await userEvent.upload(input, [firstFile, secondFile]);
 
-		expect(onFileSelected).toHaveBeenCalledTimes(1);
-		expect(onFileSelected).toHaveBeenCalledWith(file);
+		expect(onFilesSelected).toHaveBeenCalledTimes(1);
+		expect(onFilesSelected).toHaveBeenCalledWith([firstFile, secondFile]);
 	});
 
-	it("calls onFileSelected on drop", () => {
-		const onFileSelected = vi.fn();
-		render(<IntlWrapper><Dropzone {...baseProps} onFileSelected={onFileSelected} /></IntlWrapper>);
+	it("calls onFilesSelected on drop", () => {
+		const onFilesSelected = vi.fn();
+		render(<IntlWrapper><Dropzone {...baseProps} onFilesSelected={onFilesSelected} /></IntlWrapper>);
 
 		const dropzone = screen.getByRole("button", { name: "Subí tu archivo" });
 		const file = new File(["content"], "doc.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
@@ -67,8 +69,8 @@ describe("Dropzone", () => {
 			dataTransfer: { files: [file] },
 		});
 
-		expect(onFileSelected).toHaveBeenCalledTimes(1);
-		expect(onFileSelected).toHaveBeenCalledWith(file);
+		expect(onFilesSelected).toHaveBeenCalledTimes(1);
+		expect(onFilesSelected).toHaveBeenCalledWith([file]);
 	});
 
 	it("opens file picker on Enter key", async () => {

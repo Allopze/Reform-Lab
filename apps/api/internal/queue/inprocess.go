@@ -51,6 +51,15 @@ func (q *InProcessQueue) EnqueueEmail(ctx context.Context, payload EmailTaskPayl
 	return q.enqueueRaw(EmailTaskType, data, opts)
 }
 
+func (q *InProcessQueue) EnqueueWebhook(ctx context.Context, payload WebhookTaskPayload, opts TaskOptions) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal webhook payload: %w", err)
+	}
+
+	return q.enqueueRaw(WebhookTaskType, data, opts)
+}
+
 func (q *InProcessQueue) enqueueRaw(taskType string, data []byte, opts TaskOptions) error {
 	if q.handler == nil {
 		return nil

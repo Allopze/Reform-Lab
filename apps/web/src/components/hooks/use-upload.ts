@@ -1,16 +1,16 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import {
-  uploadFile,
-  getCapabilities,
+  getBatchCapabilities,
   getUploadPolicy,
+  uploadFile,
   type Capability,
   type UploadPolicy,
 } from "@/lib/api";
 import { categoryIdFromDetectedFamily } from "@/config/categories";
-import type { CategoryId, FileState } from "@/types";
+import type { BatchFileItem, CategoryId } from "@/types";
 
 const BYTES_PER_MB = 1024 * 1024;
 
@@ -18,29 +18,62 @@ function formatMegabytes(bytes: number) {
   return `${Math.round(bytes / BYTES_PER_MB)} MB`;
 }
 
+function makeLocalId(file: File, index: number) {
+  return `${file.name}-${file.size}-${index}-${crypto.randomUUID()}`;
+}
+
+function applySharedCapability(
+  items: BatchFileItem[],
+  capabilityId: string,
+  outputFormat: string,
+) {
+  return items.map((item) => {
+    if (!item.uploadedFileId || item.status === "error") {
+      return item;
+    }
+
+    return {
+      ...item,
+      selectedCapabilityId: capabilityId,
+      outputFormat,
+    };
+  });
+}
+
+function resolveDetectedCategory(
+  items: BatchFileItem[],
+): Exclude<CategoryId, "auto"> | null {
+  const families = Array.from(
+    new Set(items.map((item) => item.detectedFamily).filter(Boolean)),
+  );
+
+  if (families.length !== 1) {
+    return null;
+  }
+
+  return categoryIdFromDetectedFamily(families[0]!);
+}
+
 export interface UseUploadReturn {
   uploadPolicy: UploadPolicy | null;
-  uploadedFileId: string | null;
+  items: BatchFileItem[];
   capabilities: Capability[];
   uploadError: string | null;
   detectedCategoryId: Exclude<CategoryId, "auto"> | null;
-  handleFileSelected: (file: File) => Promise<void>;
+  handleFilesSelected: (files: File[]) => Promise<void>;
+  removeFile: (localId: string) => Promise<void>;
   resetUpload: () => void;
+  setItems: React.Dispatch<React.SetStateAction<BatchFileItem[]>>;
 }
 
 export function useUpload(
-  setFileState: (state: FileState) => void,
   setSelectedCapabilityId: (id: string) => void,
 ): UseUploadReturn {
   const t = useTranslations("upload");
   const [uploadPolicy, setUploadPolicy] = useState<UploadPolicy | null>(null);
-  const [uploadedFileId, setUploadedFileId] = useState<string | null>(null);
+  const [items, setItems] = useState<BatchFileItem[]>([]);
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [detectedCategoryId, setDetectedCategoryId] = useState<Exclude<
-    CategoryId,
-    "auto"
-  > | null>(null);
 
   useEffect(() => {
     getUploadPolicy()
@@ -48,74 +81,137 @@ export function useUpload(
       .catch(() => setUploadPolicy(null));
   }, []);
 
-  const handleFileSelected = useCallback(
-    async (file: File) => {
-      setUploadError(null);
-      setCapabilities([]);
-      setUploadedFileId(null);
-      setSelectedCapabilityId("");
+  const syncCapabilities = useCallback(
+    async (nextItems: BatchFileItem[]) => {
+      const uploadedIds = nextItems
+        .filter((item) => item.uploadedFileId && item.status !== "error")
+        .map((item) => item.uploadedFileId!)
+        .filter(Boolean);
 
-      if (uploadPolicy && file.size > uploadPolicy.effectiveMaxBytes) {
-        setUploadError(
-          t("exceedsLimit", {
-            limit: formatMegabytes(uploadPolicy.effectiveMaxBytes),
-          }),
-        );
-        return;
+      if (uploadedIds.length === 0) {
+        setCapabilities([]);
+        setSelectedCapabilityId("");
+        return nextItems;
       }
 
-      setFileState({
-        status: "selected",
+      const nextCapabilities = await getBatchCapabilities(uploadedIds);
+      const nextCapabilityId = nextCapabilities[0]?.id ?? "";
+      const nextOutputFormat = nextCapabilities[0]?.targetFormat ?? "";
+
+      setCapabilities(nextCapabilities);
+      setSelectedCapabilityId(nextCapabilityId);
+
+      return applySharedCapability(
+        nextItems,
+        nextCapabilityId,
+        nextOutputFormat,
+      );
+    },
+    [setSelectedCapabilityId],
+  );
+
+  const handleFilesSelected = useCallback(
+    async (files: File[]) => {
+      setUploadError(null);
+      setCapabilities([]);
+      setSelectedCapabilityId("");
+
+      const nextItems: BatchFileItem[] = files.map((file, index) => ({
+        localId: makeLocalId(file, index),
         file,
         selectedCapabilityId: "",
         outputFormat: "",
-      });
+        status: "uploading" as const,
+        progress: 0,
+      }));
+
+      setItems(nextItems);
+
+      for (let index = 0; index < nextItems.length; index += 1) {
+        if (
+          uploadPolicy &&
+          nextItems[index].file.size > uploadPolicy.effectiveMaxBytes
+        ) {
+          nextItems[index] = {
+            ...nextItems[index],
+            status: "error",
+            message: t("exceedsLimit", {
+              limit: formatMegabytes(uploadPolicy.effectiveMaxBytes),
+            }),
+          };
+          setItems([...nextItems]);
+          continue;
+        }
+
+        try {
+          const uploaded = await uploadFile(nextItems[index].file);
+          nextItems[index] = {
+            ...nextItems[index],
+            uploadedFileId: uploaded.id,
+            detectedFamily: uploaded.detectedFormat.family,
+            status: "selected",
+            message: undefined,
+          };
+        } catch (err) {
+          nextItems[index] = {
+            ...nextItems[index],
+            status: "error",
+            message:
+              err instanceof Error ? err.message : t("genericError"),
+          };
+        }
+
+        setItems([...nextItems]);
+      }
 
       try {
-        const uploaded = await uploadFile(file);
-        setUploadedFileId(uploaded.id);
-        const nextCategoryId = categoryIdFromDetectedFamily(
-          uploaded.detectedFormat.family,
-        );
-        setDetectedCategoryId(nextCategoryId);
-
-        const caps = await getCapabilities(uploaded.id);
-        setCapabilities(caps);
-
-        const nextCapabilityId = caps[0]?.id ?? "";
-        const nextOutputFormat = caps[0]?.targetFormat ?? "";
-        setSelectedCapabilityId(nextCapabilityId);
-        setFileState({
-          status: "selected",
-          file,
-          selectedCapabilityId: nextCapabilityId,
-          outputFormat: nextOutputFormat,
-        });
+        const resolvedItems = await syncCapabilities(nextItems);
+        setItems(resolvedItems);
       } catch (err) {
-        setUploadedFileId(null);
         setUploadError(err instanceof Error ? err.message : t("genericError"));
-        setCapabilities([]);
-        setSelectedCapabilityId("");
+        setItems(nextItems);
       }
     },
-    [uploadPolicy, setFileState, setSelectedCapabilityId, t],
+    [setSelectedCapabilityId, syncCapabilities, t, uploadPolicy],
+  );
+
+  const removeFile = useCallback(
+    async (localId: string) => {
+      setUploadError(null);
+      const filteredItems = items.filter((item) => item.localId !== localId);
+
+      try {
+        const resolvedItems = await syncCapabilities(filteredItems);
+        setItems(resolvedItems);
+      } catch (err) {
+        setUploadError(err instanceof Error ? err.message : t("genericError"));
+        setItems(filteredItems);
+      }
+    },
+    [items, syncCapabilities, t],
   );
 
   const resetUpload = useCallback(() => {
-    setDetectedCategoryId(null);
-    setUploadedFileId(null);
+    setItems([]);
     setCapabilities([]);
     setUploadError(null);
     setSelectedCapabilityId("");
   }, [setSelectedCapabilityId]);
 
+  const detectedCategoryId = useMemo(
+    () => resolveDetectedCategory(items),
+    [items],
+  );
+
   return {
     uploadPolicy,
-    uploadedFileId,
+    items,
     capabilities,
     uploadError,
     detectedCategoryId,
-    handleFileSelected,
+    handleFilesSelected,
+    removeFile,
     resetUpload,
+    setItems,
   };
 }

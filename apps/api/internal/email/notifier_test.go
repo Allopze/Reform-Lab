@@ -25,6 +25,9 @@ func (q *spyQueue) EnqueueEmail(_ context.Context, p queue.EmailTaskPayload, _ q
 	q.emails = append(q.emails, p)
 	return nil
 }
+func (q *spyQueue) EnqueueWebhook(_ context.Context, _ queue.WebhookTaskPayload, _ queue.TaskOptions) error {
+	return nil
+}
 func (q *spyQueue) Close() error { return nil }
 
 type stubUserRepo struct {
@@ -51,6 +54,14 @@ func (r *stubUserRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.User, e
 	return u, nil
 }
 func (r *stubUserRepo) Count(_ context.Context) (int, error) { return len(r.users), nil }
+func (r *stubUserRepo) HasAdmin(_ context.Context) (bool, error) {
+	for _, u := range r.users {
+		if u.Role == domain.RoleAdmin {
+			return true, nil
+		}
+	}
+	return false, nil
+}
 
 type stubFileRepo struct {
 	files map[uuid.UUID]*domain.OriginalFile

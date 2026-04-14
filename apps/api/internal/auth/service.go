@@ -97,15 +97,17 @@ type AuthResult struct {
 // Register creates a new user account and returns a JWT.
 func (s *Service) Register(ctx context.Context, in RegisterInput) (*AuthResult, error) {
 	role := domain.RoleUser
-	count, err := s.users.Count(ctx)
+
+	hasAdmin, err := s.users.HasAdmin(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if count == 0 {
+
+	if !hasAdmin {
 		switch {
 		case s.canBootstrapInitialAdmin(in.Email):
 			role = domain.RoleAdmin
-		case s.requireExplicitBootstrap:
+		case len(s.bootstrapAdminEmails) > 0 && s.requireExplicitBootstrap:
 			return nil, domain.ErrBootstrapAdminRequired
 		default:
 			role = domain.RoleAdmin

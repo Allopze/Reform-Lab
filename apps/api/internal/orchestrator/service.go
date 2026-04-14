@@ -19,6 +19,12 @@ type JobNotifier interface {
 	NotifyJobFailed(ctx context.Context, job *domain.Job) error
 }
 
+type BatchRequest struct {
+	FileID     uuid.UUID
+	Capability domain.Capability
+	InputPath  string
+}
+
 // Service manages job lifecycle: creation, status updates, and queuing.
 type Service struct {
 	jobs                 repository.JobRepository
@@ -52,6 +58,37 @@ func NewService(jobs repository.JobRepository, audit repository.AuditRepository,
 		}
 	}
 	return svc
+}
+
+func NewMultiNotifier(notifiers ...JobNotifier) JobNotifier {
+	filtered := make([]JobNotifier, 0, len(notifiers))
+	for _, notifier := range notifiers {
+		if notifier != nil {
+			filtered = append(filtered, notifier)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return multiNotifier{notifiers: filtered}
+}
+
+type multiNotifier struct {
+	notifiers []JobNotifier
+}
+
+func (m multiNotifier) NotifyJobCompleted(ctx context.Context, job *domain.Job) error {
+	for _, notifier := range m.notifiers {
+		_ = notifier.NotifyJobCompleted(ctx, job)
+	}
+	return nil
+}
+
+func (m multiNotifier) NotifyJobFailed(ctx context.Context, job *domain.Job) error {
+	for _, notifier := range m.notifiers {
+		_ = notifier.NotifyJobFailed(ctx, job)
+	}
+	return nil
 }
 
 // CreateAndEnqueue persists a new job and enqueues it for processing.
@@ -116,6 +153,79 @@ func (s *Service) CreateAndEnqueue(ctx context.Context, userID *uuid.UUID, fileI
 	})
 
 	return &job, nil
+}
+
+func (s *Service) CreateAndEnqueueBatch(ctx context.Context, userID *uuid.UUID, requests []BatchRequest) ([]domain.Job, error) {
+	if len(requests) == 0 {
+		return nil, nil
+	}
+
+	now := time.Now().UTC()
+	jobs := make([]domain.Job, len(requests))
+	jobRefs := make([]*domain.Job, 0, len(requests))
+	for index, request := range requests {
+		jobs[index] = domain.Job{
+			ID:           uuid.New(),
+			UserID:       userID,
+			FileID:       request.FileID,
+			CapabilityID: request.Capability.ID,
+			OutputFormat: request.Capability.TargetFormat,
+			Status:       domain.JobQueued,
+			Progress:     0,
+			CreatedAt:    now,
+		}
+		jobRefs = append(jobRefs, &jobs[index])
+	}
+
+	if err := s.jobs.CreateManyIfUnderLimit(ctx, jobRefs, s.maxActiveJobsPerUser); err != nil {
+		if errors.Is(err, domain.ErrTooManyActiveJobs) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("persist jobs: %w", err)
+	}
+
+	var userIDStr string
+	if userID != nil {
+		userIDStr = userID.String()
+	}
+
+	for index := range jobs {
+		request := requests[index]
+		job := &jobs[index]
+		taskType := fmt.Sprintf("conversion:%s", request.Capability.ID)
+		payload := queue.TaskPayload{
+			JobID:        job.ID.String(),
+			UserID:       userIDStr,
+			FileID:       request.FileID.String(),
+			CapabilityID: request.Capability.ID,
+			InputPath:    request.InputPath,
+			OutputFormat: request.Capability.TargetFormat,
+		}
+		opts := queue.TaskOptions{
+			MaxRetries: request.Capability.ExecutionLimits.MaxRetries,
+			Timeout:    time.Duration(request.Capability.ExecutionLimits.TimeoutSeconds) * time.Second,
+		}
+
+		if err := s.q.Enqueue(ctx, taskType, payload, opts); err != nil {
+			errMsg := fmt.Sprintf("enqueue failed: %v", err)
+			job.Status = domain.JobFailed
+			job.Error = &errMsg
+			completedAt := time.Now().UTC()
+			job.CompletedAt = &completedAt
+			_ = s.jobs.Update(ctx, job)
+		}
+
+		_ = s.audit.Create(ctx, &domain.AuditEvent{
+			ID:        uuid.New(),
+			EventType: domain.AuditJobCreated,
+			FileID:    &request.FileID,
+			JobID:     &job.ID,
+			Details:   map[string]interface{}{"capabilityId": request.Capability.ID},
+			CreatedAt: now,
+		})
+	}
+
+	return jobs, nil
 }
 
 // GetJob returns a job by ID.

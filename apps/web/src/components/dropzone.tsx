@@ -10,7 +10,7 @@ interface DropzoneProps {
   supportLabel: string;
   detailLabel: string;
   accept: string;
-  onFileSelected: (file: File) => void;
+  onFilesSelected: (files: File[]) => void;
 }
 
 export default function Dropzone({
@@ -19,7 +19,7 @@ export default function Dropzone({
   supportLabel,
   detailLabel,
   accept,
-  onFileSelected,
+  onFilesSelected,
 }: DropzoneProps) {
   const t = useTranslations("common");
   const [isDragOver, setIsDragOver] = useState(false);
@@ -42,20 +42,20 @@ export default function Dropzone({
       e.preventDefault();
       e.stopPropagation();
       setIsDragOver(false);
-      const file = e.dataTransfer.files[0];
-      if (file) onFileSelected(file);
+      const files = Array.from(e.dataTransfer.files ?? []);
+      if (files.length > 0) onFilesSelected(files);
     },
-    [onFileSelected]
+    [onFilesSelected]
   );
 
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) onFileSelected(file);
+      const files = Array.from(e.target.files ?? []);
+      if (files.length > 0) onFilesSelected(files);
       // Reset so the same file can be re-selected
       e.target.value = "";
     },
-    [onFileSelected]
+    [onFilesSelected]
   );
 
   const handleClick = useCallback(() => {
@@ -123,6 +123,7 @@ export default function Dropzone({
         ref={inputRef}
         type="file"
         accept={accept}
+        multiple
         onChange={handleInputChange}
         className="sr-only"
         tabIndex={-1}

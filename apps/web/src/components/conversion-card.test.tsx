@@ -1,14 +1,14 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, beforeEach, afterEach, expect, it, vi } from "vitest";
+import { describe, afterEach, beforeEach, expect, it, vi } from "vitest";
 import ConversionCard from "./conversion-card";
 import { getCategoryById } from "@/config/categories";
 import { IntlWrapper } from "@/test/intl-wrapper";
 import {
-  cancelJob,
-  createConversion,
+  cancelJobs,
+  createBatchConversion,
   downloadArtifact,
-  getCapabilities,
+  getBatchCapabilities,
   getJob,
   getUploadPolicy,
   uploadFile,
@@ -31,21 +31,21 @@ vi.mock("next/link", () => ({
 
 vi.mock("@/lib/api", () => ({
   uploadFile: vi.fn(),
-  getCapabilities: vi.fn(),
-  createConversion: vi.fn(),
+  getBatchCapabilities: vi.fn(),
+  createBatchConversion: vi.fn(),
   getJob: vi.fn(),
   downloadArtifact: vi.fn(),
-  cancelJob: vi.fn(),
+  cancelJobs: vi.fn(),
   getUploadPolicy: vi.fn(),
 }));
 
 vi.mock("./dropzone", () => ({
   default: ({
-    onFileSelected,
+    onFilesSelected,
     supportLabel,
     detailLabel,
   }: {
-    onFileSelected: (file: File) => Promise<void> | void;
+    onFilesSelected: (files: File[]) => Promise<void> | void;
     supportLabel: string;
     detailLabel: string;
   }) => (
@@ -55,11 +55,14 @@ vi.mock("./dropzone", () => ({
       <button
         type="button"
         onClick={() =>
-          void onFileSelected(
-            new File(["deck"], "slides.pptx", {
+          void onFilesSelected([
+            new File(["deck"], "slides-1.pptx", {
               type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             }),
-          )
+            new File(["deck"], "slides-2.pptx", {
+              type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            }),
+          ])
         }
       >
         mock-dropzone
@@ -124,27 +127,40 @@ vi.mock("./file-preview", () => ({
 }));
 
 const uploadFileMock = vi.mocked(uploadFile);
-const getCapabilitiesMock = vi.mocked(getCapabilities);
-const createConversionMock = vi.mocked(createConversion);
+const getBatchCapabilitiesMock = vi.mocked(getBatchCapabilities);
+const createBatchConversionMock = vi.mocked(createBatchConversion);
 const getJobMock = vi.mocked(getJob);
 const downloadArtifactMock = vi.mocked(downloadArtifact);
-const cancelJobMock = vi.mocked(cancelJob);
+const cancelJobsMock = vi.mocked(cancelJobs);
 const getUploadPolicyMock = vi.mocked(getUploadPolicy);
 
 function mockUploadAndCapabilities() {
-  uploadFileMock.mockResolvedValue({
-    id: "file-1",
-    originalName: "slides.pptx",
-    size: 1024,
-    detectedFormat: {
-      mimeType:
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-      family: "document",
-      extension: "pptx",
-    },
-    uploadedAt: "2026-04-09T10:00:00Z",
-  });
-  getCapabilitiesMock.mockResolvedValue([
+  uploadFileMock
+    .mockResolvedValueOnce({
+      id: "file-1",
+      originalName: "slides-1.pptx",
+      size: 1024,
+      detectedFormat: {
+        mimeType:
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        family: "document",
+        extension: "pptx",
+      },
+      uploadedAt: "2026-04-09T10:00:00Z",
+    })
+    .mockResolvedValueOnce({
+      id: "file-2",
+      originalName: "slides-2.pptx",
+      size: 1024,
+      detectedFormat: {
+        mimeType:
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        family: "document",
+        extension: "pptx",
+      },
+      uploadedAt: "2026-04-09T10:00:01Z",
+    });
+  getBatchCapabilitiesMock.mockResolvedValue([
     {
       id: "presentation-to-jpg",
       displayName: "Convertir presentación a JPG",
@@ -154,26 +170,37 @@ function mockUploadAndCapabilities() {
       timeoutSeconds: 30,
     },
   ]);
-  createConversionMock.mockResolvedValue({
-    id: "job-1",
-    fileId: "file-1",
-    capabilityId: "presentation-to-jpg",
-    outputFormat: "jpg",
-    status: "queued",
-    progress: 0,
-    createdAt: "2026-04-09T10:00:01Z",
-  });
+  createBatchConversionMock.mockResolvedValue([
+    {
+      id: "job-1",
+      fileId: "file-1",
+      capabilityId: "presentation-to-jpg",
+      outputFormat: "jpg",
+      status: "queued",
+      progress: 0,
+      createdAt: "2026-04-09T10:00:01Z",
+    },
+    {
+      id: "job-2",
+      fileId: "file-2",
+      capabilityId: "presentation-to-jpg",
+      outputFormat: "jpg",
+      status: "queued",
+      progress: 0,
+      createdAt: "2026-04-09T10:00:01Z",
+    },
+  ]);
 }
 
 async function uploadAndStartConversion(
   user: ReturnType<typeof userEvent.setup>,
 ) {
   await user.click(screen.getByRole("button", { name: "mock-dropzone" }));
-  await waitFor(() => expect(uploadFileMock).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(uploadFileMock).toHaveBeenCalledTimes(2));
   await user.click(screen.getByRole("button", { name: "Convertir documento" }));
   await waitFor(() =>
-    expect(createConversionMock).toHaveBeenCalledWith(
-      "file-1",
+    expect(createBatchConversionMock).toHaveBeenCalledWith(
+      ["file-1", "file-2"],
       "presentation-to-jpg",
     ),
   );
@@ -182,7 +209,7 @@ async function uploadAndStartConversion(
 describe("ConversionCard", () => {
   beforeEach(() => {
     mockUploadAndCapabilities();
-    cancelJobMock.mockResolvedValue(undefined);
+    cancelJobsMock.mockResolvedValue(["job-1", "job-2"]);
     getUploadPolicyMock.mockResolvedValue({
       guestMaxBytes: 5 * 1024 * 1024,
       registeredMaxBytes: 25 * 1024 * 1024,
@@ -197,16 +224,6 @@ describe("ConversionCard", () => {
   });
 
   it("allows anonymous users to upload and start a conversion", async () => {
-    createConversionMock.mockResolvedValueOnce({
-      id: "job-1",
-      fileId: "file-1",
-      capabilityId: "presentation-to-jpg",
-      outputFormat: "jpg",
-      status: "queued",
-      progress: 0,
-      createdAt: "2026-04-09T10:00:01Z",
-    });
-
     const user = userEvent.setup();
     render(
       <IntlWrapper>
@@ -219,14 +236,14 @@ describe("ConversionCard", () => {
     expect(
       screen.queryByText("Acceso requerido para convertir archivos"),
     ).not.toBeInTheDocument();
-    expect(createConversionMock).toHaveBeenCalledWith(
-      "file-1",
+    expect(createBatchConversionMock).toHaveBeenCalledWith(
+      ["file-1", "file-2"],
       "presentation-to-jpg",
     );
   });
 
   it("keeps same-format capabilities visible and submits the selected capability id", async () => {
-    getCapabilitiesMock.mockResolvedValue([
+    getBatchCapabilitiesMock.mockResolvedValue([
       {
         id: "video-to-webm",
         displayName: "Convertir a WebM",
@@ -244,15 +261,26 @@ describe("ConversionCard", () => {
         timeoutSeconds: 30,
       },
     ]);
-    createConversionMock.mockResolvedValueOnce({
-      id: "job-1",
-      fileId: "file-1",
-      capabilityId: "video-preview-webm",
-      outputFormat: "webm",
-      status: "queued",
-      progress: 0,
-      createdAt: "2026-04-09T10:00:01Z",
-    });
+    createBatchConversionMock.mockResolvedValueOnce([
+      {
+        id: "job-1",
+        fileId: "file-1",
+        capabilityId: "video-preview-webm",
+        outputFormat: "webm",
+        status: "queued",
+        progress: 0,
+        createdAt: "2026-04-09T10:00:01Z",
+      },
+      {
+        id: "job-2",
+        fileId: "file-2",
+        capabilityId: "video-preview-webm",
+        outputFormat: "webm",
+        status: "queued",
+        progress: 0,
+        createdAt: "2026-04-09T10:00:01Z",
+      },
+    ]);
 
     const user = userEvent.setup();
     render(
@@ -262,7 +290,7 @@ describe("ConversionCard", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "mock-dropzone" }));
-    await waitFor(() => expect(uploadFileMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(uploadFileMock).toHaveBeenCalledTimes(2));
 
     expect(
       screen.getAllByRole("option", { name: "Convertir a WebM" }),
@@ -281,15 +309,15 @@ describe("ConversionCard", () => {
     );
 
     await waitFor(() =>
-      expect(createConversionMock).toHaveBeenCalledWith(
-        "file-1",
+      expect(createBatchConversionMock).toHaveBeenCalledWith(
+        ["file-1", "file-2"],
         "video-preview-webm",
       ),
     );
   });
 
   it("autoselects the first capability returned by the backend", async () => {
-    getCapabilitiesMock.mockResolvedValue([
+    getBatchCapabilitiesMock.mockResolvedValue([
       {
         id: "video-preview-webm",
         displayName: "Generar preview corto WebM",
@@ -307,15 +335,6 @@ describe("ConversionCard", () => {
         timeoutSeconds: 30,
       },
     ]);
-    createConversionMock.mockResolvedValueOnce({
-      id: "job-1",
-      fileId: "file-1",
-      capabilityId: "video-preview-webm",
-      outputFormat: "webm",
-      status: "queued",
-      progress: 0,
-      createdAt: "2026-04-09T10:00:01Z",
-    });
 
     const user = userEvent.setup();
     render(
@@ -325,7 +344,7 @@ describe("ConversionCard", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "mock-dropzone" }));
-    await waitFor(() => expect(uploadFileMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(uploadFileMock).toHaveBeenCalledTimes(2));
 
     expect(
       screen.getByRole("combobox", { name: "Opciones disponibles" }),
@@ -333,15 +352,15 @@ describe("ConversionCard", () => {
     expect(
       screen.getAllByText("Generar preview corto WebM").length,
     ).toBeGreaterThan(0);
-    expect(screen.getByText("webm")).toBeInTheDocument();
+    expect(screen.getAllByText("webm")).toHaveLength(2);
 
     await user.click(
       screen.getByRole("button", { name: "Convertir documento" }),
     );
 
     await waitFor(() =>
-      expect(createConversionMock).toHaveBeenCalledWith(
-        "file-1",
+      expect(createBatchConversionMock).toHaveBeenCalledWith(
+        ["file-1", "file-2"],
         "video-preview-webm",
       ),
     );
@@ -365,23 +384,37 @@ describe("ConversionCard", () => {
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "mock-dropzone" }));
-    await waitFor(() => expect(uploadFileMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(uploadFileMock).toHaveBeenCalledTimes(2));
   });
 
-  it("renders ZIP success UX from backend artifact metadata", async () => {
-    getJobMock.mockResolvedValue({
-      id: "job-1",
-      fileId: "file-1",
-      capabilityId: "presentation-to-jpg",
-      outputFormat: "jpg",
-      status: "succeeded",
-      progress: 100,
-      artifactId: "artifact-1",
-      artifactFileName: "slides.zip",
-      artifactMimeType: "application/zip",
-      artifactSize: 4096,
-      createdAt: "2026-04-09T10:00:01Z",
-    });
+  it("renders per-file downloads after batch completion", async () => {
+    getJobMock
+      .mockResolvedValueOnce({
+        id: "job-1",
+        fileId: "file-1",
+        capabilityId: "presentation-to-jpg",
+        outputFormat: "jpg",
+        status: "succeeded",
+        progress: 100,
+        artifactId: "artifact-1",
+        artifactFileName: "slides-1.zip",
+        artifactMimeType: "application/zip",
+        artifactSize: 4096,
+        createdAt: "2026-04-09T10:00:01Z",
+      })
+      .mockResolvedValueOnce({
+        id: "job-2",
+        fileId: "file-2",
+        capabilityId: "presentation-to-jpg",
+        outputFormat: "jpg",
+        status: "succeeded",
+        progress: 100,
+        artifactId: "artifact-2",
+        artifactFileName: "slides-2.jpg",
+        artifactMimeType: "image/jpeg",
+        artifactSize: 4096,
+        createdAt: "2026-04-09T10:00:01Z",
+      });
     downloadArtifactMock.mockResolvedValue(undefined);
 
     const user = userEvent.setup();
@@ -394,120 +427,44 @@ describe("ConversionCard", () => {
     await uploadAndStartConversion(user);
     expect(
       await screen.findByText(
-        "La salida incluye varios archivos y se agrupó como slides.zip.",
+        "2 artefactos del lote quedaron listos para descarga individual.",
         {},
         { timeout: 3000 },
       ),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("link", { name: "Descargar ZIP" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Descargar" })).toHaveClass(
-      "bg-emerald-500",
-    );
+    expect(screen.getByText("slides-1.pptx")).toBeInTheDocument();
+    expect(screen.getByText("slides-2.pptx")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Descargar" }));
+    await user.click(screen.getByRole("button", { name: "Descargar slides-1.zip" }));
 
     await waitFor(() =>
       expect(downloadArtifactMock).toHaveBeenCalledWith(
         "artifact-1",
-        "slides.zip",
+        "slides-1.zip",
       ),
     );
   });
 
-  it("downloads single-file outputs using the input basename", async () => {
-    getJobMock.mockResolvedValue({
-      id: "job-1",
-      fileId: "file-1",
-      capabilityId: "presentation-to-jpg",
-      outputFormat: "jpg",
-      status: "succeeded",
-      progress: 100,
-      artifactId: "artifact-1",
-      artifactFileName: "converted.jpg",
-      artifactMimeType: "image/jpeg",
-      artifactSize: 4096,
-      createdAt: "2026-04-09T10:00:01Z",
-    });
-    downloadArtifactMock.mockResolvedValue(undefined);
-
-    const user = userEvent.setup();
-    render(
-      <IntlWrapper>
-        <ConversionCard category={getCategoryById("auto")} />
-      </IntlWrapper>,
-    );
-
-    await uploadAndStartConversion(user);
-    expect(
-      await screen.findByText(
-        "Artefacto listo: slides.jpg.",
-        {},
-        { timeout: 3000 },
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("link", { name: "Descargar archivo" }),
-    ).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Descargar" }));
-
-    await waitFor(() =>
-      expect(downloadArtifactMock).toHaveBeenCalledWith(
-        "artifact-1",
-        "slides.jpg",
-      ),
-    );
-  });
-
-  it("shows the backend job failure message", async () => {
-    getJobMock.mockResolvedValue({
-      id: "job-1",
-      fileId: "file-1",
-      capabilityId: "presentation-to-jpg",
-      outputFormat: "jpg",
-      status: "failed",
-      progress: 42,
-      error: "El deck está corrupto y no pudo renderizarse.",
-      createdAt: "2026-04-09T10:00:01Z",
-    });
-
-    const user = userEvent.setup();
-    render(
-      <IntlWrapper>
-        <ConversionCard category={getCategoryById("auto")} />
-      </IntlWrapper>,
-    );
-
-    await uploadAndStartConversion(user);
-    expect(
-      await screen.findByText(
-        "El deck está corrupto y no pudo renderizarse.",
-        {},
-        { timeout: 3000 },
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Probar otro archivo" }),
-    ).toBeInTheDocument();
-  });
-
-  it("keeps the success state visible when download fails", async () => {
-    getJobMock.mockResolvedValue({
-      id: "job-1",
-      fileId: "file-1",
-      capabilityId: "presentation-to-jpg",
-      outputFormat: "jpg",
-      status: "succeeded",
-      progress: 100,
-      artifactId: "artifact-1",
-      artifactFileName: "slides.zip",
-      artifactMimeType: "application/zip",
-      artifactSize: 4096,
-      createdAt: "2026-04-09T10:00:01Z",
-    });
-    downloadArtifactMock.mockRejectedValue(new Error("El ZIP ya expiró."));
+  it("cancels active batch jobs", async () => {
+    getJobMock
+      .mockResolvedValueOnce({
+        id: "job-1",
+        fileId: "file-1",
+        capabilityId: "presentation-to-jpg",
+        outputFormat: "jpg",
+        status: "running",
+        progress: 25,
+        createdAt: "2026-04-09T10:00:01Z",
+      })
+      .mockResolvedValueOnce({
+        id: "job-2",
+        fileId: "file-2",
+        capabilityId: "presentation-to-jpg",
+        outputFormat: "jpg",
+        status: "running",
+        progress: 40,
+        createdAt: "2026-04-09T10:00:01Z",
+      });
 
     const user = userEvent.setup();
     render(
@@ -518,19 +475,11 @@ describe("ConversionCard", () => {
 
     await uploadAndStartConversion(user);
     await user.click(
-      await screen.findByRole(
-        "button",
-        { name: "Descargar" },
-        { timeout: 3000 },
-      ),
+      await screen.findByRole("button", { name: "Cancelar" }, { timeout: 3000 }),
     );
 
-    expect(await screen.findByText("El ZIP ya expiró.")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("link", { name: "Descargar ZIP" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Descargar" }),
-    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(cancelJobsMock).toHaveBeenCalledWith(["job-1", "job-2"]),
+    );
   });
 });

@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/allopze/reform-lab/apps/api/internal/database"
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
+	"github.com/google/uuid"
 )
 
 func testMigrationsPath(t *testing.T) string {
@@ -85,12 +87,34 @@ func TestRegisterFirstUserBecomesAdmin(t *testing.T) {
 	}
 }
 
-func TestRegisterRequiresExplicitBootstrapWhenConfigured(t *testing.T) {
+func TestRegisterFirstUserBecomesAdminEvenInProduction(t *testing.T) {
 	svc, _ := newTestAuthService(t)
 	svc = NewService(svc.users, "test-secret", WithExplicitBootstrapRequired(true))
 
+	result, err := svc.Register(context.Background(), RegisterInput{
+		Name:     "First Admin",
+		Email:    "first@example.com",
+		Password: "secret123",
+	})
+	if err != nil {
+		t.Fatalf("expected first registration to succeed, got %v", err)
+	}
+	if result.User.Role != domain.RoleAdmin {
+		t.Fatalf("expected admin role, got %q", result.User.Role)
+	}
+}
+
+func TestRegisterBlocksNonAllowlistedWhenBootstrapEmailsSet(t *testing.T) {
+	svc, users := newTestAuthService(t)
+	svc = NewService(
+		users,
+		"test-secret",
+		WithExplicitBootstrapRequired(true),
+		WithBootstrapAdminEmails([]string{"allowed@example.com"}),
+	)
+
 	_, err := svc.Register(context.Background(), RegisterInput{
-		Name:     "Blocked Admin",
+		Name:     "Blocked",
 		Email:    "blocked@example.com",
 		Password: "secret123",
 	})
@@ -118,5 +142,66 @@ func TestRegisterAllowsBootstrapAdminEmailWhenConfigured(t *testing.T) {
 	}
 	if result.User.Role != domain.RoleAdmin {
 		t.Fatalf("expected bootstrap email to become admin, got %q", result.User.Role)
+	}
+}
+
+func TestRegisterBlockedWhenUsersExistButNoAdmin(t *testing.T) {
+	_, users := newTestAuthService(t)
+	svc := NewService(
+		users,
+		"test-secret",
+		WithExplicitBootstrapRequired(true),
+		WithBootstrapAdminEmails([]string{"admin@example.com"}),
+	)
+
+	// Manually insert a non-admin user to simulate the state where users
+	// exist but no admin has been bootstrapped.
+	ctx := context.Background()
+	noAdmin := &domain.User{
+		ID:           uuid.New(),
+		Name:         "Ghost",
+		Email:        "ghost@example.com",
+		Role:         domain.RoleUser,
+		PasswordHash: "$2a$10$dummyhashnotrealatall000000000000000000000000000000",
+		CreatedAt:    time.Now().UTC(),
+	}
+	if err := users.Create(ctx, noAdmin); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	// A non-bootstrap email should be blocked because no admin exists.
+	_, err := svc.Register(ctx, RegisterInput{
+		Name:     "Hopeful",
+		Email:    "hopeful@example.com",
+		Password: "secret123",
+	})
+	if !errors.Is(err, domain.ErrBootstrapAdminRequired) {
+		t.Fatalf("expected ErrBootstrapAdminRequired, got %v", err)
+	}
+
+	// The bootstrap email should still be able to claim admin.
+	result, err := svc.Register(ctx, RegisterInput{
+		Name:     "Real Admin",
+		Email:    "admin@example.com",
+		Password: "secret123",
+	})
+	if err != nil {
+		t.Fatalf("register bootstrap admin: %v", err)
+	}
+	if result.User.Role != domain.RoleAdmin {
+		t.Fatalf("expected admin role, got %q", result.User.Role)
+	}
+
+	// Now that an admin exists, public registration should work.
+	public, err := svc.Register(ctx, RegisterInput{
+		Name:     "Public User",
+		Email:    "public@example.com",
+		Password: "secret123",
+	})
+	if err != nil {
+		t.Fatalf("register public user after admin: %v", err)
+	}
+	if public.User.Role != domain.RoleUser {
+		t.Fatalf("expected user role, got %q", public.User.Role)
 	}
 }

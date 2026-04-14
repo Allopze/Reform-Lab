@@ -48,6 +48,19 @@ func (q *AsynqQueue) EnqueueEmail(_ context.Context, payload EmailTaskPayload, o
 	return err
 }
 
+func (q *AsynqQueue) EnqueueWebhook(_ context.Context, payload WebhookTaskPayload, opts TaskOptions) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal webhook payload: %w", err)
+	}
+	task := asynq.NewTask(WebhookTaskType, data,
+		asynq.MaxRetry(opts.MaxRetries),
+		asynq.Timeout(opts.Timeout),
+	)
+	_, err = q.client.Enqueue(task)
+	return err
+}
+
 func (q *AsynqQueue) Close() error {
 	return q.client.Close()
 }

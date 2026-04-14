@@ -14,6 +14,7 @@ import (
 type JobRepository interface {
 	Create(ctx context.Context, j *domain.Job) error
 	CreateIfUnderLimit(ctx context.Context, j *domain.Job, maxActive int) error
+	CreateManyIfUnderLimit(ctx context.Context, jobs []*domain.Job, maxActive int) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Job, error)
 	Update(ctx context.Context, j *domain.Job) error
 	CountActiveByUser(ctx context.Context, userID uuid.UUID) (int, error)
@@ -44,34 +45,48 @@ func (r *sqliteJobRepo) Create(ctx context.Context, j *domain.Job) error {
 // inserts the job only if the count is below maxActive. Returns
 // domain.ErrTooManyActiveJobs if the limit would be exceeded.
 func (r *sqliteJobRepo) CreateIfUnderLimit(ctx context.Context, j *domain.Job, maxActive int) error {
+	return r.createManyIfUnderLimit(ctx, []*domain.Job{j}, maxActive)
+}
+
+func (r *sqliteJobRepo) CreateManyIfUnderLimit(ctx context.Context, jobs []*domain.Job, maxActive int) error {
+	return r.createManyIfUnderLimit(ctx, jobs, maxActive)
+}
+
+func (r *sqliteJobRepo) createManyIfUnderLimit(ctx context.Context, jobs []*domain.Job, maxActive int) error {
+	if len(jobs) == 0 {
+		return nil
+	}
+
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
-	if j.UserID != nil && maxActive > 0 {
+	if jobs[0].UserID != nil && maxActive > 0 {
 		var count int
 		err := tx.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM jobs WHERE user_id = ? AND status IN (?, ?)`,
-			j.UserID.String(), string(domain.JobQueued), string(domain.JobRunning),
+			jobs[0].UserID.String(), string(domain.JobQueued), string(domain.JobRunning),
 		).Scan(&count)
 		if err != nil {
 			return fmt.Errorf("count active jobs: %w", err)
 		}
-		if count >= maxActive {
+		if count+len(jobs) > maxActive {
 			return domain.ErrTooManyActiveJobs
 		}
 	}
 
-	_, err = tx.ExecContext(ctx,
-		`INSERT INTO jobs (id, user_id, file_id, capability_id, output_format, status, progress, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		j.ID.String(), nullableUUIDString(j.UserID), j.FileID.String(), j.CapabilityID, j.OutputFormat,
-		string(j.Status), j.Progress, j.CreatedAt.Format(timeLayout),
-	)
-	if err != nil {
-		return fmt.Errorf("insert job: %w", err)
+	for _, job := range jobs {
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO jobs (id, user_id, file_id, capability_id, output_format, status, progress, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			job.ID.String(), nullableUUIDString(job.UserID), job.FileID.String(), job.CapabilityID, job.OutputFormat,
+			string(job.Status), job.Progress, job.CreatedAt.Format(timeLayout),
+		)
+		if err != nil {
+			return fmt.Errorf("insert job: %w", err)
+		}
 	}
 
 	return tx.Commit()

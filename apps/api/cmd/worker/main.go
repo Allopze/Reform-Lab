@@ -18,6 +18,7 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/queue"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
 	"github.com/allopze/reform-lab/apps/api/internal/storage"
+	webhookpkg "github.com/allopze/reform-lab/apps/api/internal/webhook"
 	"github.com/allopze/reform-lab/apps/api/internal/workers"
 	"github.com/allopze/reform-lab/apps/api/internal/workers/audio"
 	"github.com/allopze/reform-lab/apps/api/internal/workers/document"
@@ -77,12 +78,17 @@ func main() {
 	auditRepo := repository.NewAuditRepository(db)
 	siteSettingRepo := repository.NewSiteSettingRepository(db)
 	emailTemplateRepo := repository.NewEmailTemplateRepository(db)
+	webhookRepo := repository.NewWebhookRepository(db)
 
 	// Email
 	emailSvc := email.NewService(cfg, siteSettingRepo, emailTemplateRepo, logger)
 	emailWorker := &workers.EmailHandler{
 		Email:  emailSvc,
 		Logger: logger.With().Str("component", "email_worker").Logger(),
+	}
+	webhookWorker := &workers.WebhookHandler{
+		Webhooks: webhookRepo,
+		Logger:   logger.With().Str("component", "webhook_worker").Logger(),
 	}
 
 	// Queue (for orchestrator to update jobs)
@@ -92,7 +98,8 @@ func main() {
 	}
 	defer q.Close()
 
-	orch := orchestrator.NewService(jobRepo, auditRepo, q)
+	webhookNotifier := webhookpkg.NewNotifier(q, webhookRepo, repository.NewFileRepository(db), logger)
+	orch := orchestrator.NewService(jobRepo, auditRepo, q, orchestrator.WithNotifier(webhookNotifier))
 
 	// Register conversion engines
 	registry := workers.NewRegistry()
@@ -224,6 +231,9 @@ func main() {
 	// Register email task handler.
 	mux.HandleFunc(queue.EmailTaskType, func(ctx context.Context, t *asynq.Task) error {
 		return emailWorker.ProcessPayload(ctx, t.Type(), t.Payload())
+	})
+	mux.HandleFunc(queue.WebhookTaskType, func(ctx context.Context, t *asynq.Task) error {
+		return webhookWorker.ProcessPayload(ctx, t.Type(), t.Payload())
 	})
 
 	// Graceful shutdown

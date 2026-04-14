@@ -3,7 +3,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { downloadArtifact, getMyDashboard, retryJob, type UserDashboardData } from "@/lib/api";
+import {
+  cancelJob,
+  cancelJobs,
+  downloadArtifact,
+  getMyDashboard,
+  retryJob,
+  retryJobs,
+  type UserDashboardData,
+  type UserDashboardJob,
+} from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
 function formatDate(value: string): string {
@@ -22,6 +31,8 @@ export default function UserDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [selectedJobIds, setSelectedJobIds] = useState<string[]>([]);
 
   const refreshDashboard = useCallback(async () => {
     const nextData = await getMyDashboard();
@@ -51,12 +62,124 @@ export default function UserDashboard() {
 
   if (!data) return null;
 
+  const isCancelable = (job: UserDashboardJob) =>
+    job.status === "queued" || job.status === "running";
+  const isRetryable = (job: UserDashboardJob) => job.status === "failed";
+  const isSelectable = (job: UserDashboardJob) =>
+    isCancelable(job) || isRetryable(job);
+
+  const selectableJobIds = data.recentJobs
+    .filter(isSelectable)
+    .map((job) => job.jobId);
+  const selectedJobs = data.recentJobs.filter((job) =>
+    selectedJobIds.includes(job.jobId),
+  );
+  const canBatchCancel =
+    selectedJobs.length > 0 && selectedJobs.every(isCancelable);
+  const canBatchRetry =
+    selectedJobs.length > 0 && selectedJobs.every(isRetryable);
+  const hasMixedSelection =
+    selectedJobs.length > 0 && !canBatchCancel && !canBatchRetry;
+
+  async function handleSingleCancel(jobId: string) {
+    try {
+      setError(null);
+      setCancellingId(jobId);
+      await cancelJob(jobId);
+      await refreshDashboard();
+      setSelectedJobIds((current) => current.filter((id) => id !== jobId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("cancelError"));
+    } finally {
+      setCancellingId(null);
+    }
+  }
+
+  async function handleBatchCancel() {
+    if (!canBatchCancel) {
+      return;
+    }
+
+    try {
+      setError(null);
+      await cancelJobs(selectedJobIds);
+      await refreshDashboard();
+      setSelectedJobIds([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("cancelError"));
+    }
+  }
+
+  async function handleBatchRetry() {
+    if (!canBatchRetry) {
+      return;
+    }
+
+    try {
+      setError(null);
+      await retryJobs(selectedJobIds);
+      await refreshDashboard();
+      setSelectedJobIds([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("retryError"));
+    }
+  }
+
   return (
     <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1.45fr)_minmax(280px,0.55fr)]">
       <section className="overflow-hidden rounded-xl border border-stone-200 bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 px-5 py-4">
+          <div>
+            <h2 className="text-base font-semibold text-stone-900">
+              {t("batchActionsTitle")}
+            </h2>
+            <p className="mt-1 text-sm text-stone-500">
+              {t("selectedCount", { count: selectedJobIds.length })}
+            </p>
+            {hasMixedSelection ? (
+              <p className="mt-2 text-sm text-amber-700">
+                {t("selectionConflict")}
+              </p>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void handleBatchCancel()}
+              disabled={!canBatchCancel}
+              className="inline-flex h-10 items-center rounded-lg border border-stone-300 px-4 text-sm font-medium text-stone-700 transition-colors duration-150 hover:border-stone-400 hover:bg-stone-50 disabled:cursor-not-allowed disabled:border-stone-200 disabled:text-stone-400"
+            >
+              {t("cancelSelected")}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleBatchRetry()}
+              disabled={!canBatchRetry}
+              className="inline-flex h-10 items-center rounded-lg bg-coral-500 px-4 text-sm font-medium text-white transition-colors duration-150 hover:bg-coral-600 disabled:cursor-not-allowed disabled:bg-coral-200"
+            >
+              {t("retrySelected")}
+            </button>
+          </div>
+        </div>
+
         <table className="w-full border-collapse text-left">
           <thead className="bg-stone-50 text-xs font-medium text-stone-500">
             <tr>
+              <th className="px-5 py-3">
+                <input
+                  type="checkbox"
+                  aria-label={t("selectAllAria")}
+                  checked={
+                    selectableJobIds.length > 0 &&
+                    selectedJobIds.length === selectableJobIds.length
+                  }
+                  onChange={(event) => {
+                    setSelectedJobIds(
+                      event.target.checked ? selectableJobIds : [],
+                    );
+                  }}
+                />
+              </th>
               <th className="px-5 py-3">{t("fileHeader")}</th>
               <th className="px-5 py-3">{t("detectedHeader")}</th>
               <th className="px-5 py-3">{t("outputHeader")}</th>
@@ -68,13 +191,31 @@ export default function UserDashboard() {
           <tbody>
             {data.recentJobs.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-5 py-8 text-sm text-stone-500">
+                <td colSpan={7} className="px-5 py-8 text-sm text-stone-500">
                   {t("emptyState")}
                 </td>
               </tr>
             ) : (
               data.recentJobs.map((job) => (
                 <tr key={job.jobId} className="border-t border-stone-200 text-sm text-stone-700">
+                  <td className="px-5 py-4">
+                    {isSelectable(job) ? (
+                      <input
+                        type="checkbox"
+                        aria-label={t("selectJobAria", { fileName: job.fileName })}
+                        checked={selectedJobIds.includes(job.jobId)}
+                        onChange={(event) => {
+                          setSelectedJobIds((current) =>
+                            event.target.checked
+                              ? [...current, job.jobId]
+                              : current.filter((id) => id !== job.jobId),
+                          );
+                        }}
+                      />
+                    ) : (
+                      <span className="text-stone-300">-</span>
+                    )}
+                  </td>
                   <td className="px-5 py-4 font-medium text-stone-900">{job.fileName}</td>
                   <td className="px-5 py-4 capitalize">{job.detectedFamily}</td>
                   <td className="px-5 py-4">{job.outputFormat.toUpperCase()}</td>
@@ -120,6 +261,18 @@ export default function UserDashboard() {
                           </span>
                         )}
                       </div>
+                    ) : isCancelable(job) ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleSingleCancel(job.jobId);
+                        }}
+                        className="font-medium text-stone-700 underline underline-offset-2"
+                      >
+                        {cancellingId === job.jobId
+                          ? t("cancelling")
+                          : tCommon("cancel")}
+                      </button>
                     ) : job.status === "failed" ? (
                       <button
                         type="button"

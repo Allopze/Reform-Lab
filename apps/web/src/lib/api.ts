@@ -75,6 +75,27 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
   return data;
 }
 
+export async function getBatchCapabilities(
+  fileIds: string[],
+): Promise<Capability[]> {
+  const res = await fetchWithTimeout(`${API_URL}/api/files/capabilities/batch`, {
+    method: "POST",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ fileIds }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      (data as { error?: string }).error ||
+        "Failed to load batch capabilities",
+    );
+  }
+
+  return (data as { capabilities: Capability[] }).capabilities;
+}
+
 // ── Capabilities ──
 
 export interface Capability {
@@ -140,6 +161,26 @@ export async function createConversion(
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Conversion failed");
   return data;
+}
+
+export async function createBatchConversion(
+  fileIds: string[],
+  capabilityId: string,
+): Promise<Job[]> {
+  const res = await fetchWithTimeout(`${API_URL}/api/conversions/batch`, {
+    method: "POST",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ fileIds, capabilityId }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      (data as { error?: string }).error || "Batch conversion failed",
+    );
+  }
+  return ((data as { jobs?: Job[] }).jobs ?? []) as Job[];
 }
 
 export async function getJob(jobId: string): Promise<Job> {
@@ -308,6 +349,22 @@ export async function cancelJob(jobId: string): Promise<void> {
   }
 }
 
+export async function cancelJobs(jobIds: string[]): Promise<string[]> {
+  const res = await fetchWithTimeout(`${API_URL}/api/jobs/batch/cancel`, {
+    method: "POST",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ jobIds }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      (data as { error?: string }).error || "Failed to cancel jobs",
+    );
+  }
+  return ((data as { cancelledJobIds?: string[] }).cancelledJobIds ?? []) as string[];
+}
+
 export async function retryJob(jobId: string): Promise<Job> {
   const res = await fetchWithTimeout(`${API_URL}/api/jobs/${jobId}/retry`, {
     method: "POST",
@@ -321,6 +378,109 @@ export async function retryJob(jobId: string): Promise<Job> {
     );
   }
   return data as Job;
+}
+
+export async function retryJobs(jobIds: string[]): Promise<Job[]> {
+  const res = await fetchWithTimeout(`${API_URL}/api/jobs/batch/retry`, {
+    method: "POST",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ jobIds }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      (data as { error?: string }).error || "Failed to retry jobs",
+    );
+  }
+  return ((data as { jobs?: Job[] }).jobs ?? []) as Job[];
+}
+
+export interface WebhookSubscription {
+  id: string;
+  url: string;
+  eventTypes: string[];
+  enabled: boolean;
+  hasSecret: boolean;
+  lastDeliveredAt?: string;
+  lastError?: string;
+  deliveries?: WebhookDelivery[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  eventId: string;
+  eventType: string;
+  attemptedAt: string;
+  deliveredAt?: string;
+  statusCode?: number;
+  error?: string;
+}
+
+export interface WebhookDraft {
+  url: string;
+  secret?: string;
+  eventTypes: string[];
+  enabled?: boolean;
+}
+
+export async function getWebhooks(): Promise<WebhookSubscription[]> {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/webhooks`, {
+    headers: headers(),
+    credentials: "include",
+  });
+  const data = await res.json().catch(() => []);
+  if (!res.ok) {
+    throw new Error("Failed to load webhooks");
+  }
+  return data as WebhookSubscription[];
+}
+
+export async function createWebhook(
+  payload: WebhookDraft,
+): Promise<WebhookSubscription> {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/webhooks`, {
+    method: "POST",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((data as { error?: string }).error || "Failed to create webhook");
+  }
+  return data as WebhookSubscription;
+}
+
+export async function updateWebhook(
+  webhookId: string,
+  payload: WebhookDraft,
+): Promise<WebhookSubscription> {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/webhooks/${webhookId}`, {
+    method: "PUT",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((data as { error?: string }).error || "Failed to update webhook");
+  }
+  return data as WebhookSubscription;
+}
+
+export async function deleteWebhook(webhookId: string): Promise<void> {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/webhooks/${webhookId}`, {
+    method: "DELETE",
+    headers: headers(),
+    credentials: "include",
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { error?: string }).error || "Failed to delete webhook");
+  }
 }
 
 // ── Health / Service info ──

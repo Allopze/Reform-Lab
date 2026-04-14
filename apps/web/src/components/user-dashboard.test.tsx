@@ -4,9 +4,12 @@ import { describe, beforeEach, expect, it, vi } from "vitest";
 import UserDashboard from "./user-dashboard";
 import { IntlWrapper } from "@/test/intl-wrapper";
 import {
+  cancelJob,
+  cancelJobs,
   downloadArtifact,
   getMyDashboard,
   retryJob,
+  retryJobs,
   type UserDashboardData,
 } from "@/lib/api";
 
@@ -26,9 +29,12 @@ vi.mock("@/lib/auth-context", () => ({
 }));
 
 vi.mock("@/lib/api", () => ({
+  cancelJob: vi.fn(),
+  cancelJobs: vi.fn(),
   getMyDashboard: vi.fn(),
   downloadArtifact: vi.fn(),
   retryJob: vi.fn(),
+  retryJobs: vi.fn(),
 }));
 
 const succeededJob = {
@@ -72,6 +78,8 @@ describe("UserDashboard", () => {
   beforeEach(() => {
     pushMock.mockClear();
     vi.mocked(getMyDashboard).mockResolvedValue(dashboardData);
+    vi.mocked(cancelJob).mockResolvedValue(undefined);
+    vi.mocked(cancelJobs).mockResolvedValue(["j3"]);
     vi.mocked(downloadArtifact).mockResolvedValue(undefined);
     vi.mocked(retryJob).mockResolvedValue({
       id: "j3",
@@ -82,6 +90,7 @@ describe("UserDashboard", () => {
       progress: 0,
       createdAt: "2026-04-11T10:00:00Z",
     });
+    vi.mocked(retryJobs).mockResolvedValue([]);
     authState = { user: { name: "Test", role: "user" }, loading: false };
   });
 
@@ -121,6 +130,52 @@ describe("UserDashboard", () => {
     });
     await user.click(screen.getByText("Reintentar"));
     expect(retryJob).toHaveBeenCalledWith("j2");
+  });
+
+  it("shows cancel button for queued jobs", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMyDashboard).mockResolvedValue({
+      ...dashboardData,
+      recentJobs: [
+        ...dashboardData.recentJobs,
+        {
+          jobId: "j3",
+          fileId: "f3",
+          fileName: "video.mov",
+          detectedFamily: "video",
+          capabilityId: "video-mp4",
+          outputFormat: "mp4",
+          status: "queued" as const,
+          progress: 0,
+          updatedAt: "2026-04-11T09:30:00Z",
+        },
+      ],
+    });
+
+    render(<IntlWrapper><UserDashboard /></IntlWrapper>);
+    await waitFor(() => {
+      expect(screen.getByText("video.mov")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(cancelJob).toHaveBeenCalledWith("j3");
+  });
+
+  it("runs batch retry for failed selections", async () => {
+    const user = userEvent.setup();
+    render(<IntlWrapper><UserDashboard /></IntlWrapper>);
+    await waitFor(() => {
+      expect(screen.getByText("broken.svg")).toBeInTheDocument();
+    });
+
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Seleccionar job para broken.svg",
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Reintentar seleccionados" }));
+
+    expect(retryJobs).toHaveBeenCalledWith(["j2"]);
   });
 
   it("shows empty state when no jobs exist", async () => {

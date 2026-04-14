@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/allopze/reform-lab/apps/api/internal/capabilities"
+	"github.com/allopze/reform-lab/apps/api/internal/domain"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -21,6 +23,10 @@ type capabilityResponse struct {
 	TargetFormat      string `json:"targetFormat"`
 	OperationType     string `json:"operationType"`
 	TimeoutSeconds    int    `json:"timeoutSeconds"`
+}
+
+type batchCapabilitiesRequest struct {
+	FileIDs []string `json:"fileIds"`
 }
 
 func (h *CapabilitiesHandler) Handle(w http.ResponseWriter, r *http.Request) {
@@ -60,4 +66,85 @@ func (h *CapabilitiesHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"capabilities": result,
 	})
+}
+
+func (h *CapabilitiesHandler) HandleBatch(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	guestSessionID := currentGuestSessionID(r)
+
+	var req batchCapabilitiesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.FileIDs) == 0 {
+		respondError(w, http.StatusBadRequest, "at least one file ID is required")
+		return
+	}
+
+	files := make([]*domain.OriginalFile, 0, len(req.FileIDs))
+	for _, rawID := range req.FileIDs {
+		fileID, err := uuid.Parse(rawID)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "invalid file ID")
+			return
+		}
+
+		file, err := h.Files.GetByID(r.Context(), fileID)
+		if err != nil {
+			respondError(w, http.StatusNotFound, "file not found")
+			return
+		}
+		if !canAccessResource(u, guestSessionID, file.UserID, file.GuestSessionID) {
+			respondError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		files = append(files, file)
+	}
+
+	common := intersectCapabilities(files)
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"capabilities": common,
+	})
+}
+
+func intersectCapabilities(files []*domain.OriginalFile) []capabilityResponse {
+	if len(files) == 0 {
+		return nil
+	}
+
+	counts := make(map[string]int)
+	responses := make(map[string]capabilityResponse)
+	ordered := make([]string, 0)
+
+	for index, entry := range files {
+		caps := capabilities.Resolve(*entry)
+		seen := make(map[string]struct{})
+		for _, cap := range caps {
+			if _, ok := seen[cap.ID]; ok {
+				continue
+			}
+			seen[cap.ID] = struct{}{}
+			counts[cap.ID]++
+			responses[cap.ID] = capabilityResponse{
+				ID:                cap.ID,
+				DisplayName:       cap.DisplayName,
+				PresentationOrder: cap.PresentationOrder,
+				TargetFormat:      cap.TargetFormat,
+				OperationType:     string(cap.OperationType),
+				TimeoutSeconds:    cap.ExecutionLimits.TimeoutSeconds,
+			}
+			if index == 0 {
+				ordered = append(ordered, cap.ID)
+			}
+		}
+	}
+
+	result := make([]capabilityResponse, 0)
+	for _, id := range ordered {
+		if counts[id] == len(files) {
+			result = append(result, responses[id])
+		}
+	}
+	return result
 }

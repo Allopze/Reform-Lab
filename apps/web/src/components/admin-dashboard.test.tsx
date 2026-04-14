@@ -44,6 +44,10 @@ vi.mock("@/components/email-templates", () => ({
   default: () => <div data-testid="email-templates" />,
 }));
 
+vi.mock("@/components/webhook-settings", () => ({
+  default: () => <div data-testid="webhook-settings" />,
+}));
+
 const policy: UploadPolicy = {
   guestMaxBytes: 104857600,
   registeredMaxBytes: 524288000,
