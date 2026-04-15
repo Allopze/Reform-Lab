@@ -59,7 +59,7 @@ export default function EmailTemplatesSection() {
 
   if (loading) {
     return (
-      <section className="rounded-xl border border-stone-200 bg-white">
+      <section className="rounded-2xl border border-stone-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
         <div className="px-5 py-8 text-sm text-stone-500">{t("loading")}</div>
       </section>
     );
@@ -67,7 +67,7 @@ export default function EmailTemplatesSection() {
 
   if (error) {
     return (
-      <section className="rounded-xl border border-stone-200 bg-white">
+      <section className="rounded-2xl border border-stone-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
         <div className="px-5 py-4">
           <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>
         </div>
@@ -77,7 +77,7 @@ export default function EmailTemplatesSection() {
 
   if (templates.length === 0) {
     return (
-      <section className="rounded-xl border border-stone-200 bg-white">
+      <section className="rounded-2xl border border-stone-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
         <div className="px-5 py-8 text-sm text-stone-500">{t("noTemplates")}</div>
       </section>
     );
@@ -86,7 +86,7 @@ export default function EmailTemplatesSection() {
   const current = templates.find((t) => t.key === selected);
 
   return (
-    <section className="rounded-xl border border-stone-200 bg-white">
+    <section className="rounded-2xl border border-stone-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
       <div className="border-b border-stone-200 px-5 py-4">
         <h2 className="text-base font-semibold text-stone-900">{t("title")}</h2>
         <p className="mt-1 text-sm text-stone-500">

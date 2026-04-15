@@ -23,6 +23,19 @@ import WebhookSettings from "@/components/webhook-settings";
 
 const BYTES_PER_MB = 1024 * 1024;
 
+const STATUS_BADGE_CLASS: Record<string, string> = {
+  queued: "border-amber-200 bg-amber-50 text-amber-700",
+  running: "border-amber-200 bg-amber-50 text-amber-700",
+  succeeded: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  failed: "border-rose-200 bg-rose-50 text-rose-700",
+  cancelled: "border-stone-200 bg-stone-100 text-stone-500",
+  expired: "border-stone-200 bg-stone-100 text-stone-500",
+};
+
+const STATUS_BADGE_FALLBACK = "border-stone-200 bg-stone-100 text-stone-600";
+
+type SidebarTab = "operativo" | "config";
+
 const auditFilterKeys = [
   "all",
   "upload",
@@ -110,6 +123,7 @@ export default function AdminDashboard() {
   const [uploadPolicyError, setUploadPolicyError] = useState<string | null>(null);
   const [uploadPolicyStatus, setUploadPolicyStatus] = useState<string | null>(null);
   const [uploadPolicySaving, setUploadPolicySaving] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("operativo");
 
   useEffect(() => {
     if (loading) return;
@@ -226,8 +240,27 @@ export default function AdminDashboard() {
 
   return (
     <div className="mt-6 space-y-6">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+          <p className="text-xs uppercase tracking-[0.12em] text-stone-500">{t("totalUsers", { count: "" }).replace(/:\s*$/, "").trim()}</p>
+          <p className="mt-1.5 text-2xl font-semibold text-stone-900">{data.totalUsers}</p>
+        </div>
+        <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+          <p className="text-xs uppercase tracking-[0.12em] text-stone-500">{t("totalFiles", { count: "" }).replace(/:\s*$/, "").trim()}</p>
+          <p className="mt-1.5 text-2xl font-semibold text-stone-900">{data.totalFiles}</p>
+        </div>
+        <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+          <p className="text-xs uppercase tracking-[0.12em] text-stone-500">{t("successRate")}</p>
+          <p className="mt-1.5 text-2xl font-semibold text-stone-900">{data.successRatePct.toFixed(1)}%</p>
+        </div>
+        <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+          <p className="text-xs uppercase tracking-[0.12em] text-stone-500">{t("avgDuration")}</p>
+          <p className="mt-1.5 text-2xl font-semibold text-stone-900">{formatSeconds(data.averageDurationSec, t("noData"))}</p>
+        </div>
+      </div>
+
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
-        <section className="overflow-hidden rounded-xl border border-stone-200 bg-white">
+        <section className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
           <div className="border-b border-stone-200 px-5 py-4">
             <h2 className="text-base font-semibold text-stone-900">{t("recentJobs")}</h2>
             <p className="mt-1 text-sm text-stone-500">{t("recentJobsDescription")}</p>
@@ -260,7 +293,11 @@ export default function AdminDashboard() {
                       <div className="text-xs text-stone-500">{job.userEmail}</div>
                     </td>
                     <td className="px-5 py-4">{job.outputFormat.toUpperCase()}</td>
-                    <td className="px-5 py-4 capitalize">{job.status}</td>
+                    <td className="px-5 py-4">
+                      <span className={`inline-block rounded-full border px-2.5 py-0.5 text-xs font-medium ${STATUS_BADGE_CLASS[job.status] ?? STATUS_BADGE_FALLBACK}`}>
+                        {job.status}
+                      </span>
+                    </td>
                     <td className="px-5 py-4 text-stone-500">{formatDate(job.updatedAt)}</td>
                   </tr>
                 ))
@@ -270,7 +307,30 @@ export default function AdminDashboard() {
         </section>
 
         <aside className="space-y-4">
-          <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
+          <div className="flex gap-1 rounded-[22px] bg-stone-100 p-1">
+            <button
+              type="button"
+              onClick={() => setSidebarTab("operativo")}
+              className={`flex-1 rounded-[18px] py-2 text-sm font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-coral-400/40 focus-visible:ring-offset-1 ${
+                sidebarTab === "operativo" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-700"
+              }`}
+            >
+              {t("summaryTitle")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSidebarTab("config")}
+              className={`flex-1 rounded-[18px] py-2 text-sm font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-coral-400/40 focus-visible:ring-offset-1 ${
+                sidebarTab === "config" ? "bg-white text-stone-900 shadow-sm" : "text-stone-500 hover:text-stone-700"
+              }`}
+            >
+              {t("fileLimitTitle")}
+            </button>
+          </div>
+
+          {sidebarTab === "config" ? (
+            <>
+          <section className="rounded-2xl border border-stone-200 bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
             <h2 className="text-base font-semibold text-stone-900">{t("fileLimitTitle")}</h2>
             <p className="mt-1 text-sm text-stone-500">
               {t("fileLimitDescription")}
@@ -355,7 +415,7 @@ export default function AdminDashboard() {
             ) : null}
           </section>
 
-          <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
+          <section className="rounded-2xl border border-stone-200 bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
             <h2 className="text-base font-semibold text-stone-900">{t("footerTitle")}</h2>
             <p className="mt-1 text-sm text-stone-500">
               {t("footerDescription")}
@@ -405,12 +465,12 @@ export default function AdminDashboard() {
           <SMTPSettingsSection />
 
           <WebhookSettings />
-
-          <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
+            </>
+          ) : (
+            <>
+          <section className="rounded-2xl border border-stone-200 bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
             <h2 className="text-base font-semibold text-stone-900">{t("summaryTitle")}</h2>
-            <div className="mt-4 space-y-3 text-sm text-stone-600">
-              <p>{t("totalUsers", { count: data.totalUsers })}</p>
-              <p>{t("totalFiles", { count: data.totalFiles })}</p>
+            <div className="mt-4 space-y-2 text-sm text-stone-600">
               <p>{t("totalJobs", { count: data.totalJobs })}</p>
               <p>{t("queuedJobs", { count: data.queuedJobs })}</p>
               <p>{t("runningJobs", { count: data.runningJobs })}</p>
@@ -420,33 +480,20 @@ export default function AdminDashboard() {
             </div>
           </section>
 
-          <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
-            <h2 className="text-base font-semibold text-stone-900">{t("indicatorsTitle")}</h2>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
-              <div className="rounded-lg border border-stone-200 bg-stone-50 px-4 py-3">
-                <p className="text-xs uppercase tracking-[0.12em] text-stone-500">{t("successRate")}</p>
-                <p className="mt-2 text-2xl font-semibold text-stone-900">{data.successRatePct.toFixed(1)}%</p>
-              </div>
-              <div className="rounded-lg border border-stone-200 bg-stone-50 px-4 py-3">
-                <p className="text-xs uppercase tracking-[0.12em] text-stone-500">{t("avgDuration")}</p>
-                <p className="mt-2 text-2xl font-semibold text-stone-900">{formatSeconds(data.averageDurationSec, t("noData"))}</p>
-              </div>
-              <div className="rounded-lg border border-stone-200 bg-stone-50 px-4 py-3">
-                <p className="text-xs uppercase tracking-[0.12em] text-stone-500">{t("availableEngines")}</p>
-                <p className="mt-2 text-2xl font-semibold text-stone-900">
-                  {data.availableEngines}/{data.totalEngines}
-                </p>
-              </div>
-            </div>
+          <section className="rounded-2xl border border-stone-200 bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+            <h2 className="text-base font-semibold text-stone-900">{t("availableEngines")}</h2>
+            <p className="mt-2 text-2xl font-semibold text-stone-900">
+              {data.availableEngines}/{data.totalEngines}
+            </p>
 
             {data.unavailableEngines.length > 0 && (
-              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                 {t("missingEngines", { engines: data.unavailableEngines.join(", ") })}
               </div>
             )}
           </section>
 
-          <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
+          <section className="rounded-2xl border border-stone-200 bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
             <h2 className="text-base font-semibold text-stone-900">{t("engineUsageTitle")}</h2>
             <div className="mt-4 space-y-3">
               {data.engineUsage.length === 0 ? (
@@ -461,12 +508,14 @@ export default function AdminDashboard() {
               )}
             </div>
           </section>
+            </>
+          )}
         </aside>
       </div>
 
       <EmailTemplatesSection />
 
-      <section className="rounded-xl border border-stone-200 bg-white">
+      <section className="rounded-2xl border border-stone-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
         <div className="border-b border-stone-200 px-5 py-4">
           <h2 className="text-base font-semibold text-stone-900">{t("auditTitle")}</h2>
           <p className="mt-1 text-sm text-stone-500">{t("auditDescription")}</p>
@@ -478,8 +527,8 @@ export default function AdminDashboard() {
                 onClick={() => setAuditFilter(key)}
                 className={
                   auditFilter === key
-                    ? "rounded-full border border-stone-900 bg-stone-900 px-3 py-1 text-xs font-medium text-white"
-                    : "rounded-full border border-stone-300 bg-white px-3 py-1 text-xs font-medium text-stone-600"
+                    ? "rounded-full border border-coral-500 bg-coral-500 px-3 py-1 text-xs font-medium text-white"
+                    : "rounded-full border border-stone-300 bg-white px-3 py-1 text-xs font-medium text-stone-600 transition-colors duration-150 hover:border-stone-400"
                 }
               >
                 {t(`auditFilter.${key}`)}

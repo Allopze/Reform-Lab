@@ -58,7 +58,6 @@ export default function AuthPanel({ mode, onModeChange }: AuthPanelProps) {
         await authLogin({ email, password });
       } else {
         const name = (form.get("name") as string)?.trim();
-        const team = (form.get("team") as string)?.trim() ?? "";
         const passwordConfirmation = form.get("passwordConfirmation") as string;
 
         if (password !== passwordConfirmation) {
@@ -67,7 +66,7 @@ export default function AuthPanel({ mode, onModeChange }: AuthPanelProps) {
           return;
         }
 
-        await authRegister({ name, email, password, team });
+        await authRegister({ name, email, password });
       }
       router.push("/");
     } catch (err: unknown) {
@@ -133,27 +132,15 @@ export default function AuthPanel({ mode, onModeChange }: AuthPanelProps) {
           <p className="rounded-[18px] bg-red-50 px-3.5 py-2.5 text-[13px] font-medium text-red-600">{error}</p>
         )}
         {!isLogin ? (
-          <div className="grid gap-3.5 sm:grid-cols-2">
-            <label className="block">
-              <span className="mb-1.5 block text-[13px] font-medium text-stone-600">{t("nameLabel")}</span>
-              <input
-                type="text"
-                name="name"
-                placeholder={t("namePlaceholder")}
-                className="h-11 w-full rounded-[18px] border border-stone-200 bg-stone-50/60 px-3.5 text-sm text-stone-900 placeholder:text-stone-400 outline-none transition-colors duration-150 focus:border-coral-400 focus:bg-white focus-visible:ring-2 focus-visible:ring-coral-400/40 focus-visible:ring-offset-1"
-              />
-            </label>
-
-            <label className="block">
-              <span className="mb-1.5 block text-[13px] font-medium text-stone-600">{t("teamLabel")}</span>
-              <input
-                type="text"
-                name="team"
-                placeholder={t("teamPlaceholder")}
-                className="h-11 w-full rounded-[18px] border border-stone-200 bg-stone-50/60 px-3.5 text-sm text-stone-900 placeholder:text-stone-400 outline-none transition-colors duration-150 focus:border-coral-400 focus:bg-white focus-visible:ring-2 focus-visible:ring-coral-400/40 focus-visible:ring-offset-1"
-              />
-            </label>
-          </div>
+          <label className="block">
+            <span className="mb-1.5 block text-[13px] font-medium text-stone-600">{t("nameLabel")}</span>
+            <input
+              type="text"
+              name="name"
+              placeholder={t("namePlaceholder")}
+              className="h-11 w-full rounded-[18px] border border-stone-200 bg-stone-50/60 px-3.5 text-sm text-stone-900 placeholder:text-stone-400 outline-none transition-colors duration-150 focus:border-coral-400 focus:bg-white focus-visible:ring-2 focus-visible:ring-coral-400/40 focus-visible:ring-offset-1"
+            />
+          </label>
         ) : null}
 
         <label className="block">

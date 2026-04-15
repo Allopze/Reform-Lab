@@ -76,8 +76,7 @@ describe("AccessShell", () => {
 
     expect(card).toHaveClass("rounded-[34px]");
     expect(screen.getByRole("heading", { name: "Crear cuenta" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Nombre")).toBeInTheDocument();
-    expect(screen.getByLabelText("Equipo")).toBeInTheDocument();
+    expect(screen.getByLabelText("Nombre o apodo")).toBeInTheDocument();
     expect(screen.getByLabelText("Repetir contraseña")).toBeInTheDocument();
   });
 
@@ -87,6 +86,6 @@ describe("AccessShell", () => {
     render(<IntlWrapper><AccessShell /></IntlWrapper>);
 
     expect(screen.getByRole("heading", { name: "Crear cuenta" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Nombre")).toBeInTheDocument();
+    expect(screen.getByLabelText("Nombre o apodo")).toBeInTheDocument();
   });
 });

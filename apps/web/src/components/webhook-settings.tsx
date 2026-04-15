@@ -112,7 +112,7 @@ export default function WebhookSettings() {
   }
 
   return (
-    <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
+    <section className="rounded-2xl border border-stone-200 bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-stone-900">

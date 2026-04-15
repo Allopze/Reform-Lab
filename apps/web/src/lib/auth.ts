@@ -16,7 +16,6 @@ export interface AuthResult {
 export interface RegisterPayload {
   name: string;
   email: string;
-  team: string;
   password: string;
 }
 

@@ -116,16 +116,17 @@ describe("AdminDashboard", () => {
     render(<IntlWrapper><AdminDashboard /></IntlWrapper>);
     expect(screen.getByText("Cargando panel admin...")).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText("Usuarios: 10")).toBeInTheDocument();
+      expect(screen.getByText("10")).toBeInTheDocument();
     });
-    expect(screen.getByText("Archivos: 42")).toBeInTheDocument();
+    expect(screen.getByText("42")).toBeInTheDocument();
+    expect(screen.getByText("92.6%")).toBeInTheDocument();
     expect(screen.getByText("Exitosos: 25")).toBeInTheDocument();
   });
 
   it("renders a recent job row with user info", async () => {
     render(<IntlWrapper><AdminDashboard /></IntlWrapper>);
     await waitFor(() => {
-      expect(screen.getByText("Usuarios: 10")).toBeInTheDocument();
+      expect(screen.getByText("92.6%")).toBeInTheDocument();
     });
     expect(screen.getAllByText("report.docx").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();

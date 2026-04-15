@@ -104,14 +104,14 @@ export default function SMTPSettingsSection() {
 
   if (loading) {
     return (
-      <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
+      <section className="rounded-2xl border border-stone-200 bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
         <p className="text-sm text-stone-500">{t("loading")}</p>
       </section>
     );
   }
 
   return (
-    <section className="rounded-xl border border-stone-200 bg-white px-5 py-4">
+    <section className="rounded-2xl border border-stone-200 bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-base font-semibold text-stone-900">{t("title")}</h2>
