@@ -5,6 +5,8 @@ import { useTranslations } from "next-intl";
 import {
   getEmailTemplates,
   updateEmailTemplate,
+  createEmailTemplate,
+  deleteEmailTemplate,
   previewEmailTemplate,
   type EmailTemplate,
 } from "@/lib/api";
@@ -34,11 +36,20 @@ const TEMPLATE_VARS = [
 ] as const;
 
 function formatDate(value: string): string {
+  const date = new Date(value);
+  if (date.getFullYear() < 2000) return "";
   return new Intl.DateTimeFormat("es-ES", {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(new Date(value));
+  }).format(date);
 }
+
+const TEMPLATE_FRIENDLY_KEYS: Record<string, string> = {
+  "conversion-complete": "templateName.conversionComplete",
+  "conversion-failed": "templateName.conversionFailed",
+  "welcome": "templateName.welcome",
+  "password-reset": "templateName.passwordReset",
+};
 
 export default function EmailTemplatesSection() {
   const t = useTranslations("emailTemplates");
@@ -46,6 +57,9 @@ export default function EmailTemplatesSection() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     getEmailTemplates()
@@ -56,6 +70,32 @@ export default function EmailTemplatesSection() {
       .catch((err) => setError(err instanceof Error ? err.message : t("loadError")))
       .finally(() => setLoading(false));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function friendlyName(key: string): string {
+    const i18nKey = TEMPLATE_FRIENDLY_KEYS[key];
+    return i18nKey ? t(i18nKey) : key;
+  }
+
+  async function handleDelete(key: string) {
+    setDeleteError(null);
+    try {
+      await deleteEmailTemplate(key);
+      setTemplates((prev) => prev.filter((tpl) => tpl.key !== key));
+      setConfirmDelete(null);
+      if (selected === key) {
+        const remaining = templates.filter((tpl) => tpl.key !== key);
+        setSelected(remaining.length > 0 ? remaining[0].key : null);
+      }
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : t("deleteError"));
+    }
+  }
+
+  function handleCreated(newTemplate: EmailTemplate) {
+    setTemplates((prev) => [...prev, newTemplate]);
+    setSelected(newTemplate.key);
+    setCreating(false);
+  }
 
   if (loading) {
     return (
@@ -75,63 +115,252 @@ export default function EmailTemplatesSection() {
     );
   }
 
-  if (templates.length === 0) {
-    return (
-      <section className="rounded-2xl border border-stone-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
-        <div className="px-5 py-8 text-sm text-stone-500">{t("noTemplates")}</div>
-      </section>
-    );
-  }
-
-  const current = templates.find((t) => t.key === selected);
+  const current = templates.find((tpl) => tpl.key === selected);
 
   return (
     <section className="rounded-2xl border border-stone-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
       <div className="border-b border-stone-200 px-5 py-4">
-        <h2 className="text-base font-semibold text-stone-900">{t("title")}</h2>
-        <p className="mt-1 text-sm text-stone-500">
-          {t("description")}
-        </p>
-
-        {templates.length > 1 && (
-          <div className="mt-3 flex gap-2">
-            {templates.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setSelected(t.key)}
-                className={
-                  selected === t.key
-                    ? "rounded-full border border-stone-900 bg-stone-900 px-3 py-1 text-xs font-medium text-white"
-                    : "rounded-full border border-stone-300 bg-white px-3 py-1 text-xs font-medium text-stone-600"
-                }
-              >
-                {t.key}
-              </button>
-            ))}
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-stone-900">{t("title")}</h2>
+            <p className="mt-1 text-sm text-stone-500">{t("description")}</p>
           </div>
-        )}
+          {!creating && (
+            <button
+              type="button"
+              onClick={() => setCreating(true)}
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-3 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
+            >
+              <span className="text-base leading-none">+</span>
+              {t("createNew")}
+            </button>
+          )}
+        </div>
       </div>
 
-      {current && (
-        <TemplateEditor
-          key={current.key}
-          template={current}
-          onSave={(updated) => {
-            setTemplates((prev) => prev.map((t) => (t.key === updated.key ? updated : t)));
-          }}
+      {creating ? (
+        <CreateTemplateForm
+          existingKeys={templates.map((tpl) => tpl.key)}
+          onCreated={handleCreated}
+          onCancel={() => setCreating(false)}
         />
+      ) : (
+        <div className="grid lg:grid-cols-[240px_minmax(0,1fr)]">
+          {/* Template list sidebar */}
+          <div className="border-b border-stone-200 lg:border-b-0 lg:border-r">
+            <nav className="flex gap-1 overflow-x-auto p-2 lg:flex-col lg:overflow-x-visible">
+              {templates.map((tpl) => {
+                const isSelected = tpl.key === selected;
+                const dateStr = formatDate(tpl.updated_at);
+                return (
+                  <button
+                    key={tpl.key}
+                    type="button"
+                    onClick={() => setSelected(tpl.key)}
+                    className={`group flex w-full min-w-36 flex-col rounded-lg px-3 py-2.5 text-left transition-colors lg:min-w-0 ${
+                      isSelected
+                        ? "bg-stone-100 text-stone-900"
+                        : "text-stone-600 hover:bg-stone-50"
+                    }`}
+                  >
+                    <span className="text-sm font-medium leading-tight">{friendlyName(tpl.key)}</span>
+                    <span className="mt-0.5 truncate text-xs text-stone-500">{tpl.subject}</span>
+                    {dateStr && <span className="mt-1 text-[11px] text-stone-400">{dateStr}</span>}
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
+
+          {/* Editor panel */}
+          <div className="min-w-0">
+            {current ? (
+              <TemplateEditor
+                key={current.key}
+                template={current}
+                onSave={(updated) => {
+                  setTemplates((prev) => prev.map((tpl) => (tpl.key === updated.key ? updated : tpl)));
+                }}
+                onDeleteRequest={() => setConfirmDelete(current.key)}
+              />
+            ) : (
+              <div className="px-5 py-12 text-center text-sm text-stone-500">
+                {templates.length === 0 ? t("noTemplates") : t("selectTemplate")}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirmation */}
+      {confirmDelete && (
+        <div className="border-t border-stone-200 px-5 py-4">
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3">
+            <p className="text-sm text-rose-700">
+              {t("deleteConfirm", { name: friendlyName(confirmDelete) })}
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => { setConfirmDelete(null); setDeleteError(null); }}
+                className="inline-flex h-8 items-center rounded-md border border-stone-200 bg-white px-3 text-xs font-medium text-stone-700 hover:bg-stone-50"
+              >
+                {t("cancelDelete")}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDelete(confirmDelete)}
+                className="inline-flex h-8 items-center rounded-md bg-rose-600 px-3 text-xs font-medium text-white hover:bg-rose-700"
+              >
+                {t("confirmDeleteBtn")}
+              </button>
+            </div>
+          </div>
+          {deleteError && (
+            <p className="mt-2 text-sm text-rose-600">{deleteError}</p>
+          )}
+        </div>
       )}
     </section>
   );
 }
 
+// ── Create Template Form ──
+
+function CreateTemplateForm({
+  existingKeys,
+  onCreated,
+  onCancel,
+}: {
+  existingKeys: string[];
+  onCreated: (template: EmailTemplate) => void;
+  onCancel: () => void;
+}) {
+  const t = useTranslations("emailTemplates");
+  const tCommon = useTranslations("common");
+  const [key, setKey] = useState("");
+  const [subject, setSubject] = useState("");
+  const [bodyHtml, setBodyHtml] = useState(DEFAULT_NEW_BODY);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const keySlug = key
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+
+  const keyConflict = existingKeys.includes(keySlug);
+
+  async function handleCreate() {
+    if (!keySlug || !subject.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const created = await createEmailTemplate({
+        key: keySlug,
+        subject: subject.trim(),
+        body_html: bodyHtml,
+      });
+      onCreated(created);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("createError"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="px-5 py-5">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="block">
+          <span className="mb-1.5 block text-[13px] font-medium text-stone-600">{t("keyLabel")}</span>
+          <input
+            type="text"
+            value={key}
+            onChange={(e) => { setKey(e.target.value); setError(null); }}
+            placeholder={t("keyPlaceholder")}
+            className="h-10 w-full rounded-lg border border-stone-200 bg-stone-50/60 px-3 text-sm text-stone-900 transition-colors focus:border-coral-400 focus:bg-white"
+          />
+          {keySlug && (
+            <p className={`mt-1 text-xs ${keyConflict ? "text-rose-500" : "text-stone-400"}`}>
+              {keyConflict ? t("keyConflict") : keySlug}
+            </p>
+          )}
+        </label>
+
+        <label className="block">
+          <span className="mb-1.5 block text-[13px] font-medium text-stone-600">{t("subjectLabel")}</span>
+          <input
+            type="text"
+            value={subject}
+            onChange={(e) => { setSubject(e.target.value); setError(null); }}
+            placeholder={t("subjectPlaceholder")}
+            className="h-10 w-full rounded-lg border border-stone-200 bg-stone-50/60 px-3 text-sm text-stone-900 transition-colors focus:border-coral-400 focus:bg-white"
+          />
+        </label>
+      </div>
+
+      <label className="mt-4 block">
+        <span className="mb-1.5 block text-[13px] font-medium text-stone-600">{t("bodyLabel")}</span>
+        <div className="overflow-hidden rounded-lg border border-stone-200">
+          <CodeMirror
+            value={bodyHtml}
+            onChange={(v) => setBodyHtml(v)}
+            extensions={[html()]}
+            height="220px"
+            basicSetup={{ lineNumbers: true, foldGutter: true, highlightActiveLine: true, autocompletion: true }}
+          />
+        </div>
+      </label>
+
+      <div className="mt-4 flex items-center justify-between gap-3">
+        <p className="text-xs text-stone-500">{t("createHint")}</p>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="inline-flex h-10 items-center rounded-lg border border-stone-200 bg-white px-4 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-50"
+          >
+            {tCommon("cancel")}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleCreate()}
+            disabled={saving || !keySlug || !subject.trim() || keyConflict}
+            className="inline-flex h-10 items-center rounded-lg bg-coral-500 px-4 text-sm font-medium text-white transition-colors hover:bg-coral-600 disabled:cursor-not-allowed disabled:bg-coral-200"
+          >
+            {saving ? tCommon("saving") : t("createTemplate")}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>
+      )}
+    </div>
+  );
+}
+
+const DEFAULT_NEW_BODY = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: sans-serif; padding: 24px;">
+  <h2>{{.AppName}}</h2>
+  <p>Hola {{.Name}},</p>
+  <p></p>
+  <p style="color: #999; font-size: 12px;">&copy; {{.Year}} {{.AppName}}</p>
+</body>
+</html>`;
+
 function TemplateEditor({
   template,
   onSave,
+  onDeleteRequest,
 }: {
   template: EmailTemplate;
   onSave: (updated: EmailTemplate) => void;
+  onDeleteRequest: () => void;
 }) {
   const t = useTranslations("emailTemplates");
   const tCommon = useTranslations("common");
@@ -379,9 +608,18 @@ function TemplateEditor({
       </div>
 
       <div className="mt-4 flex items-center justify-between gap-3">
-        <p className="text-xs text-stone-500">
-          {t("lastUpdate")}: {formatDate(template.updated_at)}
-        </p>
+        <div className="flex items-center gap-3">
+          <p className="text-xs text-stone-500">
+            {t("lastUpdate")}: {formatDate(template.updated_at) || t("neverModified")}
+          </p>
+          <button
+            type="button"
+            onClick={onDeleteRequest}
+            className="text-xs text-stone-400 transition-colors hover:text-rose-500"
+          >
+            {t("deleteTemplate")}
+          </button>
+        </div>
         <div className="flex gap-2">
           <button
             type="button"

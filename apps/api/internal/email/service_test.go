@@ -47,6 +47,11 @@ func (m *mockEmailTemplateRepo) ListAll(_ context.Context) ([]domain.EmailTempla
 	return result, nil
 }
 
+func (m *mockEmailTemplateRepo) Delete(_ context.Context, key string) error {
+	delete(m.templates, key)
+	return nil
+}
+
 // --- Tests ---
 
 func TestResolveSMTPConfig_EnvOnly(t *testing.T) {

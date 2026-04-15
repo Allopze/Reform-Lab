@@ -185,8 +185,10 @@ func NewRouter(d Deps) *chi.Mux {
 				}
 				webhookH := &handlers.WebhookHandler{Webhooks: d.Webhooks}
 				r.Get("/admin/email-templates", emailTmplH.List)
+				r.Post("/admin/email-templates", emailTmplH.Create)
 				r.Get("/admin/email-templates/{key}", emailTmplH.Get)
 				r.Put("/admin/email-templates/{key}", emailTmplH.Update)
+				r.Delete("/admin/email-templates/{key}", emailTmplH.Delete)
 				r.Post("/admin/email-templates/{key}/preview", emailTmplH.Preview)
 				r.Get("/admin/webhooks", webhookH.List)
 				r.Post("/admin/webhooks", webhookH.Create)

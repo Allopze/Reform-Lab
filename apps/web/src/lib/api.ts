@@ -702,3 +702,40 @@ export async function previewEmailTemplate(
     );
   return data as { subject: string; html: string };
 }
+
+export async function createEmailTemplate(
+  payload: { key: string; subject: string; body_html: string },
+): Promise<EmailTemplate> {
+  const res = await fetchWithTimeout(
+    `${API_URL}/api/admin/email-templates`,
+    {
+      method: "POST",
+      headers: { ...headers(), "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(payload),
+    },
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok)
+    throw new Error(
+      (data as { error?: string }).error || "Failed to create template",
+    );
+  return data as EmailTemplate;
+}
+
+export async function deleteEmailTemplate(key: string): Promise<void> {
+  const res = await fetchWithTimeout(
+    `${API_URL}/api/admin/email-templates/${encodeURIComponent(key)}`,
+    {
+      method: "DELETE",
+      headers: headers(),
+      credentials: "include",
+    },
+  );
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(
+      (data as { error?: string }).error || "Failed to delete template",
+    );
+  }
+}

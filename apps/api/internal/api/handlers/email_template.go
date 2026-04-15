@@ -28,6 +28,12 @@ type emailTemplateRequest struct {
 	BodyHTML string `json:"body_html"`
 }
 
+type createEmailTemplateRequest struct {
+	Key      string `json:"key"`
+	Subject  string `json:"subject"`
+	BodyHTML string `json:"body_html"`
+}
+
 // List returns all email templates.
 func (h *EmailTemplateHandler) List(w http.ResponseWriter, r *http.Request) {
 	templates, err := h.Templates.ListAll(r.Context())
@@ -60,6 +66,68 @@ func (h *EmailTemplateHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, tmpl)
+}
+
+// Create adds a new email template.
+func (h *EmailTemplateHandler) Create(w http.ResponseWriter, r *http.Request) {
+	var req createEmailTemplateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Key == "" {
+		respondError(w, http.StatusBadRequest, "key is required")
+		return
+	}
+	if len(req.Key) > 64 {
+		respondError(w, http.StatusBadRequest, "key must be 64 characters or fewer")
+		return
+	}
+	if req.Subject == "" {
+		respondError(w, http.StatusBadRequest, "subject is required")
+		return
+	}
+	if req.BodyHTML == "" {
+		respondError(w, http.StatusBadRequest, "body_html is required")
+		return
+	}
+	if len(req.BodyHTML) > emailTemplateBodyMaxBytes {
+		respondError(w, http.StatusBadRequest, "body_html exceeds maximum size (100 KB)")
+		return
+	}
+
+	if _, err := texttmpl.New("subject").Parse(req.Subject); err != nil {
+		respondError(w, http.StatusBadRequest, "subject contains invalid template syntax")
+		return
+	}
+	if _, err := htmltmpl.New("body").Parse(req.BodyHTML); err != nil {
+		respondError(w, http.StatusBadRequest, "body_html contains invalid template syntax")
+		return
+	}
+
+	existing, err := h.Templates.GetByKey(r.Context(), req.Key)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to check template")
+		return
+	}
+	if existing != nil {
+		respondError(w, http.StatusConflict, "template with this key already exists")
+		return
+	}
+
+	tmpl := &domain.EmailTemplate{
+		Key:       req.Key,
+		Subject:   req.Subject,
+		BodyHTML:  req.BodyHTML,
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := h.Templates.Upsert(r.Context(), tmpl); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to create template")
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, tmpl)
 }
 
 // Update modifies the subject and body of an existing template.
@@ -172,6 +240,22 @@ func (h *EmailTemplateHandler) Preview(w http.ResponseWriter, r *http.Request) {
 		"subject": msg.Subject,
 		"html":    msg.BodyHTML,
 	})
+}
+
+// Delete removes an email template by key.
+func (h *EmailTemplateHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	if key == "" {
+		respondError(w, http.StatusBadRequest, "template key is required")
+		return
+	}
+
+	if err := h.Templates.Delete(r.Context(), key); err != nil {
+		respondError(w, http.StatusNotFound, "template not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // renderDraft renders subject + body with example vars without touching the DB.

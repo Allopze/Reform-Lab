@@ -34,6 +34,19 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
 
 const STATUS_BADGE_FALLBACK = "border-stone-200 bg-stone-100 text-stone-600";
 
+const AUDIT_BORDER_CLASS: Record<string, string> = {
+  upload: "border-l-sky-400",
+  job_created: "border-l-stone-300",
+  job_started: "border-l-amber-400",
+  job_completed: "border-l-emerald-400",
+  job_failed: "border-l-rose-400",
+  job_cancelled: "border-l-stone-400",
+  job_retried: "border-l-amber-400",
+  artifact_created: "border-l-emerald-400",
+};
+
+const AUDIT_BORDER_FALLBACK = "border-l-stone-200";
+
 type SidebarTab = "operativo" | "config";
 
 const auditFilterKeys = [
@@ -265,7 +278,8 @@ export default function AdminDashboard() {
             <h2 className="text-base font-semibold text-stone-900">{t("recentJobs")}</h2>
             <p className="mt-1 text-sm text-stone-500">{t("recentJobsDescription")}</p>
           </div>
-          <table className="w-full border-collapse text-left">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-175 border-collapse text-left">
             <thead className="bg-stone-50 text-xs font-medium text-stone-500">
               <tr>
                 <th className="px-5 py-3">{t("jobHeader")}</th>
@@ -289,8 +303,16 @@ export default function AdminDashboard() {
                     <td className="px-5 py-4 font-medium text-stone-900">{job.jobId.slice(0, 8)}</td>
                     <td className="px-5 py-4">{job.fileName}</td>
                     <td className="px-5 py-4">
-                      <div className="font-medium text-stone-900">{job.userName}</div>
-                      <div className="text-xs text-stone-500">{job.userEmail}</div>
+                      {job.userEmail === "sin-propietario@local" ? (
+                        <span className="inline-block rounded-full border border-stone-200 bg-stone-100 px-2.5 py-0.5 text-xs font-medium text-stone-500">
+                          {t("guestBadge")}
+                        </span>
+                      ) : (
+                        <>
+                          <div className="font-medium text-stone-900">{job.userName}</div>
+                          <div className="text-xs text-stone-500">{job.userEmail}</div>
+                        </>
+                      )}
                     </td>
                     <td className="px-5 py-4">{job.outputFormat.toUpperCase()}</td>
                     <td className="px-5 py-4">
@@ -304,6 +326,7 @@ export default function AdminDashboard() {
               )}
             </tbody>
           </table>
+          </div>
         </section>
 
         <aside className="space-y-4">
@@ -542,7 +565,7 @@ export default function AdminDashboard() {
             <p className="px-5 py-8 text-sm text-stone-500">{t("noAuditEvents")}</p>
           ) : (
             visibleAudit.map((event) => (
-              <div key={event.id} className="grid gap-2 px-5 py-4 text-sm text-stone-700 sm:grid-cols-[180px_minmax(0,1fr)_180px] sm:items-center">
+              <div key={event.id} className={`grid gap-2 border-l-3 px-5 py-4 text-sm text-stone-700 sm:grid-cols-[180px_minmax(0,1fr)_180px] sm:items-center ${AUDIT_BORDER_CLASS[event.eventType] ?? AUDIT_BORDER_FALLBACK}`}>
                 <div>
                   <p className="font-medium text-stone-900">{t(`auditLabel.${event.eventType}`)}</p>
                   <p className="mt-1 text-xs text-stone-500">{event.eventType}</p>

@@ -13,6 +13,7 @@ import (
 type EmailTemplateRepository interface {
 	GetByKey(ctx context.Context, key string) (*domain.EmailTemplate, error)
 	Upsert(ctx context.Context, tmpl *domain.EmailTemplate) error
+	Delete(ctx context.Context, key string) error
 	ListAll(ctx context.Context) ([]domain.EmailTemplate, error)
 }
 
@@ -77,4 +78,19 @@ func (r *sqliteEmailTemplateRepo) ListAll(ctx context.Context) ([]domain.EmailTe
 		templates = append(templates, tmpl)
 	}
 	return templates, rows.Err()
+}
+
+func (r *sqliteEmailTemplateRepo) Delete(ctx context.Context, key string) error {
+	result, err := r.db.ExecContext(ctx, `DELETE FROM email_templates WHERE template_key = ?`, key)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
