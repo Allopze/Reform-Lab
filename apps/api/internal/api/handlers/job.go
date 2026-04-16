@@ -134,6 +134,10 @@ func (h *JobHandler) Retry(w http.ResponseWriter, r *http.Request) {
 
 	retryJob, err := h.Orchestrator.RetryFailedJob(r.Context(), job, *capability, h.Store.OriginalPath(job.FileID.String()))
 	if err != nil {
+		if errors.Is(err, domain.ErrJobIntakePaused) {
+			respondError(w, http.StatusServiceUnavailable, "job intake is temporarily paused by admin")
+			return
+		}
 		if errors.Is(err, domain.ErrTooManyActiveJobs) {
 			respondError(w, http.StatusTooManyRequests, "too many active jobs for this user")
 			return
@@ -203,6 +207,10 @@ func (h *JobHandler) RetryBatch(w http.ResponseWriter, r *http.Request) {
 
 	retriedJobs, retryErr := h.Orchestrator.CreateAndEnqueueBatch(r.Context(), fileOwner, requests)
 	if retryErr != nil {
+		if errors.Is(retryErr, domain.ErrJobIntakePaused) {
+			respondError(w, http.StatusServiceUnavailable, "job intake is temporarily paused by admin")
+			return
+		}
 		if errors.Is(retryErr, domain.ErrTooManyActiveJobs) {
 			respondError(w, http.StatusTooManyRequests, "too many active jobs for this user")
 			return

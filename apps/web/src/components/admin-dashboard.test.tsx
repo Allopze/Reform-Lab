@@ -6,6 +6,7 @@ import { IntlWrapper } from "@/test/intl-wrapper";
 import {
   getAdminOverview,
   getFooterMessage,
+  getHealthInfo,
   getUploadPolicy,
   updateFooterMessage,
   updateUploadPolicy,
@@ -31,6 +32,7 @@ vi.mock("@/lib/auth-context", () => ({
 vi.mock("@/lib/api", () => ({
   getAdminOverview: vi.fn(),
   getFooterMessage: vi.fn(),
+  getHealthInfo: vi.fn(),
   getUploadPolicy: vi.fn(),
   updateFooterMessage: vi.fn(),
   updateUploadPolicy: vi.fn(),
@@ -106,6 +108,7 @@ describe("AdminDashboard", () => {
     pushMock.mockClear();
     vi.mocked(getAdminOverview).mockResolvedValue(dashboardData);
     vi.mocked(getFooterMessage).mockResolvedValue("Powered by Reform Lab");
+    vi.mocked(getHealthInfo).mockRejectedValue(new Error("health optional"));
     vi.mocked(getUploadPolicy).mockResolvedValue(policy);
     vi.mocked(updateFooterMessage).mockResolvedValue("New footer");
     vi.mocked(updateUploadPolicy).mockResolvedValue(policy);

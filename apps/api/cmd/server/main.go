@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -89,6 +90,8 @@ func main() {
 	auditRepo := repository.NewAuditRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	dashboardRepo := repository.NewDashboardRepository(db)
+	workerStatusRepo := repository.NewWorkerStatusRepository(db)
+	runtimeControlRepo := repository.NewRuntimeControlRepository(db)
 	siteSettingRepo := repository.NewSiteSettingRepository(db)
 	emailTemplateRepo := repository.NewEmailTemplateRepository(db)
 	webhookRepo := repository.NewWebhookRepository(db, repository.WithSecretKeeper(secretKeeper))
@@ -117,6 +120,8 @@ func main() {
 	var workerHandler *workers.Handler
 	queueMode := "in-process"
 	effectiveWorkerConcurrency := cfg.InProcessConcurrency
+	runtimeMode := "embedded"
+	workerID := "embedded-" + strconv.Itoa(os.Getpid())
 
 	if cfg.RedisURL != "" {
 		q, err := queue.NewAsynqQueue(cfg.RedisURL)
@@ -126,19 +131,24 @@ func main() {
 		defer q.Close()
 		jobQueue = q
 		queueMode = "redis"
+		runtimeMode = "server"
 		effectiveWorkerConcurrency = cfg.WorkerConcurrency
 		logger.Info().Msg("using Redis queue")
 	} else {
 		// Build embedded worker for in-process mode.
 		registry := buildRegistry()
 		workerHandler = &workers.Handler{
-			Registry:    registry,
-			Store:       store,
-			Artifacts:   artifactRepo,
-			Audit:       auditRepo,
-			Logger:      logger,
-			Metrics:     metrics,
-			ArtifactTTL: time.Duration(cfg.ArtifactTTLHours) * time.Hour,
+			Registry:     registry,
+			Store:        store,
+			Artifacts:    artifactRepo,
+			Audit:        auditRepo,
+			Logger:       logger,
+			Metrics:      metrics,
+			WorkerStatus: workerStatusRepo,
+			WorkerID:     workerID,
+			RuntimeMode:  runtimeMode,
+			QueueMode:    queueMode,
+			ArtifactTTL:  time.Duration(cfg.ArtifactTTLHours) * time.Hour,
 			ArtifactTTLByFamily: map[domain.FormatFamily]time.Duration{
 				domain.FamilyPDF:      time.Duration(cfg.ArtifactTTLByFamily[domain.FamilyPDF]) * time.Hour,
 				domain.FamilyImage:    time.Duration(cfg.ArtifactTTLByFamily[domain.FamilyImage]) * time.Hour,
@@ -178,13 +188,14 @@ func main() {
 		orchestrator.WithMaxActiveJobsPerUser(cfg.MaxActiveJobsPerUser),
 		orchestrator.WithMaxActiveJobsPerGuestSession(cfg.MaxActiveJobsPerGuestSession),
 		orchestrator.WithNotifier(notifier),
+		orchestrator.WithRuntimeControls(runtimeControlRepo),
 	)
-	if workerHandler != nil {
-		workerHandler.Orch = orch
-	}
-
 	retentionCtx, stopRetention := context.WithCancel(context.Background())
 	defer stopRetention()
+	if workerHandler != nil {
+		workerHandler.Orch = orch
+		workers.StartHeartbeatLoop(retentionCtx, workerStatusRepo, workerID, runtimeMode, queueMode, 10*time.Second)
+	}
 	retention := orchestrator.NewRetentionService(artifactRepo, jobRepo, logger)
 	go retention.Start(retentionCtx, 15*time.Minute)
 	storageCleanup := storage.NewCleanupService(storageFS.BasePath(), logger, time.Duration(cfg.OriginalTTLHours)*time.Hour, time.Duration(cfg.TempTTLHours)*time.Hour).
@@ -221,6 +232,8 @@ func main() {
 		Audit:                          auditRepo,
 		Users:                          userRepo,
 		Dashboard:                      dashboardRepo,
+		Workers:                        workerStatusRepo,
+		RuntimeControls:                runtimeControlRepo,
 		SiteSettings:                   siteSettingRepo,
 		EmailTemplates:                 emailTemplateRepo,
 		Webhooks:                       webhookRepo,

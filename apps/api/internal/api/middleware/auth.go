@@ -50,6 +50,14 @@ func Auth(authSvc *auth.Service, users repository.UserRepository) func(http.Hand
 				respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "user not found"})
 				return
 			}
+			if u.IsSuspended {
+				respondJSON(w, http.StatusForbidden, map[string]string{"error": "user suspended"})
+				return
+			}
+			if claims.SessionVersion != u.SessionVersion {
+				respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "session revoked"})
+				return
+			}
 
 			ctx := context.WithValue(r.Context(), userContextKey{}, u)
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -67,9 +75,11 @@ func OptionalAuth(authSvc *auth.Service, users repository.UserRepository) func(h
 				if claims, err := authSvc.ValidateToken(tokenStr); err == nil {
 					if userID, err := uuid.Parse(claims.Subject); err == nil {
 						if u, err := users.GetByID(r.Context(), userID); err == nil {
-							ctx := context.WithValue(r.Context(), userContextKey{}, u)
-							next.ServeHTTP(w, r.WithContext(ctx))
-							return
+							if !u.IsSuspended && claims.SessionVersion == u.SessionVersion {
+								ctx := context.WithValue(r.Context(), userContextKey{}, u)
+								next.ServeHTTP(w, r.WithContext(ctx))
+								return
+							}
 						}
 					}
 				}

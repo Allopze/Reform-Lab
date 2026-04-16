@@ -32,6 +32,10 @@ type Handler struct {
 	Artifacts           repository.ArtifactRepository
 	Audit               repository.AuditRepository
 	Orch                *orchestrator.Service
+	WorkerStatus        repository.WorkerStatusRepository
+	WorkerID            string
+	RuntimeMode         string
+	QueueMode           string
 	Logger              zerolog.Logger
 	Metrics             *observability.Metrics
 	ArtifactTTL         time.Duration
@@ -39,7 +43,7 @@ type Handler struct {
 }
 
 // ProcessPayload processes raw task payload bytes. Used by both in-process and Asynq adapters.
-func (h *Handler) ProcessPayload(ctx context.Context, _ string, data []byte) error {
+func (h *Handler) ProcessPayload(ctx context.Context, taskType string, data []byte) (err error) {
 	var payload queue.TaskPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return fmt.Errorf("unmarshal payload: %w", err)
@@ -56,6 +60,27 @@ func (h *Handler) ProcessPayload(ctx context.Context, _ string, data []byte) err
 	jobID, err := uuid.Parse(payload.JobID)
 	if err != nil {
 		return fmt.Errorf("parse job ID: %w", err)
+	}
+	if h.WorkerStatus != nil && h.WorkerID != "" {
+		_ = h.WorkerStatus.RecordTaskStart(ctx, h.WorkerID, taskType, &jobID, time.Now().UTC())
+		defer func() {
+			finishedAt := time.Now().UTC()
+			status := "succeeded"
+			var errMsg *string
+			if r := recover(); r != nil {
+				msg := fmt.Sprintf("panic: %v", r)
+				errMsg = &msg
+				status = "failed"
+				_ = h.WorkerStatus.RecordTaskFinish(ctx, h.WorkerID, finishedAt, status, errMsg)
+				panic(r)
+			}
+			if err != nil {
+				msg := err.Error()
+				errMsg = &msg
+				status = "failed"
+			}
+			_ = h.WorkerStatus.RecordTaskFinish(ctx, h.WorkerID, finishedAt, status, errMsg)
+		}()
 	}
 	var userID *uuid.UUID
 	if payload.UserID != "" {
@@ -79,6 +104,10 @@ func (h *Handler) ProcessPayload(ctx context.Context, _ string, data []byte) err
 	h.Metrics.ActiveJobs.WithLabelValues("running").Inc()
 	defer h.Metrics.ActiveJobs.WithLabelValues("running").Dec()
 	if err := h.Orch.MarkRunning(ctx, jobID); err != nil {
+		if h.isCancelled(ctx, jobID) {
+			logger.Info().Msg("job already cancelled before start; skipping task")
+			return nil
+		}
 		logger.Error().Err(err).Msg("failed to mark job running")
 		return err
 	}

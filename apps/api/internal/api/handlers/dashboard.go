@@ -13,6 +13,17 @@ type DashboardHandler struct {
 	Audit     repository.AuditRepository
 }
 
+type adminCapabilityAvailability struct {
+	ID            string `json:"id"`
+	DisplayName   string `json:"displayName"`
+	Engine        string `json:"engine"`
+	Family        string `json:"family"`
+	OperationType string `json:"operationType"`
+	TargetFormat  string `json:"targetFormat"`
+	Available     bool   `json:"available"`
+	Reason        string `json:"reason"`
+}
+
 func (h *DashboardHandler) Me(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	if u == nil {
@@ -61,9 +72,69 @@ func (h *DashboardHandler) AdminOverview(w http.ResponseWriter, r *http.Request)
 
 func (h *DashboardHandler) AdminEngines(w http.ResponseWriter, r *http.Request) {
 	engines := capabilities.EffectiveEngineAvailability()
+	capabilityRows := buildAdminCapabilityAvailability()
+	availableCapabilities := 0
+	for _, capability := range capabilityRows {
+		if capability.Available {
+			availableCapabilities++
+		}
+	}
+
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"engines": engines,
+		"engines":               engines,
+		"capabilities":          capabilityRows,
+		"availableCapabilities": availableCapabilities,
+		"totalCapabilities":     len(capabilityRows),
 	})
+}
+
+func buildAdminCapabilityAvailability() []adminCapabilityAvailability {
+	runtimeEngines := capabilities.DefaultProber.AvailableEngines()
+	rows := make([]adminCapabilityAvailability, 0, len(capabilities.Catalog))
+
+	for _, capability := range capabilities.Catalog {
+		capabilityEnabled := capabilities.DefaultFlags.IsCapabilityEnabled(capability.ID)
+		engineEnabled := capabilities.DefaultFlags.IsEngineEnabled(capability.Engine)
+		engineRuntimeAvailable := runtimeEngines[capability.Engine]
+
+		available := capabilityEnabled && engineEnabled && engineRuntimeAvailable
+		reason := "available"
+		if !capabilityEnabled {
+			reason = "capability_disabled"
+		} else if !engineRuntimeAvailable {
+			reason = "engine_unavailable"
+		} else if !engineEnabled {
+			reason = "engine_disabled"
+		}
+
+		rows = append(rows, adminCapabilityAvailability{
+			ID:            capability.ID,
+			DisplayName:   capability.DisplayName,
+			Engine:        capability.Engine,
+			Family:        string(capability.Family),
+			OperationType: string(capability.OperationType),
+			TargetFormat:  capability.TargetFormat,
+			Available:     available,
+			Reason:        reason,
+		})
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		leftOrder := 0
+		rightOrder := 0
+		if capability := capabilities.ByID(rows[i].ID); capability != nil {
+			leftOrder = capability.PresentationOrder
+		}
+		if capability := capabilities.ByID(rows[j].ID); capability != nil {
+			rightOrder = capability.PresentationOrder
+		}
+		if leftOrder == rightOrder {
+			return rows[i].ID < rows[j].ID
+		}
+		return leftOrder < rightOrder
+	})
+
+	return rows
 }
 
 func buildEngineUsage(capabilityUsage []repository.AdminUsageStat) []repository.AdminUsageStat {

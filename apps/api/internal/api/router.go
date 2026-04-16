@@ -32,6 +32,8 @@ type Deps struct {
 	Audit                          repository.AuditRepository
 	Users                          repository.UserRepository
 	Dashboard                      repository.DashboardRepository
+	Workers                        repository.WorkerStatusRepository
+	RuntimeControls                repository.RuntimeControlRepository
 	SiteSettings                   repository.SiteSettingRepository
 	EmailTemplates                 repository.EmailTemplateRepository
 	Webhooks                       repository.WebhookRepository
@@ -64,6 +66,8 @@ func NewRouter(d Deps) *chi.Mux {
 		ArtifactTTLHours:    d.ArtifactTTLHours,
 		ArtifactTTLByFamily: d.ArtifactTTLByFamily,
 		Jobs:                d.Jobs,
+		RuntimeControls:     d.RuntimeControls,
+		Workers:             d.Workers,
 		Database:            d.Database,
 		StorageBasePath:     d.StorageBasePath,
 		QueueMode:           d.QueueMode,
@@ -108,6 +112,7 @@ func NewRouter(d Deps) *chi.Mux {
 			Auth:   d.AuthService,
 			Email:  d.EmailService,
 			Queue:  d.Queue,
+			Audit:  d.Audit,
 			Logger: d.Logger,
 		}
 		r.With(middleware.RateLimit(1, 5, d.TrustProxyHeaders, d.Metrics)).Post("/auth/register", authH.Register)
@@ -166,6 +171,7 @@ func NewRouter(d Deps) *chi.Mux {
 				Artifacts: d.Artifacts,
 				Files:     d.Files,
 				Store:     d.Store,
+				Audit:     d.Audit,
 			}
 			r.Get("/artifacts/{artifactId}/download", art.Handle)
 		})
@@ -204,7 +210,7 @@ func NewRouter(d Deps) *chi.Mux {
 					Audit:     d.Audit,
 				}
 				webhookH := &handlers.WebhookHandler{Webhooks: d.Webhooks, Audit: d.Audit}
-				adminJobsH := &handlers.AdminJobsHandler{Jobs: d.Jobs}
+				adminJobsH := &handlers.AdminJobsHandler{Jobs: d.Jobs, Orchestrator: d.Orchestrator, Files: d.Files, Store: d.Store, Audit: d.Audit}
 				r.Get("/admin/email-templates", emailTmplH.List)
 				r.Post("/admin/email-templates", emailTmplH.Create)
 				r.Get("/admin/email-templates/{key}", emailTmplH.Get)
@@ -216,11 +222,25 @@ func NewRouter(d Deps) *chi.Mux {
 				r.Put("/admin/webhooks/{webhookId}", webhookH.Update)
 				r.Delete("/admin/webhooks/{webhookId}", webhookH.Delete)
 				r.Get("/admin/jobs", adminJobsH.List)
+				r.Post("/admin/jobs/batch/cancel", adminJobsH.CancelBatch)
+				r.Post("/admin/jobs/batch/retry", adminJobsH.RetryBatch)
 
 				adminUsersH := &handlers.AdminUsersHandler{Users: d.Users, Audit: d.Audit}
 				adminAuditH := &handlers.AdminAuditHandler{Audit: d.Audit}
+				supportH := &handlers.AdminSupportHandler{
+					RuntimeControls: d.RuntimeControls,
+					Jobs:            d.Jobs,
+					Orchestrator:    d.Orchestrator,
+					Workers:         d.Workers,
+					Audit:           d.Audit,
+				}
 				r.Get("/admin/users", adminUsersH.List)
 				r.Patch("/admin/users/{userId}/role", adminUsersH.UpdateRole)
+				r.Patch("/admin/users/{userId}/suspension", adminUsersH.UpdateSuspension)
+				r.Post("/admin/users/{userId}/revoke-sessions", adminUsersH.RevokeSessions)
+				r.Patch("/admin/support/queue/intake", supportH.UpdateJobIntake)
+				r.Post("/admin/support/queue/drain", supportH.DrainQueuedJobs)
+				r.Post("/admin/support/workers/prune-stale", supportH.PruneStaleWorkers)
 				r.Get("/admin/audit", adminAuditH.List)
 				r.Get("/admin/audit/export", adminAuditH.ExportCSV)
 			})

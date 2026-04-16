@@ -30,6 +30,7 @@ type Service struct {
 	jobs                  repository.JobRepository
 	audit                 repository.AuditRepository
 	q                     queue.JobQueue
+	runtimeControls       repository.RuntimeControlRepository
 	maxActiveJobsPerUser  int
 	maxActiveJobsPerGuest int
 	notifier              JobNotifier
@@ -53,6 +54,12 @@ func WithMaxActiveJobsPerGuestSession(limit int) Option {
 func WithNotifier(n JobNotifier) Option {
 	return func(s *Service) {
 		s.notifier = n
+	}
+}
+
+func WithRuntimeControls(repo repository.RuntimeControlRepository) Option {
+	return func(s *Service) {
+		s.runtimeControls = repo
 	}
 }
 
@@ -109,6 +116,16 @@ func (s *Service) CreateAndEnqueueForGuest(ctx context.Context, guestSessionID u
 }
 
 func (s *Service) createAndEnqueue(ctx context.Context, userID *uuid.UUID, guestSessionID *uuid.UUID, fileID uuid.UUID, cap domain.Capability, inputPath string) (*domain.Job, error) {
+	if s.runtimeControls != nil {
+		state, err := s.runtimeControls.Get(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("load runtime controls: %w", err)
+		}
+		if state.JobIntakePaused {
+			return nil, domain.ErrJobIntakePaused
+		}
+	}
+
 	now := time.Now().UTC()
 	job := domain.Job{
 		ID:           uuid.New(),
@@ -187,6 +204,15 @@ func (s *Service) CreateAndEnqueueBatchForGuest(ctx context.Context, guestSessio
 func (s *Service) createAndEnqueueBatch(ctx context.Context, userID *uuid.UUID, guestSessionID *uuid.UUID, requests []BatchRequest) ([]domain.Job, error) {
 	if len(requests) == 0 {
 		return nil, nil
+	}
+	if s.runtimeControls != nil {
+		state, err := s.runtimeControls.Get(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("load runtime controls: %w", err)
+		}
+		if state.JobIntakePaused {
+			return nil, domain.ErrJobIntakePaused
+		}
 	}
 
 	now := time.Now().UTC()

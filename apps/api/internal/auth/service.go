@@ -17,13 +17,17 @@ const tokenExpiry = 72 * time.Hour
 
 // Claims is the JWT payload.
 type Claims struct {
-	Role domain.UserRole `json:"role"`
+	Role           domain.UserRole `json:"role"`
+	SessionVersion int             `json:"sessionVersion"`
 	jwt.RegisteredClaims
 }
 
 func (c Claims) Validate() error {
 	if c.Role != domain.RoleAdmin && c.Role != domain.RoleUser {
 		return errors.New("invalid role in token")
+	}
+	if c.SessionVersion < 1 {
+		return errors.New("invalid session version in token")
 	}
 	return nil
 }
@@ -120,13 +124,14 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*AuthResult, 
 	}
 
 	u := &domain.User{
-		ID:           uuid.New(),
-		Name:         in.Name,
-		Email:        in.Email,
-		Team:         in.Team,
-		Role:         role,
-		PasswordHash: string(hash),
-		CreatedAt:    time.Now().UTC(),
+		ID:             uuid.New(),
+		Name:           in.Name,
+		Email:          in.Email,
+		Team:           in.Team,
+		Role:           role,
+		SessionVersion: 1,
+		PasswordHash:   string(hash),
+		CreatedAt:      time.Now().UTC(),
 	}
 
 	if err := s.users.Create(ctx, u); err != nil {
@@ -140,7 +145,7 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*AuthResult, 
 		}
 	}
 
-	token, err := s.issueToken(u.ID, u.Role)
+	token, err := s.issueToken(u.ID, u.Role, u.SessionVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -161,8 +166,11 @@ func (s *Service) Login(ctx context.Context, email, password string) (*AuthResul
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
 		return nil, domain.ErrInvalidCredentials
 	}
+	if u.IsSuspended {
+		return nil, domain.ErrUserSuspended
+	}
 
-	token, err := s.issueToken(u.ID, u.Role)
+	token, err := s.issueToken(u.ID, u.Role, u.SessionVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -186,10 +194,11 @@ func (s *Service) ValidateToken(tokenStr string) (*Claims, error) {
 	return claims, nil
 }
 
-func (s *Service) issueToken(userID uuid.UUID, role domain.UserRole) (string, error) {
+func (s *Service) issueToken(userID uuid.UUID, role domain.UserRole, sessionVersion int) (string, error) {
 	now := time.Now().UTC()
 	claims := Claims{
-		Role: role,
+		Role:           role,
+		SessionVersion: sessionVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID.String(),
 			IssuedAt:  jwt.NewNumericDate(now),

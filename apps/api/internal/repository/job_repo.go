@@ -25,6 +25,8 @@ type JobRepository interface {
 	CountActiveByGuestSession(ctx context.Context, sessionID uuid.UUID) (int, error)
 	ExpireArtifact(ctx context.Context, artifactID uuid.UUID, expiredAt time.Time) error
 	ListForAdmin(ctx context.Context, filter AdminJobFilter) (*AdminJobPage, error)
+	ListIDsForAdmin(ctx context.Context, filter AdminJobFilter) ([]uuid.UUID, error)
+	QueueHistory(ctx context.Context) ([]AdminQueueHistoryPoint, error)
 }
 
 // AdminJobFilter defines filters for the admin jobs listing.
@@ -32,29 +34,49 @@ type AdminJobFilter struct {
 	Status       string // empty = all
 	CapabilityID string // empty = all
 	Search       string // free text match against user name, email, file name
+	StalledOnly  bool   // true = only jobs considered stalled
 	Limit        int    // page size (max 100, default 50)
 	Offset       int
 }
 
 // AdminJobRow is a single row in the admin job listing.
 type AdminJobRow struct {
-	JobID        uuid.UUID        `json:"jobId"`
-	UserName     string           `json:"userName"`
-	UserEmail    string           `json:"userEmail"`
-	FileName     string           `json:"fileName"`
-	CapabilityID string           `json:"capabilityId"`
-	OutputFormat string           `json:"outputFormat"`
-	Status       domain.JobStatus `json:"status"`
-	Error        *string          `json:"error,omitempty"`
-	CreatedAt    time.Time        `json:"createdAt"`
-	UpdatedAt    time.Time        `json:"updatedAt"`
+	JobID         uuid.UUID        `json:"jobId"`
+	UserName      string           `json:"userName"`
+	UserEmail     string           `json:"userEmail"`
+	FileName      string           `json:"fileName"`
+	CapabilityID  string           `json:"capabilityId"`
+	OutputFormat  string           `json:"outputFormat"`
+	Status        domain.JobStatus `json:"status"`
+	Error         *string          `json:"error,omitempty"`
+	CreatedAt     time.Time        `json:"createdAt"`
+	UpdatedAt     time.Time        `json:"updatedAt"`
+	Stalled       bool             `json:"stalled"`
+	StalledReason *string          `json:"stalledReason,omitempty"`
+	BacklogAgeSec *int64           `json:"backlogAgeSec,omitempty"`
 }
 
 // AdminJobPage is a paginated result for admin job listing.
 type AdminJobPage struct {
-	Jobs  []AdminJobRow `json:"jobs"`
-	Total int           `json:"total"`
+	Jobs               []AdminJobRow `json:"jobs"`
+	Total              int           `json:"total"`
+	StalledJobs        int           `json:"stalledJobs"`
+	StalledQueuedJobs  int           `json:"stalledQueuedJobs"`
+	StalledRunningJobs int           `json:"stalledRunningJobs"`
 }
+
+type AdminQueueHistoryPoint struct {
+	Window         string  `json:"window"`
+	EnqueuedJobs   int     `json:"enqueuedJobs"`
+	FailedJobs     int     `json:"failedJobs"`
+	CompletedJobs  int     `json:"completedJobs"`
+	AverageLatency float64 `json:"averageLatencySec"`
+}
+
+const (
+	adminQueuedStalledAfter  = 15 * time.Minute
+	adminRunningStalledAfter = 30 * time.Minute
+)
 
 type sqliteJobRepo struct {
 	db *sql.DB
@@ -279,22 +301,35 @@ func (r *sqliteJobRepo) ListForAdmin(ctx context.Context, filter AdminJobFilter)
 	if filter.Limit <= 0 || filter.Limit > 100 {
 		filter.Limit = 50
 	}
+	now := time.Now().UTC()
 
-	where := "1=1"
-	args := []interface{}{}
+	baseWhere := "1=1"
+	baseArgs := []interface{}{}
 
 	if filter.Status != "" {
-		where += " AND j.status = ?"
-		args = append(args, filter.Status)
+		baseWhere += " AND j.status = ?"
+		baseArgs = append(baseArgs, filter.Status)
 	}
 	if filter.CapabilityID != "" {
-		where += " AND j.capability_id = ?"
-		args = append(args, filter.CapabilityID)
+		baseWhere += " AND j.capability_id = ?"
+		baseArgs = append(baseArgs, filter.CapabilityID)
 	}
 	if filter.Search != "" {
-		where += " AND (u.name LIKE ? OR u.email LIKE ? OR f.original_name LIKE ?)"
+		baseWhere += " AND (u.name LIKE ? OR u.email LIKE ? OR f.original_name LIKE ?)"
 		like := "%" + filter.Search + "%"
-		args = append(args, like, like, like)
+		baseArgs = append(baseArgs, like, like, like)
+	}
+
+	where := baseWhere
+	args := append([]interface{}{}, baseArgs...)
+	if filter.StalledOnly {
+		where += " AND (" + adminStalledWhereClause() + ")"
+		args = append(args, adminStalledWhereArgs(now)...)
+	}
+
+	stalledQueued, stalledRunning, err := r.countStalledAdminJobs(ctx, baseWhere, baseArgs, now)
+	if err != nil {
+		return nil, err
 	}
 
 	// Count total matching rows.
@@ -342,8 +377,170 @@ func (r *sqliteJobRepo) ListForAdmin(ctx context.Context, filter AdminJobFilter)
 		row.Status = domain.JobStatus(status)
 		row.CreatedAt, _ = parseTime(createdAt)
 		row.UpdatedAt, _ = parseTime(updatedAt)
+		applyAdminStalledSignals(&row, now)
 		jobs = append(jobs, row)
 	}
 
-	return &AdminJobPage{Jobs: jobs, Total: total}, nil
+	return &AdminJobPage{
+		Jobs:               jobs,
+		Total:              total,
+		StalledJobs:        stalledQueued + stalledRunning,
+		StalledQueuedJobs:  stalledQueued,
+		StalledRunningJobs: stalledRunning,
+	}, nil
+}
+
+func (r *sqliteJobRepo) ListIDsForAdmin(ctx context.Context, filter AdminJobFilter) ([]uuid.UUID, error) {
+	now := time.Now().UTC()
+	where := "1=1"
+	args := []interface{}{}
+	if filter.Status != "" {
+		where += " AND j.status = ?"
+		args = append(args, filter.Status)
+	}
+	if filter.CapabilityID != "" {
+		where += " AND j.capability_id = ?"
+		args = append(args, filter.CapabilityID)
+	}
+	if filter.Search != "" {
+		where += " AND (u.name LIKE ? OR u.email LIKE ? OR f.original_name LIKE ?)"
+		like := "%" + filter.Search + "%"
+		args = append(args, like, like, like)
+	}
+	if filter.StalledOnly {
+		where += " AND (" + adminStalledWhereClause() + ")"
+		args = append(args, adminStalledWhereArgs(now)...)
+	}
+	rows, err := r.db.QueryContext(ctx,
+		fmt.Sprintf(`SELECT j.id
+		 FROM jobs j
+		 LEFT JOIN users u ON u.id = j.user_id
+		 LEFT JOIN files f ON f.id = j.file_id
+		 WHERE %s
+		 ORDER BY j.created_at DESC`, where),
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list admin job ids: %w", err)
+	}
+	defer rows.Close()
+	ids := make([]uuid.UUID, 0)
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, fmt.Errorf("scan admin job id: %w", err)
+		}
+		if parsed, parseErr := uuid.Parse(raw); parseErr == nil {
+			ids = append(ids, parsed)
+		}
+	}
+	return ids, rows.Err()
+}
+
+func (r *sqliteJobRepo) QueueHistory(ctx context.Context) ([]AdminQueueHistoryPoint, error) {
+	windows := []struct {
+		label string
+		since time.Duration
+	}{
+		{label: "5m", since: 5 * time.Minute},
+		{label: "15m", since: 15 * time.Minute},
+		{label: "1h", since: time.Hour},
+	}
+	points := make([]AdminQueueHistoryPoint, 0, len(windows))
+	for _, window := range windows {
+		point := AdminQueueHistoryPoint{Window: window.label}
+		since := time.Now().UTC().Add(-window.since).Format(timeLayout)
+		if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE created_at >= ?`, since).Scan(&point.EnqueuedJobs); err != nil {
+			return nil, fmt.Errorf("count enqueued jobs history: %w", err)
+		}
+		if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE status = ? AND completed_at >= ?`, string(domain.JobFailed), since).Scan(&point.FailedJobs); err != nil {
+			return nil, fmt.Errorf("count failed jobs history: %w", err)
+		}
+		if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE status IN (?, ?, ?) AND completed_at >= ?`, string(domain.JobSucceeded), string(domain.JobFailed), string(domain.JobCancelled), since).Scan(&point.CompletedJobs); err != nil {
+			return nil, fmt.Errorf("count completed jobs history: %w", err)
+		}
+		if err := r.db.QueryRowContext(ctx,
+			`SELECT COALESCE(AVG((julianday(completed_at) - julianday(started_at)) * 86400.0), 0)
+			 FROM jobs
+			 WHERE started_at IS NOT NULL
+			   AND completed_at IS NOT NULL
+			   AND completed_at >= ?`,
+			since,
+		).Scan(&point.AverageLatency); err != nil {
+			return nil, fmt.Errorf("avg latency history: %w", err)
+		}
+		points = append(points, point)
+	}
+	return points, nil
+}
+
+func (r *sqliteJobRepo) countStalledAdminJobs(ctx context.Context, where string, args []interface{}, now time.Time) (int, int, error) {
+	query := fmt.Sprintf(
+		`SELECT
+			COALESCE(SUM(CASE WHEN j.status = ? AND julianday(j.created_at) <= julianday(?) THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN j.status = ? AND julianday(COALESCE(j.started_at, j.created_at)) <= julianday(?) THEN 1 ELSE 0 END), 0)
+		 FROM jobs j
+		 LEFT JOIN users u ON u.id = j.user_id
+		 LEFT JOIN files f ON f.id = j.file_id
+		 WHERE %s`, where)
+
+	queryArgs := append([]interface{}{}, args...)
+	queryArgs = append(
+		queryArgs,
+		string(domain.JobQueued), now.Add(-adminQueuedStalledAfter).Format(timeLayout),
+		string(domain.JobRunning), now.Add(-adminRunningStalledAfter).Format(timeLayout),
+	)
+
+	var stalledQueued int
+	var stalledRunning int
+	if err := r.db.QueryRowContext(ctx, query, queryArgs...).Scan(&stalledQueued, &stalledRunning); err != nil {
+		return 0, 0, fmt.Errorf("count stalled admin jobs: %w", err)
+	}
+
+	return stalledQueued, stalledRunning, nil
+}
+
+func adminStalledWhereClause() string {
+	return `j.status = ? AND julianday(j.created_at) <= julianday(?)
+		OR j.status = ? AND julianday(COALESCE(j.started_at, j.created_at)) <= julianday(?)`
+}
+
+func adminStalledWhereArgs(now time.Time) []interface{} {
+	return []interface{}{
+		string(domain.JobQueued), now.Add(-adminQueuedStalledAfter).Format(timeLayout),
+		string(domain.JobRunning), now.Add(-adminRunningStalledAfter).Format(timeLayout),
+	}
+}
+
+func applyAdminStalledSignals(row *AdminJobRow, now time.Time) {
+	var reference time.Time
+	var threshold time.Duration
+	var reason string
+
+	switch row.Status {
+	case domain.JobQueued:
+		reference = row.CreatedAt
+		threshold = adminQueuedStalledAfter
+		reason = "queued_too_long"
+	case domain.JobRunning:
+		reference = row.UpdatedAt
+		if reference.IsZero() {
+			reference = row.CreatedAt
+		}
+		threshold = adminRunningStalledAfter
+		reason = "running_too_long"
+	default:
+		return
+	}
+
+	ageSec := int64(now.Sub(reference).Seconds())
+	if ageSec < 0 {
+		ageSec = 0
+	}
+	row.BacklogAgeSec = &ageSec
+
+	if time.Duration(ageSec)*time.Second >= threshold {
+		row.Stalled = true
+		row.StalledReason = &reason
+	}
 }

@@ -292,6 +292,7 @@ export interface AdminJobFilter {
   status?: string;
   capability?: string;
   q?: string;
+  stalled?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -307,11 +308,35 @@ export interface AdminJobRow {
   error?: string;
   createdAt: string;
   updatedAt: string;
+  stalled: boolean;
+  stalledReason?: "queued_too_long" | "running_too_long";
+  backlogAgeSec?: number;
 }
 
 export interface AdminJobPage {
   jobs: AdminJobRow[];
   total: number;
+  stalledJobs: number;
+  stalledQueuedJobs: number;
+  stalledRunningJobs: number;
+}
+
+interface AdminBatchJobFilterPayload {
+  status?: string;
+  capabilityId?: string;
+  search?: string;
+  stalledOnly?: boolean;
+}
+
+function toAdminBatchJobFilter(
+  filter: AdminJobFilter,
+): AdminBatchJobFilterPayload {
+  return {
+    ...(filter.status ? { status: filter.status } : {}),
+    ...(filter.capability ? { capabilityId: filter.capability } : {}),
+    ...(filter.q ? { search: filter.q } : {}),
+    ...(filter.stalled ? { stalledOnly: true } : {}),
+  };
 }
 
 export async function getAdminJobs(
@@ -321,6 +346,7 @@ export async function getAdminJobs(
   if (filter.status) params.set("status", filter.status);
   if (filter.capability) params.set("capability", filter.capability);
   if (filter.q) params.set("q", filter.q);
+  if (filter.stalled) params.set("stalled", "true");
   if (filter.limit) params.set("limit", String(filter.limit));
   if (filter.offset) params.set("offset", String(filter.offset));
 
@@ -344,6 +370,9 @@ export interface AdminUser {
   email: string;
   team?: string;
   role: "admin" | "user";
+  isSuspended: boolean;
+  suspendedReason?: string;
+  sessionVersion: number;
   createdAt: string;
 }
 
@@ -388,7 +417,7 @@ export async function updateUserRole(
     `${API_URL}/api/admin/users/${userId}/role`,
     {
       method: "PATCH",
-      headers: headers(),
+      headers: { ...headers(), "Content-Type": "application/json" },
       credentials: "include",
       body: JSON.stringify({ role }),
     },
@@ -397,6 +426,89 @@ export async function updateUserRole(
     const data = await res.json();
     throw new Error(data.error || "Failed to update role");
   }
+}
+
+export async function updateUserSuspension(
+  userId: string,
+  payload: { suspended: boolean; reason?: string },
+): Promise<void> {
+  const res = await fetchWithTimeout(
+    `${API_URL}/api/admin/users/${userId}/suspension`,
+    {
+      method: "PATCH",
+      headers: { ...headers(), "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(payload),
+    },
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      (data as { error?: string }).error || "Failed to update suspension",
+    );
+  }
+}
+
+export async function revokeUserSessions(userId: string): Promise<number> {
+  const res = await fetchWithTimeout(
+    `${API_URL}/api/admin/users/${userId}/revoke-sessions`,
+    {
+      method: "POST",
+      headers: headers(),
+      credentials: "include",
+    },
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      (data as { error?: string }).error || "Failed to revoke sessions",
+    );
+  }
+  return (data as { sessionVersion?: number }).sessionVersion ?? 0;
+}
+
+export async function cancelAdminJobs(input: {
+  jobIds?: string[];
+  filter?: AdminJobFilter;
+}): Promise<string[]> {
+  const body: { jobIds?: string[]; filter?: AdminBatchJobFilterPayload } = {};
+  if (input.jobIds?.length) body.jobIds = input.jobIds;
+  if (input.filter) body.filter = toAdminBatchJobFilter(input.filter);
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/jobs/batch/cancel`, {
+    method: "POST",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      (data as { error?: string }).error || "Failed to cancel admin jobs",
+    );
+  }
+  return (data as { cancelledJobIds?: string[] }).cancelledJobIds ?? [];
+}
+
+export async function retryAdminJobs(input: {
+  jobIds?: string[];
+  filter?: AdminJobFilter;
+}): Promise<Job[]> {
+  const body: { jobIds?: string[]; filter?: AdminBatchJobFilterPayload } = {};
+  if (input.jobIds?.length) body.jobIds = input.jobIds;
+  if (input.filter) body.filter = toAdminBatchJobFilter(input.filter);
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/jobs/batch/retry`, {
+    method: "POST",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      (data as { error?: string }).error || "Failed to retry admin jobs",
+    );
+  }
+  return (data as { jobs?: Job[] }).jobs ?? [];
 }
 
 // ── Admin Audit ──
@@ -689,6 +801,21 @@ export interface HealthInfo {
       workerConcurrency: number;
       queuedJobs: number;
       runningJobs: number;
+      stalledJobs: number;
+      stalledQueuedJobs: number;
+      stalledRunningJobs: number;
+      controls: {
+        jobIntakePaused?: boolean;
+        pauseReason?: string;
+        updatedAt?: string;
+      };
+      history: Array<{
+        window: string;
+        enqueuedJobs: number;
+        failedJobs: number;
+        completedJobs: number;
+        averageLatencySec: number;
+      }>;
     };
     storage: {
       status: "up" | "down" | "unknown";
@@ -697,6 +824,29 @@ export interface HealthInfo {
       freeBytes?: number;
       usedPercent?: number;
       error?: string;
+    };
+    workers: {
+      count: number;
+      workers: Array<{
+        id: string;
+        runtimeMode: string;
+        queueMode: string;
+        lastHeartbeatAt: string;
+        lastTaskType?: string;
+        lastJobId?: string;
+        lastTaskStatus: string;
+        lastTaskStartedAt?: string;
+        lastTaskFinishedAt?: string;
+        lastError?: string;
+        recentFailures: Array<{
+          id: string;
+          workerId: string;
+          taskType?: string;
+          jobId?: string;
+          error: string;
+          failedAt: string;
+        }>;
+      }>;
     };
   };
   dependencies: {
@@ -722,6 +872,18 @@ export interface HealthInfo {
 
 export interface AdminEnginesInfo {
   engines: Record<string, boolean>;
+  capabilities: Array<{
+    id: string;
+    displayName: string;
+    engine: string;
+    family: string;
+    operationType: string;
+    targetFormat: string;
+    available: boolean;
+    reason: "available" | "capability_disabled" | "engine_disabled" | "engine_unavailable";
+  }>;
+  availableCapabilities: number;
+  totalCapabilities: number;
 }
 
 export async function getHealthInfo(): Promise<HealthInfo> {
@@ -740,6 +902,87 @@ export async function getAdminEngines(): Promise<AdminEnginesInfo> {
   const data = await res.json();
   if (!res.ok) throw new Error("Failed to fetch engines info");
   return data;
+}
+
+export interface JobIntakeControlState {
+  jobIntakePaused: boolean;
+  pauseReason?: string;
+  updatedBy?: string;
+  updatedAt: string;
+}
+
+export async function updateJobIntakeControl(input: {
+  paused: boolean;
+  reason?: string;
+}): Promise<JobIntakeControlState> {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/support/queue/intake`, {
+    method: "PATCH",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(input),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      (data as { error?: string }).error || "Failed to update intake state",
+    );
+  }
+  return data as JobIntakeControlState;
+}
+
+export interface DrainQueuedJobsResult {
+  attempted: number;
+  cancelled: number;
+  skipped: number;
+  cancelledIds: string[];
+}
+
+export async function drainQueuedJobs(limit?: number): Promise<DrainQueuedJobsResult> {
+  const body = typeof limit === "number" ? { limit } : {};
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/support/queue/drain`, {
+    method: "POST",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      (data as { error?: string }).error || "Failed to drain queued jobs",
+    );
+  }
+  return {
+    attempted: (data as { attempted?: number }).attempted ?? 0,
+    cancelled: (data as { cancelled?: number }).cancelled ?? 0,
+    skipped: (data as { skipped?: number }).skipped ?? 0,
+    cancelledIds: (data as { cancelledIds?: string[] }).cancelledIds ?? [],
+  };
+}
+
+export interface PruneWorkersResult {
+  deleted: number;
+  staleMinutes: number;
+  cutoff: string;
+}
+
+export async function pruneStaleWorkers(staleMinutes: number): Promise<PruneWorkersResult> {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/support/workers/prune-stale`, {
+    method: "POST",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ staleMinutes }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      (data as { error?: string }).error || "Failed to prune stale workers",
+    );
+  }
+  return {
+    deleted: (data as { deleted?: number }).deleted ?? 0,
+    staleMinutes: (data as { staleMinutes?: number }).staleMinutes ?? staleMinutes,
+    cutoff: (data as { cutoff?: string }).cutoff ?? "",
+  };
 }
 
 function normalizeFooterMessage(message: unknown): string {

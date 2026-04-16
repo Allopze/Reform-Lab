@@ -90,6 +90,10 @@ func (h *ConversionHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		job, err = h.Orchestrator.CreateAndEnqueue(r.Context(), userIDPtr(u), fileID, *cap, inputPath)
 	}
 	if err != nil {
+		if errors.Is(err, domain.ErrJobIntakePaused) {
+			respondError(w, http.StatusServiceUnavailable, "job intake is temporarily paused by admin")
+			return
+		}
 		if errors.Is(err, domain.ErrTooManyActiveJobs) {
 			if u == nil && guestSessionID != nil {
 				respondError(w, http.StatusTooManyRequests, "too many active jobs for this guest session")
@@ -177,6 +181,10 @@ func (h *ConversionHandler) HandleBatch(w http.ResponseWriter, r *http.Request) 
 		jobs, err = h.Orchestrator.CreateAndEnqueueBatch(r.Context(), userIDPtr(u), requests)
 	}
 	if err != nil {
+		if errors.Is(err, domain.ErrJobIntakePaused) {
+			respondError(w, http.StatusServiceUnavailable, "job intake is temporarily paused by admin")
+			return
+		}
 		if errors.Is(err, domain.ErrTooManyActiveJobs) {
 			if u == nil && guestSessionID != nil {
 				respondError(w, http.StatusTooManyRequests, "too many active jobs for this guest session")

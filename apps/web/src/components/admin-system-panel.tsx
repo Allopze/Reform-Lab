@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import {
+  drainQueuedJobs,
   getAdminEngines,
   getHealthInfo,
+  pruneStaleWorkers,
+  updateJobIntakeControl,
   type AdminEnginesInfo,
   type HealthInfo,
 } from "@/lib/api";
@@ -27,6 +30,19 @@ function formatBytes(value?: number): string {
   return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
+function formatDate(iso?: string): string {
+  if (!iso) return "-";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("es-ES", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export default function AdminSystemPanel() {
   const { user, loading } = useAuth();
   const router = useRouter();
@@ -35,6 +51,23 @@ export default function AdminSystemPanel() {
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [engines, setEngines] = useState<AdminEnginesInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState<null | "pause" | "resume" | "drain" | "prune">(null);
+  const [pauseReasonDraft, setPauseReasonDraft] = useState("maintenance window");
+  const [drainLimitDraft, setDrainLimitDraft] = useState("100");
+  const [staleMinutesDraft, setStaleMinutesDraft] = useState("60");
+
+  const loadSystemData = useCallback(async () => {
+    const [healthData, enginesData] = await Promise.all([getHealthInfo(), getAdminEngines()]);
+    setHealth(healthData);
+    setEngines(enginesData);
+    setError(null);
+    const pauseReason = healthData.runtime.queue.controls?.pauseReason;
+    if (typeof pauseReason === "string" && pauseReason.trim().length > 0) {
+      setPauseReasonDraft((prev) => (prev.trim().length === 0 ? pauseReason : prev));
+    }
+  }, []);
 
   useEffect(() => {
     if (loading) return;
@@ -43,19 +76,94 @@ export default function AdminSystemPanel() {
       return;
     }
 
-    Promise.all([getHealthInfo(), getAdminEngines()])
-      .then(([healthData, enginesData]) => {
-        setHealth(healthData);
-        setEngines(enginesData);
-        setError(null);
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : t("loadError"));
-      });
-  }, [loading, router, t, user]);
+    loadSystemData().catch((err) => {
+      setError(err instanceof Error ? err.message : t("loadError"));
+    });
+  }, [loading, loadSystemData, router, t, user]);
+
+  async function handlePauseIntake() {
+    const reason = pauseReasonDraft.trim();
+    if (!reason) {
+      setActionError(t("intakeReasonRequired"));
+      setActionStatus(null);
+      return;
+    }
+
+    setActionBusy("pause");
+    setActionError(null);
+    setActionStatus(null);
+    try {
+      await updateJobIntakeControl({ paused: true, reason });
+      await loadSystemData();
+      setActionStatus(t("intakePausedStatus"));
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : t("supportActionError"));
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function handleResumeIntake() {
+    setActionBusy("resume");
+    setActionError(null);
+    setActionStatus(null);
+    try {
+      await updateJobIntakeControl({ paused: false });
+      await loadSystemData();
+      setActionStatus(t("intakeResumedStatus"));
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : t("supportActionError"));
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function handleDrainQueue() {
+    const parsed = Number.parseInt(drainLimitDraft, 10);
+    const limit = Number.isInteger(parsed) && parsed > 0 ? parsed : 100;
+
+    setActionBusy("drain");
+    setActionError(null);
+    setActionStatus(null);
+    try {
+      const result = await drainQueuedJobs(limit);
+      await loadSystemData();
+      setActionStatus(t("drainStatus", { cancelled: result.cancelled, skipped: result.skipped }));
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : t("supportActionError"));
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function handlePruneWorkers() {
+    const parsed = Number.parseInt(staleMinutesDraft, 10);
+    if (!Number.isInteger(parsed) || parsed < 5 || parsed > 10080) {
+      setActionError(t("pruneValidation"));
+      setActionStatus(null);
+      return;
+    }
+
+    setActionBusy("prune");
+    setActionError(null);
+    setActionStatus(null);
+    try {
+      const result = await pruneStaleWorkers(parsed);
+      await loadSystemData();
+      setActionStatus(t("pruneStatus", { deleted: result.deleted }));
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : t("supportActionError"));
+    } finally {
+      setActionBusy(null);
+    }
+  }
 
   const engineEntries = useMemo(
     () => Object.entries(engines?.engines ?? {}).sort(([a], [b]) => a.localeCompare(b)),
+    [engines],
+  );
+  const capabilityEntries = useMemo(
+    () => engines?.capabilities ?? [],
     [engines],
   );
 
@@ -81,6 +189,13 @@ export default function AdminSystemPanel() {
   const database = health.dependencies.database;
   const redis = health.dependencies.redis;
   const alerts = health.alerts ?? [];
+  const stalledJobs = typeof queue.stalledJobs === "number" ? queue.stalledJobs : 0;
+  const workers = health.runtime.workers;
+  const queueHistory = queue.history ?? [];
+  const queueControls = queue.controls ?? {};
+  const intakePaused = queueControls.jobIntakePaused === true;
+  const availableCapabilities = engines.availableCapabilities ?? capabilityEntries.filter((item) => item.available).length;
+  const totalCapabilities = engines.totalCapabilities ?? capabilityEntries.length;
 
   return (
     <div className="mt-6 space-y-6">
@@ -120,9 +235,23 @@ export default function AdminSystemPanel() {
           <h2 className="text-base font-semibold text-stone-900">{t("queueTitle")}</h2>
           <div className="mt-3 space-y-1 text-sm text-stone-600">
             <p>{t("queueMode", { mode: queue.mode })}</p>
+            <p>{t("intakeStatus", { status: intakePaused ? t("intakePaused") : t("intakeRunning") })}</p>
+            {intakePaused && (
+              <p className="text-xs text-amber-700">{t("intakePauseReason", { reason: queueControls.pauseReason ?? "-" })}</p>
+            )}
             <p>{t("workerConcurrency", { count: queue.workerConcurrency })}</p>
             <p>{t("queuedJobs", { count: queue.queuedJobs })}</p>
             <p>{t("runningJobs", { count: queue.runningJobs })}</p>
+            <p>{t("stalledJobs", { count: queue.stalledJobs })}</p>
+            <p className="text-xs text-stone-500">
+              {t("stalledBreakdown", {
+                queued: queue.stalledQueuedJobs,
+                running: queue.stalledRunningJobs,
+              })}
+            </p>
+            {stalledJobs > 0 && (
+              <p className="text-xs text-amber-700">{t("stalledHint")}</p>
+            )}
           </div>
         </div>
 
@@ -133,6 +262,151 @@ export default function AdminSystemPanel() {
             <p>{t("storageFree", { value: formatBytes(storage.freeBytes) })}</p>
             <p>{t("storageTotal", { value: formatBytes(storage.totalBytes) })}</p>
             <p>{t("storageUsed", { value: typeof storage.usedPercent === "number" ? storage.usedPercent.toFixed(1) : "-" })}</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-stone-200 bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+        <h2 className="text-base font-semibold text-stone-900">{t("supportTitle")}</h2>
+        <p className="mt-2 text-sm text-stone-500">{t("supportDescription")}</p>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-3">
+          <div className="rounded-xl border border-stone-200 p-3">
+            <p className="text-sm font-medium text-stone-900">{t("intakeControlTitle")}</p>
+            <input
+              value={pauseReasonDraft}
+              onChange={(event) => setPauseReasonDraft(event.target.value)}
+              placeholder={t("intakeReasonPlaceholder")}
+              className="mt-2 w-full rounded-md border border-stone-300 px-2 py-1.5 text-sm text-stone-800 focus:border-stone-500 focus:outline-none"
+            />
+            <div className="mt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={handlePauseIntake}
+                disabled={actionBusy !== null || intakePaused}
+                className="rounded-md border border-stone-300 px-3 py-1.5 text-xs font-medium text-stone-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {t("pauseIntake")}
+              </button>
+              <button
+                type="button"
+                onClick={handleResumeIntake}
+                disabled={actionBusy !== null || !intakePaused}
+                className="rounded-md border border-stone-300 px-3 py-1.5 text-xs font-medium text-stone-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {t("resumeIntake")}
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-stone-200 p-3">
+            <p className="text-sm font-medium text-stone-900">{t("drainTitle")}</p>
+            <input
+              value={drainLimitDraft}
+              onChange={(event) => setDrainLimitDraft(event.target.value)}
+              placeholder="100"
+              inputMode="numeric"
+              className="mt-2 w-full rounded-md border border-stone-300 px-2 py-1.5 text-sm text-stone-800 focus:border-stone-500 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={handleDrainQueue}
+              disabled={actionBusy !== null}
+              className="mt-2 rounded-md border border-stone-300 px-3 py-1.5 text-xs font-medium text-stone-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {t("drainQueued")}
+            </button>
+          </div>
+
+          <div className="rounded-xl border border-stone-200 p-3">
+            <p className="text-sm font-medium text-stone-900">{t("pruneTitle")}</p>
+            <input
+              value={staleMinutesDraft}
+              onChange={(event) => setStaleMinutesDraft(event.target.value)}
+              placeholder="60"
+              inputMode="numeric"
+              className="mt-2 w-full rounded-md border border-stone-300 px-2 py-1.5 text-sm text-stone-800 focus:border-stone-500 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={handlePruneWorkers}
+              disabled={actionBusy !== null}
+              className="mt-2 rounded-md border border-stone-300 px-3 py-1.5 text-xs font-medium text-stone-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {t("pruneWorkers")}
+            </button>
+          </div>
+        </div>
+
+        {actionStatus && (
+          <p className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{actionStatus}</p>
+        )}
+        {actionError && (
+          <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{actionError}</p>
+        )}
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-2xl border border-stone-200 bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+          <h2 className="text-base font-semibold text-stone-900">{t("historyTitle")}</h2>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full border-collapse text-left text-sm">
+              <thead className="bg-stone-50 text-xs font-medium text-stone-500">
+                <tr>
+                  <th className="px-3 py-2">{t("windowHeader")}</th>
+                  <th className="px-3 py-2">{t("enqueuedHeader")}</th>
+                  <th className="px-3 py-2">{t("failedHeader")}</th>
+                  <th className="px-3 py-2">{t("latencyHeader")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {queueHistory.map((point) => (
+                  <tr key={point.window} className="border-t border-stone-200 text-stone-700">
+                    <td className="px-3 py-2 font-medium text-stone-900">{point.window}</td>
+                    <td className="px-3 py-2">{point.enqueuedJobs}</td>
+                    <td className="px-3 py-2">{point.failedJobs}</td>
+                    <td className="px-3 py-2">{point.averageLatencySec.toFixed(1)}s</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-stone-200 bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+          <h2 className="text-base font-semibold text-stone-900">{t("workersTitle")}</h2>
+          <p className="mt-2 text-sm text-stone-500">{t("workersSummary", { count: workers.count })}</p>
+          <div className="mt-3 space-y-3">
+            {workers.workers.length === 0 ? (
+              <p className="text-sm text-stone-500">{t("noWorkers")}</p>
+            ) : (
+              workers.workers.map((worker) => (
+                <article key={worker.id} className="rounded-xl border border-stone-200 px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-medium text-stone-900">{worker.id}</p>
+                    <span className="text-xs text-stone-500">
+                      {worker.runtimeMode} · {worker.queueMode}
+                    </span>
+                  </div>
+                  <div className="mt-2 space-y-1 text-sm text-stone-600">
+                    <p>{t("heartbeatAt", { value: formatDate(worker.lastHeartbeatAt) })}</p>
+                    <p>{t("workerLastTask", { value: worker.lastTaskType ?? "-" })}</p>
+                    <p>{t("workerStatus", { value: worker.lastTaskStatus })}</p>
+                    {worker.lastJobId && <p>{t("workerJob", { value: worker.lastJobId.slice(0, 8) })}</p>}
+                    {worker.lastError && <p className="text-rose-600">{worker.lastError}</p>}
+                  </div>
+                  {worker.recentFailures.length > 0 && (
+                    <div className="mt-3 space-y-1 border-t border-stone-200 pt-3 text-xs text-stone-600">
+                      {worker.recentFailures.map((failure) => (
+                        <p key={failure.id}>
+                          {failure.taskType ?? "task"}: {failure.error}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              ))
+            )}
           </div>
         </div>
       </section>
@@ -248,6 +522,61 @@ export default function AdminSystemPanel() {
                         {available ? t("available") : t("unavailable")}
                       </span>
                     </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+        <div className="border-b border-stone-200 px-5 py-4">
+          <h2 className="text-base font-semibold text-stone-900">{t("capabilitiesTitle")}</h2>
+          <p className="mt-1 text-sm text-stone-500">
+            {t("capabilitiesSummary", { available: availableCapabilities, total: totalCapabilities })}
+          </p>
+        </div>
+
+        <div className="max-h-96 overflow-auto">
+          <table className="w-full border-collapse text-left text-sm">
+            <thead className="sticky top-0 bg-stone-50 text-xs font-medium text-stone-500">
+              <tr>
+                <th className="px-5 py-3">{t("capabilityHeader")}</th>
+                <th className="px-5 py-3">{t("engineHeader")}</th>
+                <th className="px-5 py-3">{t("familyHeader")}</th>
+                <th className="px-5 py-3">{t("availabilityHeader")}</th>
+                <th className="px-5 py-3">{t("reasonHeader")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {capabilityEntries.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-5 py-8 text-sm text-stone-500">-</td>
+                </tr>
+              ) : (
+                capabilityEntries.map((capability) => (
+                  <tr key={capability.id} className="border-t border-stone-200 text-stone-700">
+                    <td className="px-5 py-3">
+                      <p className="font-medium text-stone-900">{capability.displayName}</p>
+                      <p className="text-xs text-stone-500">{capability.id}</p>
+                    </td>
+                    <td className="px-5 py-3 font-medium text-stone-900">{capability.engine}</td>
+                    <td className="px-5 py-3 text-xs text-stone-600">
+                      {capability.family} · {capability.operationType} · {capability.targetFormat}
+                    </td>
+                    <td className="px-5 py-3">
+                      <span
+                        className={`inline-block rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+                          capability.available
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border-rose-200 bg-rose-50 text-rose-700"
+                        }`}
+                      >
+                        {capability.available ? t("available") : t("unavailable")}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 text-xs text-stone-600">{t(`reason.${capability.reason}`)}</td>
                   </tr>
                 ))
               )}

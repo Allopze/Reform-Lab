@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/allopze/reform-lab/apps/api/internal/domain"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
 	"github.com/allopze/reform-lab/apps/api/internal/storage"
 	"github.com/go-chi/chi/v5"
@@ -17,6 +18,7 @@ type ArtifactHandler struct {
 	Artifacts repository.ArtifactRepository
 	Files     repository.FileRepository
 	Store     storage.Store
+	Audit     repository.AuditRepository
 }
 
 func (h *ArtifactHandler) Handle(w http.ResponseWriter, r *http.Request) {
@@ -60,5 +62,30 @@ func (h *ArtifactHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		"filename": artifact.FileName,
 	})
 	w.Header().Set("Content-Disposition", disposition)
-	io.Copy(w, reader)
+	written, copyErr := io.Copy(w, reader)
+	if copyErr != nil {
+		return
+	}
+
+	if h.Audit != nil {
+		details := map[string]interface{}{
+			"artifactId": artifact.ID.String(),
+			"fileName":   artifact.FileName,
+			"bytes":      written,
+		}
+		if u != nil {
+			details["userId"] = u.ID.String()
+		}
+		if guestSessionID != nil {
+			details["guestSessionId"] = guestSessionID.String()
+		}
+		_ = h.Audit.Create(r.Context(), &domain.AuditEvent{
+			ID:        uuid.New(),
+			EventType: domain.AuditArtifactDownloaded,
+			FileID:    &artifact.FileID,
+			JobID:     &artifact.JobID,
+			Details:   details,
+			CreatedAt: time.Now().UTC(),
+		})
+	}
 }

@@ -38,3 +38,10 @@ func nullableUUIDString(id *uuid.UUID) *string {
 	s := id.String()
 	return &s
 }
+
+func nullableString(value *string) interface{} {
+	if value == nil {
+		return nil
+	}
+	return *value
+}

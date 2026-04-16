@@ -4,8 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import {
+  cancelAdminJobs,
   cancelJob,
   getAdminJobs,
+  retryAdminJobs,
   retryJob,
   type AdminJobPage,
   type AdminJobFilter,
@@ -39,6 +41,13 @@ function formatDate(iso: string): string {
   }
 }
 
+function formatBacklogMinutes(seconds: number): number {
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return 0;
+  }
+  return Math.max(1, Math.round(seconds / 60));
+}
+
 export default function AdminJobsTable() {
   const { user, loading } = useAuth();
   const router = useRouter();
@@ -48,9 +57,12 @@ export default function AdminJobsTable() {
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [stalledOnly, setStalledOnly] = useState(false);
   const [offset, setOffset] = useState(0);
   const [actingJobId, setActingJobId] = useState<string | null>(null);
   const [actingType, setActingType] = useState<"cancel" | "retry" | null>(null);
+  const [selectedJobIds, setSelectedJobIds] = useState<string[]>([]);
+  const [bulkAction, setBulkAction] = useState<"cancel" | "retry" | "filter-cancel" | "filter-retry" | null>(null);
 
   const fetchJobs = useCallback(async () => {
     try {
@@ -60,13 +72,17 @@ export default function AdminJobsTable() {
       };
       if (statusFilter) filter.status = statusFilter;
       if (search.trim()) filter.q = search.trim();
+      if (stalledOnly) filter.stalled = true;
       const result = await getAdminJobs(filter);
       setPage(result);
+      setSelectedJobIds((current) =>
+        current.filter((jobId) => result.jobs.some((job) => job.jobId === jobId)),
+      );
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("loadError"));
     }
-  }, [statusFilter, search, offset, t]);
+  }, [statusFilter, search, stalledOnly, offset, t]);
 
   useEffect(() => {
     if (loading) return;
@@ -85,12 +101,36 @@ export default function AdminJobsTable() {
     return <p className="mt-6 text-sm text-rose-600">{error}</p>;
   }
 
-  const totalPages = Math.ceil(page.total / PAGE_SIZE);
-  const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
-
   const isCancelable = (job: AdminJobRow) =>
     job.status === "queued" || job.status === "running";
   const isRetryable = (job: AdminJobRow) => job.status === "failed";
+
+  const totalPages = Math.ceil(page.total / PAGE_SIZE);
+  const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
+  const selectedJobs = page.jobs.filter((job) => selectedJobIds.includes(job.jobId));
+  const selectableJobs = page.jobs.filter((job) => isCancelable(job) || isRetryable(job));
+  const currentFilter: AdminJobFilter = {
+    ...(statusFilter ? { status: statusFilter } : {}),
+    ...(search.trim() ? { q: search.trim() } : {}),
+    ...(stalledOnly ? { stalled: true } : {}),
+  };
+
+  function toggleSelection(jobId: string) {
+    setSelectedJobIds((current) =>
+      current.includes(jobId)
+        ? current.filter((value) => value !== jobId)
+        : [...current, jobId],
+    );
+  }
+
+  function toggleVisibleSelection(checked: boolean) {
+    const ids = selectableJobs.map((job) => job.jobId);
+    setSelectedJobIds((current) =>
+      checked
+        ? Array.from(new Set([...current, ...ids]))
+        : current.filter((id) => !ids.includes(id)),
+    );
+  }
 
   async function handleCancel(jobId: string) {
     try {
@@ -122,6 +162,64 @@ export default function AdminJobsTable() {
     }
   }
 
+  async function handleBulkCancelSelected() {
+    if (selectedJobs.length === 0) return;
+    if (!window.confirm(t("confirmCancelSelected", { count: selectedJobs.length }))) {
+      return;
+    }
+    try {
+      setBulkAction("cancel");
+      setError(null);
+      await cancelAdminJobs({ jobIds: selectedJobs.map((job) => job.jobId) });
+      setSelectedJobIds([]);
+      await fetchJobs();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("loadError"));
+    } finally {
+      setBulkAction(null);
+    }
+  }
+
+  async function handleBulkRetrySelected() {
+    const retryableIds = selectedJobs.filter(isRetryable).map((job) => job.jobId);
+    if (retryableIds.length === 0) return;
+    if (!window.confirm(t("confirmRetrySelected", { count: retryableIds.length }))) {
+      return;
+    }
+    try {
+      setBulkAction("retry");
+      setError(null);
+      await retryAdminJobs({ jobIds: retryableIds });
+      setSelectedJobIds([]);
+      await fetchJobs();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("loadError"));
+    } finally {
+      setBulkAction(null);
+    }
+  }
+
+  async function handleFilterAction(action: "cancel" | "retry") {
+    if (!window.confirm(t(action === "cancel" ? "confirmCancelFilter" : "confirmRetryFilter", { count: page.total }))) {
+      return;
+    }
+    try {
+      setBulkAction(action === "cancel" ? "filter-cancel" : "filter-retry");
+      setError(null);
+      if (action === "cancel") {
+        await cancelAdminJobs({ filter: currentFilter });
+      } else {
+        await retryAdminJobs({ filter: currentFilter });
+      }
+      setSelectedJobIds([]);
+      await fetchJobs();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("loadError"));
+    } finally {
+      setBulkAction(null);
+    }
+  }
+
   return (
     <div className="mt-6 space-y-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -145,9 +243,74 @@ export default function AdminJobsTable() {
           className="h-9 w-64 rounded-lg border border-stone-200 bg-white px-3 text-sm text-stone-700 placeholder:text-stone-400"
         />
 
+        <label className="inline-flex items-center gap-2 text-sm text-stone-600">
+          <input
+            type="checkbox"
+            checked={stalledOnly}
+            onChange={(e) => {
+              setStalledOnly(e.target.checked);
+              setOffset(0);
+            }}
+            className="h-4 w-4 rounded border-stone-300 text-coral-600"
+          />
+          {t("stalledOnly")}
+        </label>
+
         <span className="ml-auto text-xs text-stone-500">
           {t("totalJobs", { count: page.total })}
         </span>
+      </div>
+
+      <p className="text-xs text-stone-500">
+        {t("stalledSummary", {
+          count: page.stalledJobs,
+          queued: page.stalledQueuedJobs,
+          running: page.stalledRunningJobs,
+        })}
+      </p>
+
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-stone-200 bg-stone-50 px-3 py-3 text-sm">
+        <span className="text-stone-600">{t("selectedCount", { count: selectedJobIds.length })}</span>
+        <button
+          type="button"
+          disabled={selectedJobs.filter(isCancelable).length === 0 || bulkAction !== null}
+          onClick={() => {
+            void handleBulkCancelSelected();
+          }}
+          className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-sm text-stone-700 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {bulkAction === "cancel" ? t("cancelling") : t("cancelSelected")}
+        </button>
+        <button
+          type="button"
+          disabled={selectedJobs.filter(isRetryable).length === 0 || bulkAction !== null}
+          onClick={() => {
+            void handleBulkRetrySelected();
+          }}
+          className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-sm text-stone-700 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {bulkAction === "retry" ? t("retrying") : t("retrySelected")}
+        </button>
+        <button
+          type="button"
+          disabled={page.total === 0 || bulkAction !== null}
+          onClick={() => {
+            void handleFilterAction("cancel");
+          }}
+          className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-sm text-stone-700 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {bulkAction === "filter-cancel" ? t("cancelling") : t("cancelFiltered")}
+        </button>
+        <button
+          type="button"
+          disabled={page.total === 0 || bulkAction !== null}
+          onClick={() => {
+            void handleFilterAction("retry");
+          }}
+          className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-sm text-stone-700 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {bulkAction === "filter-retry" ? t("retrying") : t("retryFiltered")}
+        </button>
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
@@ -155,12 +318,21 @@ export default function AdminJobsTable() {
           <table className="w-full min-w-225 border-collapse text-left">
             <thead className="bg-stone-50 text-xs font-medium text-stone-500">
               <tr>
+                <th className="px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={selectableJobs.length > 0 && selectableJobs.every((job) => selectedJobIds.includes(job.jobId))}
+                    onChange={(event) => toggleVisibleSelection(event.target.checked)}
+                    className="h-4 w-4 rounded border-stone-300"
+                  />
+                </th>
                 <th className="px-4 py-3">{t("jobHeader")}</th>
                 <th className="px-4 py-3">{t("fileHeader")}</th>
                 <th className="px-4 py-3">{t("userHeader")}</th>
                 <th className="px-4 py-3">{t("capabilityHeader")}</th>
                 <th className="px-4 py-3">{t("outputHeader")}</th>
                 <th className="px-4 py-3">{t("statusHeader")}</th>
+                <th className="px-4 py-3">{t("backlogHeader")}</th>
                 <th className="px-4 py-3">{t("createdHeader")}</th>
                 <th className="px-4 py-3">{t("actionHeader")}</th>
               </tr>
@@ -168,13 +340,22 @@ export default function AdminJobsTable() {
             <tbody>
               {page.jobs.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-sm text-stone-500">
+                  <td colSpan={10} className="px-4 py-8 text-sm text-stone-500">
                     {t("emptyJobs")}
                   </td>
                 </tr>
               ) : (
                 page.jobs.map((job) => (
                   <tr key={job.jobId} className="border-t border-stone-200 text-sm text-stone-700">
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedJobIds.includes(job.jobId)}
+                        disabled={!isCancelable(job) && !isRetryable(job)}
+                        onChange={() => toggleSelection(job.jobId)}
+                        className="h-4 w-4 rounded border-stone-300"
+                      />
+                    </td>
                     <td className="px-4 py-3 font-medium text-stone-900">{job.jobId.slice(0, 8)}</td>
                     <td className="px-4 py-3">{job.fileName}</td>
                     <td className="px-4 py-3">
@@ -191,6 +372,33 @@ export default function AdminJobsTable() {
                         <p className="mt-1 max-w-48 truncate text-xs text-rose-600" title={job.error}>
                           {job.error}
                         </p>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {job.backlogAgeSec == null ? (
+                        <span className="text-xs text-stone-400">-</span>
+                      ) : (
+                        <div className="space-y-1">
+                          <div className="text-xs text-stone-600">
+                            {t("backlogAge", {
+                              minutes: formatBacklogMinutes(job.backlogAgeSec),
+                            })}
+                          </div>
+                          <span
+                            className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                              job.stalled
+                                ? "border-rose-200 bg-rose-50 text-rose-700"
+                                : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            }`}
+                          >
+                            {job.stalled ? t("stalled") : t("healthy")}
+                          </span>
+                          {job.stalledReason && (
+                            <p className="text-xs text-rose-600">
+                              {t(`stalledReason.${job.stalledReason}`)}
+                            </p>
+                          )}
+                        </div>
                       )}
                     </td>
                     <td className="px-4 py-3 text-xs text-stone-500">{formatDate(job.createdAt)}</td>

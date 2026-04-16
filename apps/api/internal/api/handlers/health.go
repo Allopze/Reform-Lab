@@ -48,6 +48,8 @@ type DetailedHealthHandler struct {
 	ArtifactTTLByFamily map[string]int
 
 	Jobs              repository.JobRepository
+	RuntimeControls   repository.RuntimeControlRepository
+	Workers           repository.WorkerStatusRepository
 	Database          *sql.DB
 	StorageBasePath   string
 	QueueMode         string
@@ -83,6 +85,7 @@ func (h *DetailedHealthHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		"runtime": map[string]interface{}{
 			"queue":   queueSnapshot,
 			"storage": storageSnapshot,
+			"workers": h.workerSnapshot(r.Context()),
 		},
 		"dependencies": map[string]interface{}{
 			"database": databaseSnapshot,
@@ -163,6 +166,22 @@ func buildHealthAlerts(
 		})
 	}
 
+	if stalledJobs, ok := intFromSnapshot(queueSnapshot, "stalledJobs"); ok && stalledJobs > 0 {
+		stalledQueued, _ := intFromSnapshot(queueSnapshot, "stalledQueuedJobs")
+		stalledRunning, _ := intFromSnapshot(queueSnapshot, "stalledRunningJobs")
+		alerts = append(alerts, healthAlert{
+			Code:     "stalled_jobs_detected",
+			Severity: "warning",
+			Summary:  "Stalled jobs detected",
+			Description: fmt.Sprintf(
+				"There are %d stalled jobs (%d queued, %d running). Review /admin/jobs with stalled filter for details.",
+				stalledJobs,
+				stalledQueued,
+				stalledRunning,
+			),
+		})
+	}
+
 	return alerts
 }
 
@@ -238,6 +257,9 @@ func floatFromSnapshot(snapshot map[string]interface{}, key string) (float64, bo
 func (h *DetailedHealthHandler) queueSnapshot(ctx context.Context) map[string]interface{} {
 	queuedJobs := -1
 	runningJobs := -1
+	stalledJobs := -1
+	stalledQueuedJobs := -1
+	stalledRunningJobs := -1
 
 	if h.Jobs != nil {
 		if count, err := h.Jobs.CountByStatuses(ctx, domain.JobQueued); err == nil {
@@ -246,13 +268,52 @@ func (h *DetailedHealthHandler) queueSnapshot(ctx context.Context) map[string]in
 		if count, err := h.Jobs.CountByStatuses(ctx, domain.JobRunning); err == nil {
 			runningJobs = count
 		}
+		if page, err := h.Jobs.ListForAdmin(ctx, repository.AdminJobFilter{Limit: 1}); err == nil {
+			stalledJobs = page.StalledJobs
+			stalledQueuedJobs = page.StalledQueuedJobs
+			stalledRunningJobs = page.StalledRunningJobs
+		}
+	}
+	history := []repository.AdminQueueHistoryPoint{}
+	controls := map[string]interface{}{}
+	if h.Jobs != nil {
+		if points, err := h.Jobs.QueueHistory(ctx); err == nil {
+			history = points
+		}
+	}
+	if h.RuntimeControls != nil {
+		if state, err := h.RuntimeControls.Get(ctx); err == nil {
+			controls = map[string]interface{}{
+				"jobIntakePaused": state.JobIntakePaused,
+				"pauseReason":     state.PauseReason,
+				"updatedAt":       state.UpdatedAt,
+			}
+		}
 	}
 
 	return map[string]interface{}{
-		"mode":              normalizedQueueMode(h.QueueMode),
-		"workerConcurrency": h.WorkerConcurrency,
-		"queuedJobs":        queuedJobs,
-		"runningJobs":       runningJobs,
+		"mode":               normalizedQueueMode(h.QueueMode),
+		"workerConcurrency":  h.WorkerConcurrency,
+		"queuedJobs":         queuedJobs,
+		"runningJobs":        runningJobs,
+		"stalledJobs":        stalledJobs,
+		"stalledQueuedJobs":  stalledQueuedJobs,
+		"stalledRunningJobs": stalledRunningJobs,
+		"history":            history,
+		"controls":           controls,
+	}
+}
+
+func (h *DetailedHealthHandler) workerSnapshot(ctx context.Context) map[string]interface{} {
+	workers := []repository.WorkerStatusSnapshot{}
+	if h.Workers != nil {
+		if items, err := h.Workers.List(ctx, 3); err == nil {
+			workers = items
+		}
+	}
+	return map[string]interface{}{
+		"count":   len(workers),
+		"workers": workers,
 	}
 }
 

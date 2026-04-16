@@ -62,6 +62,25 @@ func TestBuildHealthAlerts_StorageCriticalOverridesWarning(t *testing.T) {
 	}
 }
 
+func TestBuildHealthAlerts_StalledJobsDetected(t *testing.T) {
+	alerts := buildHealthAlerts(
+		map[string]interface{}{
+			"queuedJobs":         8,
+			"runningJobs":        2,
+			"stalledJobs":        3,
+			"stalledQueuedJobs":  2,
+			"stalledRunningJobs": 1,
+		},
+		map[string]interface{}{"status": "up", "usedPercent": 40.0},
+		map[string]interface{}{"status": "up"},
+		map[string]interface{}{"status": "not_configured"},
+	)
+
+	if !alertCodesContain(alerts, "stalled_jobs_detected") {
+		t.Fatal("expected stalled_jobs_detected alert")
+	}
+}
+
 func alertCodesContain(alerts []healthAlert, code string) bool {
 	for _, alert := range alerts {
 		if alert.Code == code {

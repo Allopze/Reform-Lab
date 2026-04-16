@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -84,6 +85,8 @@ func main() {
 	siteSettingRepo := repository.NewSiteSettingRepository(db)
 	emailTemplateRepo := repository.NewEmailTemplateRepository(db)
 	webhookRepo := repository.NewWebhookRepository(db, repository.WithSecretKeeper(secretKeeper))
+	workerStatusRepo := repository.NewWorkerStatusRepository(db)
+	runtimeControlRepo := repository.NewRuntimeControlRepository(db)
 
 	// Email
 	emailSvc := email.NewService(cfg, siteSettingRepo, emailTemplateRepo, logger, email.WithSecretKeeper(secretKeeper))
@@ -104,7 +107,7 @@ func main() {
 	defer q.Close()
 
 	webhookNotifier := webhookpkg.NewNotifier(q, webhookRepo, repository.NewFileRepository(db), logger)
-	orch := orchestrator.NewService(jobRepo, auditRepo, q, orchestrator.WithNotifier(webhookNotifier))
+	orch := orchestrator.NewService(jobRepo, auditRepo, q, orchestrator.WithNotifier(webhookNotifier), orchestrator.WithRuntimeControls(runtimeControlRepo))
 
 	// Register conversion engines
 	registry := workers.NewRegistry()
@@ -192,15 +195,21 @@ func main() {
 	registry.Register("video-preview-mp4", &video.PreviewClipEngine{})
 	registry.Register("video-preview-webm", &video.PreviewClipEngine{})
 
+	hostname, _ := os.Hostname()
+	workerID := hostname + "-" + strconv.Itoa(os.Getpid())
 	handler := &workers.Handler{
-		Registry:    registry,
-		Store:       store,
-		Artifacts:   artifactRepo,
-		Audit:       auditRepo,
-		Orch:        orch,
-		Logger:      logger,
-		Metrics:     metrics,
-		ArtifactTTL: time.Duration(cfg.ArtifactTTLHours) * time.Hour,
+		Registry:     registry,
+		Store:        store,
+		Artifacts:    artifactRepo,
+		Audit:        auditRepo,
+		Orch:         orch,
+		WorkerStatus: workerStatusRepo,
+		WorkerID:     workerID,
+		RuntimeMode:  "standalone",
+		QueueMode:    "redis",
+		Logger:       logger,
+		Metrics:      metrics,
+		ArtifactTTL:  time.Duration(cfg.ArtifactTTLHours) * time.Hour,
 		ArtifactTTLByFamily: map[domain.FormatFamily]time.Duration{
 			domain.FamilyPDF:      time.Duration(cfg.ArtifactTTLByFamily[domain.FamilyPDF]) * time.Hour,
 			domain.FamilyImage:    time.Duration(cfg.ArtifactTTLByFamily[domain.FamilyImage]) * time.Hour,
@@ -242,11 +251,15 @@ func main() {
 	})
 
 	// Graceful shutdown
+	heartbeatCtx, stopHeartbeat := context.WithCancel(context.Background())
+	defer stopHeartbeat()
+	workers.StartHeartbeatLoop(heartbeatCtx, workerStatusRepo, workerID, "standalone", "redis", 10*time.Second)
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
 		logger.Info().Msg("shutting down worker")
+		stopHeartbeat()
 		srv.Shutdown()
 	}()
 

@@ -3,12 +3,14 @@ package email
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/allopze/reform-lab/apps/api/config"
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
 	"github.com/allopze/reform-lab/apps/api/internal/queue"
+	"github.com/allopze/reform-lab/apps/api/internal/repository"
 	"github.com/google/uuid"
 )
 
@@ -61,6 +63,64 @@ func (r *stubUserRepo) HasAdmin(_ context.Context) (bool, error) {
 		}
 	}
 	return false, nil
+}
+func (r *stubUserRepo) ListAll(_ context.Context) ([]domain.User, error) {
+	out := make([]domain.User, 0, len(r.users))
+	for _, u := range r.users {
+		if u == nil {
+			continue
+		}
+		out = append(out, *u)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+func (r *stubUserRepo) ListForAdmin(_ context.Context, filter repository.AdminUserFilter) (*repository.AdminUserPage, error) {
+	all, _ := r.ListAll(context.Background())
+	if filter.Limit <= 0 {
+		filter.Limit = len(all)
+	}
+	if filter.Offset < 0 {
+		filter.Offset = 0
+	}
+	if filter.Offset >= len(all) {
+		return &repository.AdminUserPage{Users: []domain.User{}, Total: len(all)}, nil
+	}
+	end := filter.Offset + filter.Limit
+	if end > len(all) {
+		end = len(all)
+	}
+	return &repository.AdminUserPage{Users: all[filter.Offset:end], Total: len(all)}, nil
+}
+func (r *stubUserRepo) UpdateRole(_ context.Context, id uuid.UUID, role domain.UserRole) error {
+	u, ok := r.users[id]
+	if !ok || u == nil {
+		return domain.ErrUserNotFound
+	}
+	u.Role = role
+	return nil
+}
+func (r *stubUserRepo) SetSuspended(_ context.Context, id uuid.UUID, suspended bool, reason *string) error {
+	u, ok := r.users[id]
+	if !ok || u == nil {
+		return domain.ErrUserNotFound
+	}
+	u.IsSuspended = suspended
+	u.SuspendedReason = reason
+	return nil
+}
+func (r *stubUserRepo) RevokeSessions(_ context.Context, id uuid.UUID) (int, error) {
+	u, ok := r.users[id]
+	if !ok || u == nil {
+		return 0, domain.ErrUserNotFound
+	}
+	if u.SessionVersion < 1 {
+		u.SessionVersion = 1
+	}
+	u.SessionVersion++
+	return u.SessionVersion, nil
 }
 
 type stubFileRepo struct {

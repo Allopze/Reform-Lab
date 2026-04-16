@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -53,6 +54,7 @@ type testEnv struct {
 	server *httptest.Server
 	tmpDir string
 	orch   *orchestrator.Service
+	db     *sql.DB
 }
 
 type e2eLimits struct {
@@ -138,6 +140,8 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 	auditRepo := repository.NewAuditRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	dashboardRepo := repository.NewDashboardRepository(db)
+	workerStatusRepo := repository.NewWorkerStatusRepository(db)
+	runtimeControlRepo := repository.NewRuntimeControlRepository(db)
 	siteSettingRepo := repository.NewSiteSettingRepository(db)
 	secretKeeper, err := security.NewSecretKeeper("0123456789abcdef0123456789abcdef")
 	if err != nil {
@@ -194,6 +198,7 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 		jobQueue,
 		orchestrator.WithMaxActiveJobsPerUser(limits.maxActiveJobsPerUser),
 		orchestrator.WithMaxActiveJobsPerGuestSession(limits.maxActiveJobsPerGuest),
+		orchestrator.WithRuntimeControls(runtimeControlRepo),
 	)
 	if workerHandler != nil {
 		workerHandler.Orch = orch
@@ -218,6 +223,8 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 		Audit:                          auditRepo,
 		Users:                          userRepo,
 		Dashboard:                      dashboardRepo,
+		Workers:                        workerStatusRepo,
+		RuntimeControls:                runtimeControlRepo,
 		SiteSettings:                   siteSettingRepo,
 		EmailTemplates:                 emailTemplateRepo,
 		Webhooks:                       webhookRepo,
@@ -252,6 +259,7 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 		server: httptest.NewServer(router),
 		tmpDir: tmpDir,
 		orch:   orch,
+		db:     db,
 	}
 }
 
@@ -645,6 +653,9 @@ func TestE2E_AdminDetailedHealth(t *testing.T) {
 	if queueInfo["mode"] != "in-process" {
 		t.Fatalf("expected queue mode in-process, got %v", queueInfo["mode"])
 	}
+	if queueInfo["stalledJobs"] == nil || queueInfo["stalledQueuedJobs"] == nil || queueInfo["stalledRunningJobs"] == nil {
+		t.Fatalf("expected stalled queue fields in health snapshot, got %v", queueInfo)
+	}
 	deps := data["dependencies"].(map[string]interface{})
 	database := deps["database"].(map[string]interface{})
 	if database["status"] != "up" {
@@ -810,6 +821,15 @@ func TestE2E_RegisterAndLogin(t *testing.T) {
 		t.Fatalf("first user should be admin, got role=%v", me["role"])
 	}
 
+	// Failed login should be audited as access failure.
+	resp, failedLogin := doPostClient(client, env.server.URL+"/api/auth/login", map[string]string{
+		"email":    "alice@test.com",
+		"password": "wrong-password",
+	}, "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("login invalid credentials: expected 401, got %d — %v", resp.StatusCode, failedLogin)
+	}
+
 	// Login with same credentials.
 	resp, loginData := doPostClient(client, env.server.URL+"/api/auth/login", map[string]string{
 		"email":    "alice@test.com",
@@ -830,6 +850,109 @@ func TestE2E_RegisterAndLogin(t *testing.T) {
 	resp, _ = doGetClient(client, env.server.URL+"/api/auth/me", "")
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401 after logout, got %d", resp.StatusCode)
+	}
+
+	// Login again and verify access audit events are present.
+	resp, loginData = doPostClient(client, env.server.URL+"/api/auth/login", map[string]string{
+		"email":    "alice@test.com",
+		"password": "password123",
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("second login: expected 200, got %d — %v", resp.StatusCode, loginData)
+	}
+
+	resp, auditData := doGetClient(client, env.server.URL+"/api/admin/audit?limit=100", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin audit list: expected 200, got %d — %v", resp.StatusCode, auditData)
+	}
+	events, _ := auditData["events"].([]interface{})
+	seenLogin := false
+	seenLoginFailed := false
+	seenLogout := false
+	for _, row := range events {
+		event, ok := row.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		eventType, _ := event["eventType"].(string)
+		switch eventType {
+		case string(domain.AuditSessionLogin):
+			seenLogin = true
+		case string(domain.AuditSessionLoginFailed):
+			seenLoginFailed = true
+		case string(domain.AuditSessionLogout):
+			seenLogout = true
+		}
+	}
+	if !seenLogin || !seenLoginFailed || !seenLogout {
+		t.Fatalf("expected session audit events (login, login_failed, logout), got %v", events)
+	}
+}
+
+func TestE2E_ArtifactDownloadIsAudited(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	client := registerUserClient(t, env, "AuditDownloadUser", "audit-download@test.com")
+	resp, me := doGetClient(client, env.server.URL+"/api/auth/me", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("auth me: expected 200, got %d — %v", resp.StatusCode, me)
+	}
+	userID, _ := me["id"].(string)
+	if userID == "" {
+		t.Fatal("expected user id in /auth/me response")
+	}
+
+	now := time.Now().UTC()
+	fileID := uuid.New()
+	jobID := uuid.New()
+	artifactID := uuid.New()
+	artifactDir := filepath.Join(env.tmpDir, "storage", "artifacts", artifactID.String())
+	if err := os.MkdirAll(artifactDir, 0o750); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	artifactPath := filepath.Join(artifactDir, "audit.txt")
+	if err := os.WriteFile(artifactPath, []byte("audit-download"), 0o600); err != nil {
+		t.Fatalf("write artifact file: %v", err)
+	}
+
+	if _, err := env.db.Exec(
+		`INSERT INTO files (id, user_id, guest_session_id, internal_name, original_name, size, mime_type, format_family, detected_extension, metadata, uploaded_at)
+		 VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fileID.String(), userID, "fixture", "fixture.txt", 14, "text/plain", "document", "txt", `{}`, now.Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert file row: %v", err)
+	}
+	if _, err := env.db.Exec(
+		`INSERT INTO jobs (id, user_id, file_id, capability_id, output_format, status, progress, created_at, started_at, completed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		jobID.String(), userID, fileID.String(), "doc-to-txt", "txt", string(domain.JobSucceeded), 100, now.Add(-2*time.Minute).Format(time.RFC3339Nano), now.Add(-90*time.Second).Format(time.RFC3339Nano), now.Add(-time.Minute).Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert job row: %v", err)
+	}
+	if _, err := env.db.Exec(
+		`INSERT INTO artifacts (id, user_id, job_id, file_id, file_name, mime_type, size, storage_path, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		artifactID.String(), userID, jobID.String(), fileID.String(), "audit.txt", "text/plain", 14, artifactPath, now.Format(time.RFC3339Nano), now.Add(2*time.Hour).Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert artifact row: %v", err)
+	}
+
+	downloadResp, body := downloadArtifactClient(client, env.server.URL, artifactID.String())
+	if downloadResp.StatusCode != http.StatusOK {
+		t.Fatalf("download artifact: expected 200, got %d", downloadResp.StatusCode)
+	}
+	if string(body) != "audit-download" {
+		t.Fatalf("unexpected downloaded body: %q", string(body))
+	}
+
+	resp, auditData := doGetClient(client, env.server.URL+"/api/admin/audit?eventType=artifact_downloaded&limit=20", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin audit artifact_downloaded: expected 200, got %d — %v", resp.StatusCode, auditData)
+	}
+	total, _ := auditData["total"].(float64)
+	if total < 1 {
+		t.Fatalf("expected at least one artifact_downloaded event, got %v", total)
 	}
 }
 
@@ -1156,6 +1279,26 @@ func TestE2E_DashboardReturnsData(t *testing.T) {
 	}
 	if engData["engines"] == nil {
 		t.Fatal("admin engines: expected engines field")
+	}
+	if engData["capabilities"] == nil {
+		t.Fatal("admin engines: expected capabilities field")
+	}
+	if engData["availableCapabilities"] == nil || engData["totalCapabilities"] == nil {
+		t.Fatal("admin engines: expected capabilities summary fields")
+	}
+
+	capabilitiesList, ok := engData["capabilities"].([]interface{})
+	if !ok || len(capabilitiesList) == 0 {
+		t.Fatalf("admin engines: expected non-empty capabilities list, got %T", engData["capabilities"])
+	}
+	firstCapability, ok := capabilitiesList[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("admin engines: expected capability object, got %T", capabilitiesList[0])
+	}
+	for _, field := range []string{"id", "displayName", "engine", "family", "available", "reason"} {
+		if _, found := firstCapability[field]; !found {
+			t.Fatalf("admin engines: expected capability field %q", field)
+		}
 	}
 }
 
@@ -2079,12 +2222,27 @@ func TestE2E_AdminJobsList(t *testing.T) {
 	outputFormat, _ := firstCap["outputFormat"].(string)
 
 	// Create a conversion job.
-	resp, _ = doPostClient(adminClient, env.server.URL+"/api/files/"+fileID+"/convert", map[string]interface{}{
+	resp, createdJob := doPostClient(adminClient, env.server.URL+"/api/files/"+fileID+"/convert", map[string]interface{}{
 		"capabilityId": capID,
 		"outputFormat": outputFormat,
 	}, "")
 	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusCreated {
 		t.Fatalf("convert: expected 201 or 202, got %d", resp.StatusCode)
+	}
+	jobID, _ := createdJob["id"].(string)
+	if jobID == "" {
+		t.Fatal("convert: expected response id")
+	}
+
+	oldCreatedAt := time.Now().Add(-45 * time.Minute).UTC().Format(time.RFC3339Nano)
+	if _, err := env.db.Exec(
+		`UPDATE jobs
+		 SET created_at = ?, started_at = NULL, completed_at = NULL
+		 WHERE id = ?`,
+		oldCreatedAt,
+		jobID,
+	); err != nil {
+		t.Fatalf("age queued job for stalled filter: %v", err)
 	}
 
 	// Admin can list jobs — should now have one.
@@ -2096,11 +2254,41 @@ func TestE2E_AdminJobsList(t *testing.T) {
 	if total < 1 {
 		t.Fatalf("expected at least 1 total job, got %v", total)
 	}
+	if data["stalledJobs"] == nil || data["stalledQueuedJobs"] == nil || data["stalledRunningJobs"] == nil {
+		t.Fatal("admin jobs list: expected stalled summary fields")
+	}
+	rows, ok := data["jobs"].([]interface{})
+	if !ok || len(rows) == 0 {
+		t.Fatalf("admin jobs list: expected non-empty jobs array, got %T", data["jobs"])
+	}
+	firstJob, ok := rows[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("admin jobs list: expected job object, got %T", rows[0])
+	}
+	for _, field := range []string{"stalled", "backlogAgeSec"} {
+		if _, found := firstJob[field]; !found {
+			t.Fatalf("admin jobs list: expected job field %q", field)
+		}
+	}
 
 	// Test status filter.
 	resp, data = doGetClient(adminClient, env.server.URL+"/api/admin/jobs?status=queued", "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("admin jobs list filtered: expected 200, got %d", resp.StatusCode)
+	}
+
+	// Test stalled-only filter.
+	resp, data = doGetClient(adminClient, env.server.URL+"/api/admin/jobs?stalled=true", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin jobs list stalled-only: expected 200, got %d", resp.StatusCode)
+	}
+	rows, _ = data["jobs"].([]interface{})
+	if len(rows) < 1 {
+		t.Fatal("expected at least 1 stalled job")
+	}
+	firstJob, _ = rows[0].(map[string]interface{})
+	if firstJob["stalled"] != true {
+		t.Fatalf("expected stalled=true in stalled-only filter, got %v", firstJob["stalled"])
 	}
 
 	// Test search filter.
@@ -2111,6 +2299,79 @@ func TestE2E_AdminJobsList(t *testing.T) {
 	total, _ = data["total"].(float64)
 	if total < 1 {
 		t.Fatalf("expected at least 1 job matching search, got %v", total)
+	}
+}
+
+func TestE2E_AdminJobsBatchActions(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	adminClient := registerUserClient(t, env, "BatchAdmin", "batch-admin@test.com")
+
+	resp, fileData := uploadPNGClient(adminClient, env.server.URL, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("upload: expected 201, got %d", resp.StatusCode)
+	}
+	fileID, _ := fileData["id"].(string)
+	caps, _ := fileData["capabilities"].([]interface{})
+	if len(caps) == 0 {
+		t.Skip("no capabilities for PNG, skipping batch admin actions")
+	}
+	firstCap := caps[0].(map[string]interface{})
+	capID, _ := firstCap["id"].(string)
+	outputFormat, _ := firstCap["outputFormat"].(string)
+
+	createJob := func() string {
+		resp, createdJob := doPostClient(adminClient, env.server.URL+"/api/files/"+fileID+"/convert", map[string]interface{}{
+			"capabilityId": capID,
+			"outputFormat": outputFormat,
+		}, "")
+		if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusCreated {
+			t.Fatalf("convert: expected 201 or 202, got %d", resp.StatusCode)
+		}
+		jobID, _ := createdJob["id"].(string)
+		if jobID == "" {
+			t.Fatal("expected job id")
+		}
+		return jobID
+	}
+
+	queuedJobID := createJob()
+	failedJobID := createJob()
+	if _, err := env.db.Exec(
+		`UPDATE jobs SET status = ?, progress = 0, error = ?, completed_at = ? WHERE id = ?`,
+		string(domain.JobFailed), "forced failure for retry", time.Now().UTC().Format(time.RFC3339Nano), failedJobID,
+	); err != nil {
+		t.Fatalf("mark job failed: %v", err)
+	}
+
+	resp, data := doPostClient(adminClient, env.server.URL+"/api/admin/jobs/batch/cancel", map[string]interface{}{
+		"jobIds": []string{queuedJobID},
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin batch cancel: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	cancelledIDs, _ := data["cancelledJobIds"].([]interface{})
+	if len(cancelledIDs) != 1 {
+		t.Fatalf("expected 1 cancelled job, got %d", len(cancelledIDs))
+	}
+
+	resp, data = doPostClient(adminClient, env.server.URL+"/api/admin/jobs/batch/retry", map[string]interface{}{
+		"filter": map[string]interface{}{"status": "failed"},
+	}, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("admin batch retry by filter: expected 201, got %d — %v", resp.StatusCode, data)
+	}
+	jobs, _ := data["jobs"].([]interface{})
+	if len(jobs) < 1 {
+		t.Fatal("expected at least one retried job")
+	}
+	var cancelledStatus string
+	if err := env.db.QueryRow(`SELECT status FROM jobs WHERE id = ?`, queuedJobID).Scan(&cancelledStatus); err != nil {
+		t.Fatalf("load cancelled job: %v", err)
+	}
+	if cancelledStatus != string(domain.JobCancelled) {
+		t.Fatalf("expected cancelled status, got %q", cancelledStatus)
 	}
 }
 
@@ -2213,6 +2474,263 @@ func TestE2E_AdminUsersList(t *testing.T) {
 		map[string]string{"role": "user"})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("admin demote user: expected 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestE2E_AdminUserSuspensionAndSessionRevocation(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	adminClient := registerUserClient(t, env, "SecurityAdmin", "security-admin@test.com")
+	targetClient := registerUserClient(t, env, "SecurityUser", "security-user@test.com")
+
+	resp, data := doGetClient(adminClient, env.server.URL+"/api/admin/users?q=security-user", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin users list: expected 200, got %d", resp.StatusCode)
+	}
+	usersArr, _ := data["users"].([]interface{})
+	if len(usersArr) != 1 {
+		t.Fatalf("expected exactly one matching user, got %d", len(usersArr))
+	}
+	targetID := usersArr[0].(map[string]interface{})["id"].(string)
+
+	resp, _ = doPatchClient(adminClient, env.server.URL+"/api/admin/users/"+targetID+"/suspension", map[string]interface{}{
+		"suspended": true,
+		"reason":    "abuse review",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("suspend user: expected 200, got %d", resp.StatusCode)
+	}
+
+	resp, _ = doGetClient(targetClient, env.server.URL+"/api/auth/me", "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("suspended auth/me: expected 403, got %d", resp.StatusCode)
+	}
+
+	resp, _ = doPatchClient(adminClient, env.server.URL+"/api/admin/users/"+targetID+"/suspension", map[string]interface{}{
+		"suspended": false,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unsuspend user: expected 200, got %d", resp.StatusCode)
+	}
+
+	resp, _ = doPostClient(targetClient, env.server.URL+"/api/auth/login", map[string]interface{}{
+		"email":    "security-user@test.com",
+		"password": "password123",
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("login after unsuspend: expected 200, got %d", resp.StatusCode)
+	}
+
+	resp, data = doPostClient(adminClient, env.server.URL+"/api/admin/users/"+targetID+"/revoke-sessions", nil, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("revoke sessions: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	if _, ok := data["sessionVersion"].(float64); !ok {
+		t.Fatal("expected sessionVersion in revoke response")
+	}
+
+	resp, _ = doGetClient(targetClient, env.server.URL+"/api/auth/me", "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("revoked auth/me: expected 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestE2E_AdminDetailedHealthIncludesWorkersAndHistory(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	adminClient := registerUserClient(t, env, "HealthAdmin", "health-admin@test.com")
+	workerID := uuid.New().String()
+	now := time.Now().UTC()
+	jobID := uuid.New()
+	failureID := uuid.New()
+	if _, err := env.db.Exec(
+		`INSERT INTO worker_status (id, runtime_mode, queue_mode, last_heartbeat_at, last_task_type, last_job_id, last_task_status, last_task_started_at, last_task_finished_at, last_error, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		workerID, "standalone", "redis", now.Format(time.RFC3339Nano), "conversion:image-to-png", jobID.String(), "failed", now.Add(-2*time.Minute).Format(time.RFC3339Nano), now.Add(-time.Minute).Format(time.RFC3339Nano), "engine failed", now.Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert worker status: %v", err)
+	}
+	if _, err := env.db.Exec(
+		`INSERT INTO worker_failures (id, worker_id, task_type, job_id, error, failed_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		failureID.String(), workerID, "conversion:image-to-png", jobID.String(), "engine failed", now.Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert worker failure: %v", err)
+	}
+	jobRowID := uuid.New()
+	fileRowID := uuid.New()
+	if _, err := env.db.Exec(
+		`INSERT INTO files (id, user_id, guest_session_id, internal_name, original_name, size, mime_type, format_family, detected_extension, metadata, uploaded_at)
+		 VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fileRowID.String(), "fixture", "fixture.png", 128, "image/png", "image", "png", `{}`, now.Add(-20*time.Minute).Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert file row: %v", err)
+	}
+	if _, err := env.db.Exec(
+		`INSERT INTO jobs (id, user_id, file_id, capability_id, output_format, status, progress, created_at, started_at, completed_at)
+		 VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		jobRowID.String(), fileRowID.String(), "image-to-png", "png", string(domain.JobSucceeded), 100, now.Add(-10*time.Minute).Format(time.RFC3339Nano), now.Add(-9*time.Minute).Format(time.RFC3339Nano), now.Add(-8*time.Minute).Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert job row: %v", err)
+	}
+
+	resp, data := doGetClient(adminClient, env.server.URL+"/api/admin/health", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin health: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	runtime, _ := data["runtime"].(map[string]interface{})
+	queue, _ := runtime["queue"].(map[string]interface{})
+	history, _ := queue["history"].([]interface{})
+	if len(history) != 3 {
+		t.Fatalf("expected 3 history windows, got %d", len(history))
+	}
+	workers, _ := runtime["workers"].(map[string]interface{})
+	workerRows, _ := workers["workers"].([]interface{})
+	if len(workerRows) < 1 {
+		t.Fatal("expected at least one worker row")
+	}
+	firstWorker := workerRows[0].(map[string]interface{})
+	failures, _ := firstWorker["recentFailures"].([]interface{})
+	if len(failures) < 1 {
+		t.Fatal("expected at least one recent failure")
+	}
+}
+
+func TestE2E_AdminSupportControls(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	adminClient := registerUserClient(t, env, "SupportAdmin", "support-admin@test.com")
+
+	resp, fileData := uploadPNGClient(adminClient, env.server.URL, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("upload: expected 201, got %d — %v", resp.StatusCode, fileData)
+	}
+	fileID, _ := fileData["id"].(string)
+	caps, _ := fileData["capabilities"].([]interface{})
+	if len(caps) == 0 {
+		t.Skip("no capabilities for PNG in this runtime")
+	}
+	capID, _ := caps[0].(map[string]interface{})["id"].(string)
+
+	resp, jobData := doPostClient(adminClient, env.server.URL+"/api/conversions", map[string]string{
+		"fileId":       fileID,
+		"capabilityId": capID,
+	}, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create conversion: expected 201, got %d — %v", resp.StatusCode, jobData)
+	}
+	queuedJobID, _ := jobData["id"].(string)
+
+	resp, intakeData := doPatchClient(adminClient, env.server.URL+"/api/admin/support/queue/intake", map[string]interface{}{
+		"paused": true,
+		"reason": "maintenance",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("pause intake: expected 200, got %d — %v", resp.StatusCode, intakeData)
+	}
+	if intakeData["jobIntakePaused"] != true {
+		t.Fatalf("expected paused intake state, got %v", intakeData["jobIntakePaused"])
+	}
+
+	resp, blockedData := doPostClient(adminClient, env.server.URL+"/api/conversions", map[string]string{
+		"fileId":       fileID,
+		"capabilityId": capID,
+	}, "")
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("conversion while paused: expected 503, got %d — %v", resp.StatusCode, blockedData)
+	}
+
+	resp, drainData := doPostClient(adminClient, env.server.URL+"/api/admin/support/queue/drain", map[string]interface{}{
+		"limit": 25,
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("drain queue: expected 200, got %d — %v", resp.StatusCode, drainData)
+	}
+	cancelled, _ := drainData["cancelled"].(float64)
+	if cancelled < 1 {
+		t.Fatalf("expected at least one cancelled queued job, got %v", cancelled)
+	}
+
+	var drainedStatus string
+	if err := env.db.QueryRow(`SELECT status FROM jobs WHERE id = ?`, queuedJobID).Scan(&drainedStatus); err != nil {
+		t.Fatalf("load drained job status: %v", err)
+	}
+	if drainedStatus != string(domain.JobCancelled) {
+		t.Fatalf("expected queued job cancelled after drain, got %q", drainedStatus)
+	}
+
+	resp, intakeData = doPatchClient(adminClient, env.server.URL+"/api/admin/support/queue/intake", map[string]interface{}{
+		"paused": false,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resume intake: expected 200, got %d — %v", resp.StatusCode, intakeData)
+	}
+	if intakeData["jobIntakePaused"] != false {
+		t.Fatalf("expected resumed intake state, got %v", intakeData["jobIntakePaused"])
+	}
+
+	staleWorkerID := uuid.New().String()
+	staleTime := time.Now().UTC().Add(-2 * time.Hour)
+	if _, err := env.db.Exec(
+		`INSERT INTO worker_status (id, runtime_mode, queue_mode, last_heartbeat_at, last_task_status, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		staleWorkerID, "standalone", "redis", staleTime.Format(time.RFC3339Nano), "idle", staleTime.Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert stale worker: %v", err)
+	}
+
+	resp, pruneData := doPostClient(adminClient, env.server.URL+"/api/admin/support/workers/prune-stale", map[string]interface{}{
+		"staleMinutes": 60,
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("prune stale workers: expected 200, got %d — %v", resp.StatusCode, pruneData)
+	}
+	deleted, _ := pruneData["deleted"].(float64)
+	if deleted < 1 {
+		t.Fatalf("expected at least one pruned worker, got %v", deleted)
+	}
+
+	resp, healthData := doGetClient(adminClient, env.server.URL+"/api/admin/health", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin health: expected 200, got %d — %v", resp.StatusCode, healthData)
+	}
+	runtime, _ := healthData["runtime"].(map[string]interface{})
+	queueData, _ := runtime["queue"].(map[string]interface{})
+	controls, _ := queueData["controls"].(map[string]interface{})
+	if controls["jobIntakePaused"] != false {
+		t.Fatalf("expected health controls to report resumed intake, got %v", controls["jobIntakePaused"])
+	}
+
+	resp, auditData := doGetClient(adminClient, env.server.URL+"/api/admin/audit?group=admin&limit=100", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin audit list: expected 200, got %d — %v", resp.StatusCode, auditData)
+	}
+	events, _ := auditData["events"].([]interface{})
+	seenPause := false
+	seenResume := false
+	seenDrain := false
+	seenPrune := false
+	for _, row := range events {
+		event, ok := row.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		eventType, _ := event["eventType"].(string)
+		switch eventType {
+		case string(domain.AuditAdminQueuePaused):
+			seenPause = true
+		case string(domain.AuditAdminQueueResumed):
+			seenResume = true
+		case string(domain.AuditAdminQueueDrained):
+			seenDrain = true
+		case string(domain.AuditAdminWorkersPruned):
+			seenPrune = true
+		}
+	}
+	if !seenPause || !seenResume || !seenDrain || !seenPrune {
+		t.Fatalf("expected support audit events (pause/resume/drain/prune), got %v", events)
 	}
 }
 

@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import {
   getAdminUsers,
+  revokeUserSessions,
   updateUserRole,
+  updateUserSuspension,
   type AdminUser,
   type AdminUserFilter,
   type AdminUserPage,
@@ -80,6 +82,39 @@ export default function AdminUsersTable() {
     }
   }
 
+  async function handleToggleSuspension(target: AdminUser) {
+    setUpdating(target.id + ":suspension");
+    try {
+      const reason = !target.isSuspended
+        ? window.prompt(t("suspendReasonPrompt"), target.suspendedReason ?? "") ?? ""
+        : target.suspendedReason ?? "";
+      await updateUserSuspension(target.id, {
+        suspended: !target.isSuspended,
+        ...(reason.trim() ? { reason: reason.trim() } : {}),
+      });
+      await fetchUsers();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("loadError"));
+    } finally {
+      setUpdating(null);
+    }
+  }
+
+  async function handleRevokeSessions(target: AdminUser) {
+    if (!window.confirm(t("confirmRevokeSessions", { email: target.email }))) {
+      return;
+    }
+    setUpdating(target.id + ":sessions");
+    try {
+      await revokeUserSessions(target.id);
+      await fetchUsers();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("loadError"));
+    } finally {
+      setUpdating(null);
+    }
+  }
+
   if (loading || (!page && !error)) {
     return <p className="py-8 text-center text-sm text-stone-400">{t("loading")}</p>;
   }
@@ -138,6 +173,7 @@ export default function AdminUsersTable() {
               <th className="px-5 py-3">{t("headerEmail")}</th>
               <th className="px-5 py-3">{t("headerTeam")}</th>
               <th className="px-5 py-3">{t("headerRole")}</th>
+              <th className="px-5 py-3">{t("headerStatus")}</th>
               <th className="px-5 py-3">{t("headerCreatedAt")}</th>
               <th className="px-5 py-3">{t("headerActions")}</th>
             </tr>
@@ -145,7 +181,7 @@ export default function AdminUsersTable() {
           <tbody className="divide-y divide-stone-100">
             {users.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-5 py-8 text-center text-stone-400">
+                <td colSpan={7} className="px-5 py-8 text-center text-stone-400">
                   {t("emptyUsers")}
                 </td>
               </tr>
@@ -166,25 +202,63 @@ export default function AdminUsersTable() {
                         {u.role}
                       </span>
                     </td>
+                    <td className="px-5 py-3">
+                      <span
+                        className={`inline-block rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+                          u.isSuspended
+                            ? "border-rose-200 bg-rose-50 text-rose-700"
+                            : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        }`}
+                      >
+                        {u.isSuspended ? t("suspended") : t("active")}
+                      </span>
+                      {u.suspendedReason && (
+                        <p className="mt-1 max-w-48 text-xs text-stone-500">{u.suspendedReason}</p>
+                      )}
+                    </td>
                     <td className="px-5 py-3 text-stone-500">
                       {formatDate(u.createdAt)}
                     </td>
                     <td className="px-5 py-3">
-                      {isSelf ? (
-                        <span className="text-xs text-stone-400">{t("you")}</span>
-                      ) : (
-                        <button
-                          onClick={() => handleToggleRole(u)}
-                          disabled={updating === u.id}
-                          className="rounded-md border border-stone-200 px-3 py-1 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50"
-                        >
-                          {updating === u.id
-                            ? "..."
-                            : u.role === "admin"
-                              ? t("demote")
-                              : t("promote")}
-                        </button>
-                      )}
+                      <div className="flex flex-wrap gap-2">
+                        {isSelf ? (
+                          <span className="text-xs text-stone-400">{t("you")}</span>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => handleToggleRole(u)}
+                              disabled={updating !== null}
+                              className="rounded-md border border-stone-200 px-3 py-1 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50"
+                            >
+                              {updating === u.id
+                                ? "..."
+                                : u.role === "admin"
+                                  ? t("demote")
+                                  : t("promote")}
+                            </button>
+                            <button
+                              onClick={() => handleToggleSuspension(u)}
+                              disabled={updating !== null}
+                              className="rounded-md border border-stone-200 px-3 py-1 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50"
+                            >
+                              {updating === `${u.id}:suspension`
+                                ? "..."
+                                : u.isSuspended
+                                  ? t("unsuspend")
+                                  : t("suspend")}
+                            </button>
+                            <button
+                              onClick={() => handleRevokeSessions(u)}
+                              disabled={updating !== null}
+                              className="rounded-md border border-stone-200 px-3 py-1 text-xs font-medium text-stone-700 hover:bg-stone-50 disabled:opacity-50"
+                            >
+                              {updating === `${u.id}:sessions`
+                                ? "..."
+                                : t("revokeSessions")}
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );

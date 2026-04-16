@@ -13,6 +13,8 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
 	"github.com/allopze/reform-lab/apps/api/internal/email"
 	"github.com/allopze/reform-lab/apps/api/internal/queue"
+	"github.com/allopze/reform-lab/apps/api/internal/repository"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
@@ -24,6 +26,7 @@ type AuthHandler struct {
 	Auth   *auth.Service
 	Email  *email.Service
 	Queue  queue.JobQueue
+	Audit  repository.AuditRepository
 	Logger zerolog.Logger
 }
 
@@ -119,19 +122,49 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	result, err := h.Auth.Login(r.Context(), req.Email, req.Password)
 	if err != nil {
 		if errors.Is(err, domain.ErrInvalidCredentials) {
+			h.auditSession(r, domain.AuditSessionLoginFailed, nil, map[string]interface{}{
+				"email":  req.Email,
+				"reason": "invalid_credentials",
+			})
 			respondError(w, http.StatusUnauthorized, "invalid email or password")
 			return
 		}
+		if errors.Is(err, domain.ErrUserSuspended) {
+			h.auditSession(r, domain.AuditSessionLoginFailed, nil, map[string]interface{}{
+				"email":  req.Email,
+				"reason": "user_suspended",
+			})
+			respondError(w, http.StatusForbidden, "user suspended")
+			return
+		}
+		h.auditSession(r, domain.AuditSessionLoginFailed, nil, map[string]interface{}{
+			"email":  req.Email,
+			"reason": "internal_error",
+		})
 		respondError(w, http.StatusInternalServerError, "login failed")
 		return
 	}
 
 	writeSessionCookie(w, r, result.SessionToken)
+	h.auditSession(r, domain.AuditSessionLogin, &result.User.ID, map[string]interface{}{
+		"role": result.User.Role,
+	})
 	respondJSON(w, http.StatusOK, result)
 }
 
 // Logout clears the current session cookie.
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	var userID *uuid.UUID
+	details := map[string]interface{}{}
+	if cookie, err := r.Cookie(sessionCookieName); err == nil && strings.TrimSpace(cookie.Value) != "" && h.Auth != nil {
+		if claims, validateErr := h.Auth.ValidateToken(cookie.Value); validateErr == nil {
+			if parsedID, parseErr := uuid.Parse(claims.Subject); parseErr == nil {
+				userID = &parsedID
+				details["role"] = claims.Role
+			}
+		}
+	}
+	h.auditSession(r, domain.AuditSessionLogout, userID, details)
 	clearSessionCookie(w, r)
 	respondJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
@@ -175,4 +208,25 @@ func requestUsesHTTPS(r *http.Request) bool {
 		return true
 	}
 	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+}
+
+func (h *AuthHandler) auditSession(r *http.Request, eventType domain.AuditEventType, userID *uuid.UUID, details map[string]interface{}) {
+	if h.Audit == nil {
+		return
+	}
+	eventDetails := map[string]interface{}{
+		"path": r.URL.Path,
+	}
+	if userID != nil {
+		eventDetails["userId"] = userID.String()
+	}
+	for key, value := range details {
+		eventDetails[key] = value
+	}
+	_ = h.Audit.Create(r.Context(), &domain.AuditEvent{
+		ID:        uuid.New(),
+		EventType: eventType,
+		Details:   eventDetails,
+		CreatedAt: time.Now().UTC(),
+	})
 }

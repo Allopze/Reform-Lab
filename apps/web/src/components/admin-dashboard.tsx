@@ -46,6 +46,10 @@ const AUDIT_BORDER_CLASS: Record<string, string> = {
   job_cancelled: "border-l-stone-400",
   job_retried: "border-l-amber-400",
   artifact_created: "border-l-emerald-400",
+  artifact_downloaded: "border-l-emerald-300",
+  session_login: "border-l-sky-300",
+  session_login_failed: "border-l-rose-300",
+  session_logout: "border-l-stone-300",
   admin_footer_updated: "border-l-violet-400",
   admin_upload_policy_updated: "border-l-violet-400",
   admin_smtp_updated: "border-l-violet-400",
@@ -57,6 +61,10 @@ const AUDIT_BORDER_CLASS: Record<string, string> = {
   admin_webhook_updated: "border-l-violet-400",
   admin_webhook_deleted: "border-l-violet-400",
   admin_role_changed: "border-l-violet-400",
+  admin_queue_paused: "border-l-violet-400",
+  admin_queue_resumed: "border-l-violet-400",
+  admin_queue_drained: "border-l-violet-400",
+  admin_workers_pruned: "border-l-violet-400",
 };
 
 const AUDIT_BORDER_FALLBACK = "border-l-stone-200";

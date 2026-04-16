@@ -10,15 +10,19 @@ import (
 type AuditEventType string
 
 const (
-	AuditUpload          AuditEventType = "upload"
-	AuditDetection       AuditEventType = "detection"
-	AuditJobCreated      AuditEventType = "job_created"
-	AuditJobStarted      AuditEventType = "job_started"
-	AuditJobCompleted    AuditEventType = "job_completed"
-	AuditJobFailed       AuditEventType = "job_failed"
-	AuditJobCancelled    AuditEventType = "job_cancelled"
-	AuditJobRetried      AuditEventType = "job_retried"
-	AuditArtifactCreated AuditEventType = "artifact_created"
+	AuditUpload             AuditEventType = "upload"
+	AuditDetection          AuditEventType = "detection"
+	AuditJobCreated         AuditEventType = "job_created"
+	AuditJobStarted         AuditEventType = "job_started"
+	AuditJobCompleted       AuditEventType = "job_completed"
+	AuditJobFailed          AuditEventType = "job_failed"
+	AuditJobCancelled       AuditEventType = "job_cancelled"
+	AuditJobRetried         AuditEventType = "job_retried"
+	AuditArtifactCreated    AuditEventType = "artifact_created"
+	AuditArtifactDownloaded AuditEventType = "artifact_downloaded"
+	AuditSessionLogin       AuditEventType = "session_login"
+	AuditSessionLoginFailed AuditEventType = "session_login_failed"
+	AuditSessionLogout      AuditEventType = "session_logout"
 
 	// Admin mutation events
 	AuditAdminFooterUpdated   AuditEventType = "admin_footer_updated"
@@ -32,6 +36,15 @@ const (
 	AuditAdminWebhookUpdated  AuditEventType = "admin_webhook_updated"
 	AuditAdminWebhookDeleted  AuditEventType = "admin_webhook_deleted"
 	AuditAdminRoleChanged     AuditEventType = "admin_role_changed"
+	AuditAdminUserSuspended   AuditEventType = "admin_user_suspended"
+	AuditAdminUserUnsuspended AuditEventType = "admin_user_unsuspended"
+	AuditAdminSessionsRevoked AuditEventType = "admin_sessions_revoked"
+	AuditAdminJobsCancelled   AuditEventType = "admin_jobs_cancelled"
+	AuditAdminJobsRetried     AuditEventType = "admin_jobs_retried"
+	AuditAdminQueuePaused     AuditEventType = "admin_queue_paused"
+	AuditAdminQueueResumed    AuditEventType = "admin_queue_resumed"
+	AuditAdminQueueDrained    AuditEventType = "admin_queue_drained"
+	AuditAdminWorkersPruned   AuditEventType = "admin_workers_pruned"
 )
 
 // AuditEvent is a structured record for operational and security traceability.

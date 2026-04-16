@@ -21,6 +21,8 @@ type UserRepository interface {
 	ListAll(ctx context.Context) ([]domain.User, error)
 	ListForAdmin(ctx context.Context, filter AdminUserFilter) (*AdminUserPage, error)
 	UpdateRole(ctx context.Context, id uuid.UUID, role domain.UserRole) error
+	SetSuspended(ctx context.Context, id uuid.UUID, suspended bool, reason *string) error
+	RevokeSessions(ctx context.Context, id uuid.UUID) (int, error)
 }
 
 // AdminUserFilter defines filters for admin user listing.
@@ -47,9 +49,9 @@ func NewUserRepository(db *sql.DB) UserRepository {
 
 func (r *sqliteUserRepo) Create(ctx context.Context, u *domain.User) error {
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO users (id, name, email, team, role, password_hash, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		u.ID.String(), u.Name, u.Email, u.Team, string(u.Role), u.PasswordHash, u.CreatedAt.Format(timeLayout),
+		`INSERT INTO users (id, name, email, team, role, is_suspended, suspended_reason, session_version, password_hash, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		u.ID.String(), u.Name, u.Email, u.Team, string(u.Role), u.IsSuspended, u.SuspendedReason, u.SessionVersion, u.PasswordHash, u.CreatedAt.Format(timeLayout),
 	)
 	if err != nil && isUniqueViolation(err) && isEmailUniqueViolation(err) {
 		return domain.ErrEmailAlreadyExists
@@ -60,10 +62,11 @@ func (r *sqliteUserRepo) Create(ctx context.Context, u *domain.User) error {
 func (r *sqliteUserRepo) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
 	var u domain.User
 	var idStr, createdAt, role string
+	var suspendedReason sql.NullString
 
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, email, team, role, password_hash, created_at FROM users WHERE email = ?`, email,
-	).Scan(&idStr, &u.Name, &u.Email, &u.Team, &role, &u.PasswordHash, &createdAt)
+		`SELECT id, name, email, team, role, is_suspended, suspended_reason, session_version, password_hash, created_at FROM users WHERE email = ?`, email,
+	).Scan(&idStr, &u.Name, &u.Email, &u.Team, &role, &u.IsSuspended, &suspendedReason, &u.SessionVersion, &u.PasswordHash, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrUserNotFound
 	}
@@ -73,6 +76,9 @@ func (r *sqliteUserRepo) GetByEmail(ctx context.Context, email string) (*domain.
 
 	u.ID, _ = uuid.Parse(idStr)
 	u.Role = domain.UserRole(role)
+	if suspendedReason.Valid {
+		u.SuspendedReason = &suspendedReason.String
+	}
 	u.CreatedAt, _ = parseTime(createdAt)
 	return &u, nil
 }
@@ -80,10 +86,11 @@ func (r *sqliteUserRepo) GetByEmail(ctx context.Context, email string) (*domain.
 func (r *sqliteUserRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	var u domain.User
 	var idStr, createdAt, role string
+	var suspendedReason sql.NullString
 
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, name, email, team, role, password_hash, created_at FROM users WHERE id = ?`, id.String(),
-	).Scan(&idStr, &u.Name, &u.Email, &u.Team, &role, &u.PasswordHash, &createdAt)
+		`SELECT id, name, email, team, role, is_suspended, suspended_reason, session_version, password_hash, created_at FROM users WHERE id = ?`, id.String(),
+	).Scan(&idStr, &u.Name, &u.Email, &u.Team, &role, &u.IsSuspended, &suspendedReason, &u.SessionVersion, &u.PasswordHash, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrUserNotFound
 	}
@@ -93,6 +100,9 @@ func (r *sqliteUserRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Use
 
 	u.ID, _ = uuid.Parse(idStr)
 	u.Role = domain.UserRole(role)
+	if suspendedReason.Valid {
+		u.SuspendedReason = &suspendedReason.String
+	}
 	u.CreatedAt, _ = parseTime(createdAt)
 	return &u, nil
 }
@@ -160,7 +170,7 @@ func (r *sqliteUserRepo) ListForAdmin(ctx context.Context, filter AdminUserFilte
 	}
 
 	query := fmt.Sprintf(
-		`SELECT id, name, email, team, role, created_at
+		`SELECT id, name, email, team, role, is_suspended, suspended_reason, session_version, created_at
 		 FROM users
 		 WHERE %s
 		 ORDER BY created_at DESC
@@ -177,11 +187,15 @@ func (r *sqliteUserRepo) ListForAdmin(ctx context.Context, filter AdminUserFilte
 	for rows.Next() {
 		var u domain.User
 		var idStr, role, createdAt string
-		if err := rows.Scan(&idStr, &u.Name, &u.Email, &u.Team, &role, &createdAt); err != nil {
+		var suspendedReason sql.NullString
+		if err := rows.Scan(&idStr, &u.Name, &u.Email, &u.Team, &role, &u.IsSuspended, &suspendedReason, &u.SessionVersion, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan admin user row: %w", err)
 		}
 		u.ID, _ = uuid.Parse(idStr)
 		u.Role = domain.UserRole(role)
+		if suspendedReason.Valid {
+			u.SuspendedReason = &suspendedReason.String
+		}
 		u.CreatedAt, _ = parseTime(createdAt)
 		users = append(users, u)
 	}
@@ -202,4 +216,38 @@ func (r *sqliteUserRepo) UpdateRole(ctx context.Context, id uuid.UUID, role doma
 		return domain.ErrUserNotFound
 	}
 	return nil
+}
+
+func (r *sqliteUserRepo) SetSuspended(ctx context.Context, id uuid.UUID, suspended bool, reason *string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE users SET is_suspended = ?, suspended_reason = ? WHERE id = ?`,
+		suspended, nullableString(reason), id.String(),
+	)
+	if err != nil {
+		return err
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return domain.ErrUserNotFound
+	}
+	return nil
+}
+
+func (r *sqliteUserRepo) RevokeSessions(ctx context.Context, id uuid.UUID) (int, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE users SET session_version = session_version + 1 WHERE id = ?`,
+		id.String(),
+	)
+	if err != nil {
+		return 0, err
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return 0, domain.ErrUserNotFound
+	}
+	var version int
+	if err := r.db.QueryRowContext(ctx, `SELECT session_version FROM users WHERE id = ?`, id.String()).Scan(&version); err != nil {
+		return 0, err
+	}
+	return version, nil
 }
