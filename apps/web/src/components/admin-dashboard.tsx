@@ -2,14 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useTranslations } from "next-intl";
 import {
   getAdminOverview,
   getFooterMessage,
+  getHealthInfo,
   getUploadPolicy,
   updateFooterMessage,
   updateUploadPolicy,
   type AdminDashboardData,
+  type HealthInfo,
   type UploadPolicy,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -43,6 +46,17 @@ const AUDIT_BORDER_CLASS: Record<string, string> = {
   job_cancelled: "border-l-stone-400",
   job_retried: "border-l-amber-400",
   artifact_created: "border-l-emerald-400",
+  admin_footer_updated: "border-l-violet-400",
+  admin_upload_policy_updated: "border-l-violet-400",
+  admin_smtp_updated: "border-l-violet-400",
+  admin_smtp_test: "border-l-violet-400",
+  admin_template_created: "border-l-violet-400",
+  admin_template_updated: "border-l-violet-400",
+  admin_template_deleted: "border-l-violet-400",
+  admin_webhook_created: "border-l-violet-400",
+  admin_webhook_updated: "border-l-violet-400",
+  admin_webhook_deleted: "border-l-violet-400",
+  admin_role_changed: "border-l-violet-400",
 };
 
 const AUDIT_BORDER_FALLBACK = "border-l-stone-200";
@@ -59,6 +73,7 @@ const auditFilterKeys = [
   "job_cancelled",
   "job_retried",
   "artifact_created",
+  "admin",
 ] as const;
 
 function formatDate(value: string): string {
@@ -137,6 +152,7 @@ export default function AdminDashboard() {
   const [uploadPolicyStatus, setUploadPolicyStatus] = useState<string | null>(null);
   const [uploadPolicySaving, setUploadPolicySaving] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("operativo");
+  const [healthInfo, setHealthInfo] = useState<HealthInfo | null>(null);
 
   useEffect(() => {
     if (loading) return;
@@ -173,6 +189,10 @@ export default function AdminDashboard() {
       .catch((err) => {
         setUploadPolicyError(err instanceof Error ? err.message : t("policyLoadError"));
       });
+
+    getHealthInfo()
+      .then(setHealthInfo)
+      .catch(() => {/* health is optional, don't block dashboard */});
   }, [loading, router, user, t]);
 
   if (loading || (!data && !error)) {
@@ -188,7 +208,9 @@ export default function AdminDashboard() {
   const visibleAudit =
     auditFilter === "all"
       ? data.recentAudit
-      : data.recentAudit.filter((event) => event.eventType === auditFilter);
+      : auditFilter === "admin"
+        ? data.recentAudit.filter((event) => event.eventType.startsWith("admin_"))
+        : data.recentAudit.filter((event) => event.eventType === auditFilter);
   const normalizedFooterDraft = footerDraft.trim();
   const footerDirty = normalizedFooterDraft !== footerMessage;
   const guestLimitMb = parseLimitDraft(guestLimitDraft);
@@ -254,10 +276,10 @@ export default function AdminDashboard() {
   return (
     <div className="mt-6 space-y-6">
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+        <Link href="/admin/users" className="rounded-2xl border border-stone-200 bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)] hover:border-stone-300 transition-colors">
           <p className="text-xs uppercase tracking-[0.12em] text-stone-500">{t("totalUsers", { count: "" }).replace(/:\s*$/, "").trim()}</p>
           <p className="mt-1.5 text-2xl font-semibold text-stone-900">{data.totalUsers}</p>
-        </div>
+        </Link>
         <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
           <p className="text-xs uppercase tracking-[0.12em] text-stone-500">{t("totalFiles", { count: "" }).replace(/:\s*$/, "").trim()}</p>
           <p className="mt-1.5 text-2xl font-semibold text-stone-900">{data.totalFiles}</p>
@@ -274,9 +296,17 @@ export default function AdminDashboard() {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
         <section className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
-          <div className="border-b border-stone-200 px-5 py-4">
-            <h2 className="text-base font-semibold text-stone-900">{t("recentJobs")}</h2>
-            <p className="mt-1 text-sm text-stone-500">{t("recentJobsDescription")}</p>
+          <div className="flex items-center justify-between border-b border-stone-200 px-5 py-4">
+            <div>
+              <h2 className="text-base font-semibold text-stone-900">{t("recentJobs")}</h2>
+              <p className="mt-1 text-sm text-stone-500">{t("recentJobsDescription")}</p>
+            </div>
+            <Link
+              href="/admin/jobs"
+              className="text-sm font-medium text-coral-500 hover:text-coral-600"
+            >
+              {t("viewAllJobs")}
+            </Link>
           </div>
           <div className="overflow-x-auto">
           <table className="w-full min-w-175 border-collapse text-left">
@@ -285,6 +315,7 @@ export default function AdminDashboard() {
                 <th className="px-5 py-3">{t("jobHeader")}</th>
                 <th className="px-5 py-3">{t("fileHeader")}</th>
                 <th className="px-5 py-3">{t("userHeader")}</th>
+                <th className="px-5 py-3">{t("capabilityHeader")}</th>
                 <th className="px-5 py-3">{t("outputHeader")}</th>
                 <th className="px-5 py-3">{t("statusHeader")}</th>
                 <th className="px-5 py-3">{t("updatedHeader")}</th>
@@ -293,7 +324,7 @@ export default function AdminDashboard() {
             <tbody>
               {data.recentJobs.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-5 py-8 text-sm text-stone-500">
+                  <td colSpan={7} className="px-5 py-8 text-sm text-stone-500">
                     {t("emptyJobs")}
                   </td>
                 </tr>
@@ -314,11 +345,17 @@ export default function AdminDashboard() {
                         </>
                       )}
                     </td>
+                    <td className="px-5 py-4 text-xs text-stone-500">{job.capabilityId}</td>
                     <td className="px-5 py-4">{job.outputFormat.toUpperCase()}</td>
                     <td className="px-5 py-4">
                       <span className={`inline-block rounded-full border px-2.5 py-0.5 text-xs font-medium ${STATUS_BADGE_CLASS[job.status] ?? STATUS_BADGE_FALLBACK}`}>
                         {job.status}
                       </span>
+                      {job.error && (
+                        <p className="mt-1 max-w-48 truncate text-xs text-rose-600" title={job.error}>
+                          {job.error}
+                        </p>
+                      )}
                     </td>
                     <td className="px-5 py-4 text-stone-500">{formatDate(job.updatedAt)}</td>
                   </tr>
@@ -531,6 +568,48 @@ export default function AdminDashboard() {
               )}
             </div>
           </section>
+
+          {healthInfo && (
+            <section className="rounded-2xl border border-stone-200 bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-base font-semibold text-stone-900">{t("systemHealth")}</h2>
+                <Link
+                  href="/admin/system"
+                  className="text-sm font-medium text-coral-500 hover:text-coral-600"
+                >
+                  {t("viewSystemModule")}
+                </Link>
+              </div>
+              <div className="mt-4 space-y-3 text-sm text-stone-600">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-[0.12em] text-stone-500">{t("retentionPolicy")}</p>
+                  <p className="mt-1">{t("defaultTTL", { hours: healthInfo.retention.artifactTTLHours })}</p>
+                  {Object.keys(healthInfo.retention.artifactTTLHoursByFamily).length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {Object.entries(healthInfo.retention.artifactTTLHoursByFamily).map(([family, hours]) => (
+                        <p key={family} className="text-xs text-stone-500">{family}: {hours}h</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {(healthInfo.featureFlags.disabledCapabilities.length > 0 || healthInfo.featureFlags.disabledEngines.length > 0) && (
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-[0.12em] text-stone-500">{t("featureFlags")}</p>
+                    {healthInfo.featureFlags.disabledEngines.length > 0 && (
+                      <p className="mt-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        {t("disabledEngines", { engines: healthInfo.featureFlags.disabledEngines.join(", ") })}
+                      </p>
+                    )}
+                    {healthInfo.featureFlags.disabledCapabilities.length > 0 && (
+                      <p className="mt-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        {t("disabledCapabilities", { capabilities: healthInfo.featureFlags.disabledCapabilities.join(", ") })}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
             </>
           )}
         </aside>
@@ -540,7 +619,15 @@ export default function AdminDashboard() {
 
       <section className="rounded-2xl border border-stone-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
         <div className="border-b border-stone-200 px-5 py-4">
-          <h2 className="text-base font-semibold text-stone-900">{t("auditTitle")}</h2>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-base font-semibold text-stone-900">{t("auditTitle")}</h2>
+            <Link
+              href="/admin/audit"
+              className="text-sm font-medium text-coral-500 hover:text-coral-600"
+            >
+              {t("viewAuditModule")}
+            </Link>
+          </div>
           <p className="mt-1 text-sm text-stone-500">{t("auditDescription")}</p>
           <div className="mt-4 flex flex-wrap gap-2">
             {auditFilterKeys.map((key) => (

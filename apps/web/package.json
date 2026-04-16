@@ -12,9 +12,9 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@swc/helpers": "^0.5.21",
     "@codemirror/lang-html": "^6.4.11",
     "@sentry/nextjs": "^10.48.0",
+    "@swc/helpers": "^0.5.21",
     "@tailwindcss/typography": "^0.5.19",
     "@tiptap/extension-color": "^3.22.3",
     "@tiptap/extension-image": "^3.22.3",
@@ -25,6 +25,7 @@
     "@tiptap/react": "^3.22.3",
     "@tiptap/starter-kit": "^3.22.3",
     "@uiw/react-codemirror": "^4.25.9",
+    "jose": "^6.2.2",
     "lucide-react": "^0.487.0",
     "next": "^15.5.15",
     "next-intl": "^4.9.1",

@@ -42,6 +42,7 @@ type updateUploadPolicyRequest struct {
 type UploadPolicyHandler struct {
 	Settings                       repository.SiteSettingRepository
 	Files                          repository.FileRepository
+	Audit                          repository.AuditRepository
 	GuestCumulativeQuotaBytes      int64
 	RegisteredCumulativeQuotaBytes int64
 }
@@ -95,6 +96,23 @@ func (h *UploadPolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		GuestMaxBytes:      guestMaxBytes,
 		RegisteredMaxBytes: registeredMaxBytes,
 	}, currentUser(r)))
+
+	if h.Audit != nil {
+		u := currentUser(r)
+		details := map[string]interface{}{
+			"guestMaxBytes":      guestMaxBytes,
+			"registeredMaxBytes": registeredMaxBytes,
+		}
+		if u != nil {
+			details["adminId"] = u.ID.String()
+		}
+		_ = h.Audit.Create(r.Context(), &domain.AuditEvent{
+			ID:        uuid.New(),
+			EventType: domain.AuditAdminUploadPolicy,
+			Details:   details,
+			CreatedAt: now,
+		})
+	}
 }
 
 func loadUploadPolicy(ctx context.Context, settings repository.SiteSettingRepository) (uploadPolicy, error) {

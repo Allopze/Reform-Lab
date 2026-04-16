@@ -1,9 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
+import { jwtVerify } from "jose";
 import { buildContentSecurityPolicy } from "@/lib/security/csp";
 
 const PROTECTED_PREFIXES = ["/usuario", "/admin"];
+const ADMIN_PREFIX = "/admin";
 
-export function middleware(request: NextRequest) {
+async function extractRole(
+  token: string,
+): Promise<string | null> {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) return null;
+  try {
+    const { payload } = await jwtVerify(
+      token,
+      new TextEncoder().encode(secret),
+      { algorithms: ["HS256"] },
+    );
+    return (payload as Record<string, unknown>).role as string ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const contentSecurityPolicy = buildContentSecurityPolicy({
@@ -38,6 +57,17 @@ export function middleware(request: NextRequest) {
     const response = NextResponse.redirect(loginUrl);
     response.headers.set("Content-Security-Policy", contentSecurityPolicy);
     return response;
+  }
+
+  // Harden /admin: reject non-admin users at the edge
+  if (pathname.startsWith(ADMIN_PREFIX)) {
+    const role = await extractRole(session.value);
+    if (role !== "admin") {
+      const homeUrl = new URL("/usuario", request.url);
+      const response = NextResponse.redirect(homeUrl);
+      response.headers.set("Content-Security-Policy", contentSecurityPolicy);
+      return response;
+    }
   }
 
   const response = NextResponse.next({

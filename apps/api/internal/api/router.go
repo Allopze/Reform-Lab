@@ -1,6 +1,8 @@
 package api
 
 import (
+	"database/sql"
+
 	"github.com/allopze/reform-lab/apps/api/internal/api/handlers"
 	"github.com/allopze/reform-lab/apps/api/internal/api/middleware"
 	"github.com/allopze/reform-lab/apps/api/internal/auth"
@@ -21,6 +23,8 @@ import (
 type Deps struct {
 	Logger                         zerolog.Logger
 	Metrics                        *observability.Metrics
+	Database                       *sql.DB
+	StorageBasePath                string
 	Store                          storage.Store
 	Files                          repository.FileRepository
 	Jobs                           repository.JobRepository
@@ -42,6 +46,9 @@ type Deps struct {
 	TrustProxyHeaders              bool
 	ArtifactTTLHours               int
 	ArtifactTTLByFamily            map[string]int
+	QueueMode                      string
+	WorkerConcurrency              int
+	RedisURL                       string
 	UserUploadsPerMinute           int
 	UserUploadBurst                int
 	UserConversionsPerMinute       int
@@ -53,6 +60,16 @@ type Deps struct {
 // NewRouter creates the chi router with all middleware and routes.
 func NewRouter(d Deps) *chi.Mux {
 	r := chi.NewRouter()
+	detailedHealth := &handlers.DetailedHealthHandler{
+		ArtifactTTLHours:    d.ArtifactTTLHours,
+		ArtifactTTLByFamily: d.ArtifactTTLByFamily,
+		Jobs:                d.Jobs,
+		Database:            d.Database,
+		StorageBasePath:     d.StorageBasePath,
+		QueueMode:           d.QueueMode,
+		WorkerConcurrency:   d.WorkerConcurrency,
+		RedisURL:            d.RedisURL,
+	}
 
 	// Global middleware
 	r.Use(chimw.Recoverer)
@@ -76,10 +93,11 @@ func NewRouter(d Deps) *chi.Mux {
 	// API routes
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", handlers.PublicHealth())
-		footer := &handlers.FooterHandler{Settings: d.SiteSettings}
+		footer := &handlers.FooterHandler{Settings: d.SiteSettings, Audit: d.Audit}
 		uploadPolicy := &handlers.UploadPolicyHandler{
 			Settings:                       d.SiteSettings,
 			Files:                          d.Files,
+			Audit:                          d.Audit,
 			GuestCumulativeQuotaBytes:      d.GuestCumulativeQuotaBytes,
 			RegisteredCumulativeQuotaBytes: d.RegisteredCumulativeQuotaBytes,
 		}
@@ -162,7 +180,7 @@ func NewRouter(d Deps) *chi.Mux {
 
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.RequireAdmin)
-				r.Get("/admin/health", handlers.DetailedHealth(d.ArtifactTTLHours, d.ArtifactTTLByFamily))
+				r.Get("/admin/health", detailedHealth.Handle)
 				r.Get("/admin/overview", dashboard.AdminOverview)
 				r.Get("/admin/engines", dashboard.AdminEngines)
 				r.Put("/admin/footer-message", footer.Update)
@@ -173,6 +191,7 @@ func NewRouter(d Deps) *chi.Mux {
 					Email:    d.EmailService,
 					Settings: d.SiteSettings,
 					Secrets:  d.SecretKeeper,
+					Audit:    d.Audit,
 				}
 				r.Get("/admin/smtp-settings", smtpH.Get)
 				r.Put("/admin/smtp-settings", smtpH.Update)
@@ -182,8 +201,10 @@ func NewRouter(d Deps) *chi.Mux {
 				emailTmplH := &handlers.EmailTemplateHandler{
 					Email:     d.EmailService,
 					Templates: d.EmailTemplates,
+					Audit:     d.Audit,
 				}
-				webhookH := &handlers.WebhookHandler{Webhooks: d.Webhooks}
+				webhookH := &handlers.WebhookHandler{Webhooks: d.Webhooks, Audit: d.Audit}
+				adminJobsH := &handlers.AdminJobsHandler{Jobs: d.Jobs}
 				r.Get("/admin/email-templates", emailTmplH.List)
 				r.Post("/admin/email-templates", emailTmplH.Create)
 				r.Get("/admin/email-templates/{key}", emailTmplH.Get)
@@ -194,6 +215,14 @@ func NewRouter(d Deps) *chi.Mux {
 				r.Post("/admin/webhooks", webhookH.Create)
 				r.Put("/admin/webhooks/{webhookId}", webhookH.Update)
 				r.Delete("/admin/webhooks/{webhookId}", webhookH.Delete)
+				r.Get("/admin/jobs", adminJobsH.List)
+
+				adminUsersH := &handlers.AdminUsersHandler{Users: d.Users, Audit: d.Audit}
+				adminAuditH := &handlers.AdminAuditHandler{Audit: d.Audit}
+				r.Get("/admin/users", adminUsersH.List)
+				r.Patch("/admin/users/{userId}/role", adminUsersH.UpdateRole)
+				r.Get("/admin/audit", adminAuditH.List)
+				r.Get("/admin/audit/export", adminAuditH.ExportCSV)
 			})
 		})
 	})

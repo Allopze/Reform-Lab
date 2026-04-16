@@ -8,7 +8,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/allopze/reform-lab/apps/api/internal/domain"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
+	"github.com/google/uuid"
 )
 
 const footerMessageSettingKey = "footer_message"
@@ -17,6 +19,7 @@ const footerMessageMaxRunes = 240
 
 type FooterHandler struct {
 	Settings repository.SiteSettingRepository
+	Audit    repository.AuditRepository
 }
 
 type footerMessageRequest struct {
@@ -50,9 +53,24 @@ func (h *FooterHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Settings.UpsertValue(r.Context(), footerMessageSettingKey, message, time.Now().UTC()); err != nil {
+	now := time.Now().UTC()
+	if err := h.Settings.UpsertValue(r.Context(), footerMessageSettingKey, message, now); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to update footer message")
 		return
+	}
+
+	if h.Audit != nil {
+		u := currentUser(r)
+		details := map[string]interface{}{"message": message}
+		if u != nil {
+			details["adminId"] = u.ID.String()
+		}
+		_ = h.Audit.Create(r.Context(), &domain.AuditEvent{
+			ID:        uuid.New(),
+			EventType: domain.AuditAdminFooterUpdated,
+			Details:   details,
+			CreatedAt: now,
+		})
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"message": message})

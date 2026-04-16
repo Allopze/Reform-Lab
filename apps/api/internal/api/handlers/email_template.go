@@ -13,6 +13,7 @@ import (
 	emailpkg "github.com/allopze/reform-lab/apps/api/internal/email"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 const emailTemplateBodyMaxBytes = 100 * 1024 // 100 KB
@@ -21,6 +22,7 @@ const emailTemplateBodyMaxBytes = 100 * 1024 // 100 KB
 type EmailTemplateHandler struct {
 	Email     *emailpkg.Service
 	Templates repository.EmailTemplateRepository
+	Audit     repository.AuditRepository
 }
 
 type emailTemplateRequest struct {
@@ -128,6 +130,20 @@ func (h *EmailTemplateHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusCreated, tmpl)
+
+	if h.Audit != nil {
+		u := currentUser(r)
+		details := map[string]interface{}{"key": req.Key}
+		if u != nil {
+			details["adminId"] = u.ID.String()
+		}
+		_ = h.Audit.Create(r.Context(), &domain.AuditEvent{
+			ID:        uuid.New(),
+			EventType: domain.AuditAdminTemplateCreated,
+			Details:   details,
+			CreatedAt: time.Now().UTC(),
+		})
+	}
 }
 
 // Update modifies the subject and body of an existing template.
@@ -190,6 +206,20 @@ func (h *EmailTemplateHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, tmpl)
+
+	if h.Audit != nil {
+		u := currentUser(r)
+		details := map[string]interface{}{"key": key}
+		if u != nil {
+			details["adminId"] = u.ID.String()
+		}
+		_ = h.Audit.Create(r.Context(), &domain.AuditEvent{
+			ID:        uuid.New(),
+			EventType: domain.AuditAdminTemplateUpdated,
+			Details:   details,
+			CreatedAt: time.Now().UTC(),
+		})
+	}
 }
 
 // Preview renders a template with example data and returns the HTML.
@@ -256,6 +286,20 @@ func (h *EmailTemplateHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+
+	if h.Audit != nil {
+		u := currentUser(r)
+		details := map[string]interface{}{"key": key}
+		if u != nil {
+			details["adminId"] = u.ID.String()
+		}
+		_ = h.Audit.Create(r.Context(), &domain.AuditEvent{
+			ID:        uuid.New(),
+			EventType: domain.AuditAdminTemplateDeleted,
+			Details:   details,
+			CreatedAt: time.Now().UTC(),
+		})
+	}
 }
 
 // renderDraft renders subject + body with example vars without touching the DB.

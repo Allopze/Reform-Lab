@@ -7,9 +7,11 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/allopze/reform-lab/apps/api/internal/domain"
 	emailpkg "github.com/allopze/reform-lab/apps/api/internal/email"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
 	"github.com/allopze/reform-lab/apps/api/internal/security"
+	"github.com/google/uuid"
 )
 
 // SMTPSettingsHandler manages SMTP configuration via admin panel.
@@ -17,6 +19,7 @@ type SMTPSettingsHandler struct {
 	Email    *emailpkg.Service
 	Settings repository.SiteSettingRepository
 	Secrets  *security.SecretKeeper
+	Audit    repository.AuditRepository
 }
 
 type smtpSettingsResponse struct {
@@ -132,6 +135,20 @@ func (h *SMTPSettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+
+	if h.Audit != nil {
+		u := currentUser(r)
+		details := map[string]interface{}{"host": req.Host, "port": req.Port, "from": req.From}
+		if u != nil {
+			details["adminId"] = u.ID.String()
+		}
+		_ = h.Audit.Create(r.Context(), &domain.AuditEvent{
+			ID:        uuid.New(),
+			EventType: domain.AuditAdminSMTPUpdated,
+			Details:   details,
+			CreatedAt: time.Now().UTC(),
+		})
+	}
 }
 
 // Test sends a test email to the authenticated admin's email.
@@ -154,4 +171,15 @@ func (h *SMTPSettingsHandler) Test(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 		"message": "Test email sent to " + u.Email,
 	})
+
+	if h.Audit != nil {
+		details := map[string]interface{}{"recipientEmail": u.Email}
+		details["adminId"] = u.ID.String()
+		_ = h.Audit.Create(r.Context(), &domain.AuditEvent{
+			ID:        uuid.New(),
+			EventType: domain.AuditAdminSMTPTest,
+			Details:   details,
+			CreatedAt: time.Now().UTC(),
+		})
+	}
 }

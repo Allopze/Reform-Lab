@@ -115,6 +115,8 @@ func main() {
 	// Queue — use Redis if configured, otherwise in-process with embedded worker.
 	var jobQueue queue.JobQueue
 	var workerHandler *workers.Handler
+	queueMode := "in-process"
+	effectiveWorkerConcurrency := cfg.InProcessConcurrency
 
 	if cfg.RedisURL != "" {
 		q, err := queue.NewAsynqQueue(cfg.RedisURL)
@@ -123,6 +125,8 @@ func main() {
 		}
 		defer q.Close()
 		jobQueue = q
+		queueMode = "redis"
+		effectiveWorkerConcurrency = cfg.WorkerConcurrency
 		logger.Info().Msg("using Redis queue")
 	} else {
 		// Build embedded worker for in-process mode.
@@ -208,6 +212,8 @@ func main() {
 	router := api.NewRouter(api.Deps{
 		Logger:                         logger,
 		Metrics:                        metrics,
+		Database:                       db,
+		StorageBasePath:                cfg.StorageBasePath,
 		Store:                          store,
 		Files:                          fileRepo,
 		Jobs:                           jobRepo,
@@ -241,6 +247,9 @@ func main() {
 			"audio":    cfg.ArtifactTTLByFamily[domain.FamilyAudio],
 			"video":    cfg.ArtifactTTLByFamily[domain.FamilyVideo],
 		},
+		QueueMode:         queueMode,
+		WorkerConcurrency: effectiveWorkerConcurrency,
+		RedisURL:          cfg.RedisURL,
 	})
 
 	srv := &http.Server{

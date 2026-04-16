@@ -286,6 +286,194 @@ export async function getAdminOverview(): Promise<AdminDashboardData> {
   return data;
 }
 
+// ── Admin Jobs ──
+
+export interface AdminJobFilter {
+  status?: string;
+  capability?: string;
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface AdminJobRow {
+  jobId: string;
+  userName: string;
+  userEmail: string;
+  fileName: string;
+  capabilityId: string;
+  outputFormat: string;
+  status: Job["status"];
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminJobPage {
+  jobs: AdminJobRow[];
+  total: number;
+}
+
+export async function getAdminJobs(
+  filter: AdminJobFilter = {},
+): Promise<AdminJobPage> {
+  const params = new URLSearchParams();
+  if (filter.status) params.set("status", filter.status);
+  if (filter.capability) params.set("capability", filter.capability);
+  if (filter.q) params.set("q", filter.q);
+  if (filter.limit) params.set("limit", String(filter.limit));
+  if (filter.offset) params.set("offset", String(filter.offset));
+
+  const qs = params.toString();
+  const url = `${API_URL}/api/admin/jobs${qs ? `?${qs}` : ""}`;
+  const res = await fetchWithTimeout(url, {
+    headers: headers(),
+    credentials: "include",
+  });
+
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Failed to load admin jobs");
+  return data;
+}
+
+// ── Admin Users ──
+
+export interface AdminUser {
+  id: string;
+  name: string;
+  email: string;
+  team?: string;
+  role: "admin" | "user";
+  createdAt: string;
+}
+
+export interface AdminUserFilter {
+  q?: string;
+  role?: "admin" | "user";
+  limit?: number;
+  offset?: number;
+}
+
+export interface AdminUserPage {
+  users: AdminUser[];
+  total: number;
+}
+
+export async function getAdminUsers(
+  filter: AdminUserFilter = {},
+): Promise<AdminUserPage> {
+  const params = new URLSearchParams();
+  if (filter.q) params.set("q", filter.q);
+  if (filter.role) params.set("role", filter.role);
+  if (filter.limit) params.set("limit", String(filter.limit));
+  if (filter.offset) params.set("offset", String(filter.offset));
+
+  const qs = params.toString();
+  const url = `${API_URL}/api/admin/users${qs ? `?${qs}` : ""}`;
+
+  const res = await fetchWithTimeout(url, {
+    headers: headers(),
+    credentials: "include",
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Failed to load users");
+  return data as AdminUserPage;
+}
+
+export async function updateUserRole(
+  userId: string,
+  role: "admin" | "user",
+): Promise<void> {
+  const res = await fetchWithTimeout(
+    `${API_URL}/api/admin/users/${userId}/role`,
+    {
+      method: "PATCH",
+      headers: headers(),
+      credentials: "include",
+      body: JSON.stringify({ role }),
+    },
+  );
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to update role");
+  }
+}
+
+// ── Admin Audit ──
+
+export interface AdminAuditFilter {
+  eventType?: string;
+  group?: "admin";
+  limit?: number;
+  offset?: number;
+}
+
+export interface AdminAuditPage {
+  events: AdminAuditEvent[];
+  total: number;
+}
+
+export async function getAdminAudit(
+  filter: AdminAuditFilter = {},
+): Promise<AdminAuditPage> {
+  const params = new URLSearchParams();
+  if (filter.eventType) params.set("eventType", filter.eventType);
+  if (filter.group) params.set("group", filter.group);
+  if (filter.limit) params.set("limit", String(filter.limit));
+  if (filter.offset) params.set("offset", String(filter.offset));
+
+  const qs = params.toString();
+  const url = `${API_URL}/api/admin/audit${qs ? `?${qs}` : ""}`;
+
+  const res = await fetchWithTimeout(url, {
+    headers: headers(),
+    credentials: "include",
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(
+      (data as { error?: string }).error || "Failed to load audit events",
+    );
+  }
+  return data as AdminAuditPage;
+}
+
+export async function exportAdminAuditCSV(
+  filter: Omit<AdminAuditFilter, "offset"> = {},
+): Promise<void> {
+  const params = new URLSearchParams();
+  if (filter.eventType) params.set("eventType", filter.eventType);
+  if (filter.group) params.set("group", filter.group);
+  if (filter.limit) params.set("limit", String(filter.limit));
+
+  const qs = params.toString();
+  const url = `${API_URL}/api/admin/audit/export${qs ? `?${qs}` : ""}`;
+
+  const res = await fetchWithTimeout(url, {
+    headers: headers(),
+    credentials: "include",
+    timeoutMs: TRANSFER_TIMEOUT_MS,
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(
+      (data as { error?: string }).error || "Failed to export audit events",
+    );
+  }
+
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download =
+    fileNameFromDisposition(res.headers.get("Content-Disposition")) ||
+    "admin-audit.csv";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
 // ── Download ──
 
 export function artifactDownloadUrl(artifactId: string): string {
@@ -495,6 +683,45 @@ export interface HealthInfo {
     disabledCapabilities: string[];
     disabledEngines: string[];
   };
+  runtime: {
+    queue: {
+      mode: string;
+      workerConcurrency: number;
+      queuedJobs: number;
+      runningJobs: number;
+    };
+    storage: {
+      status: "up" | "down" | "unknown";
+      path?: string;
+      totalBytes?: number;
+      freeBytes?: number;
+      usedPercent?: number;
+      error?: string;
+    };
+  };
+  dependencies: {
+    database: {
+      status: "up" | "down" | "unknown";
+      latencyMs?: number;
+      error?: string;
+    };
+    redis: {
+      status: "up" | "down" | "not_configured";
+      address?: string;
+      latencyMs?: number;
+      error?: string;
+    };
+  };
+  alerts: {
+    code: string;
+    severity: "info" | "warning" | "critical";
+    summary: string;
+    description: string;
+  }[];
+}
+
+export interface AdminEnginesInfo {
+  engines: Record<string, boolean>;
 }
 
 export async function getHealthInfo(): Promise<HealthInfo> {
@@ -503,6 +730,15 @@ export async function getHealthInfo(): Promise<HealthInfo> {
   });
   const data = await res.json();
   if (!res.ok) throw new Error("Failed to fetch service info");
+  return data;
+}
+
+export async function getAdminEngines(): Promise<AdminEnginesInfo> {
+  const res = await fetchWithTimeout(`${API_URL}/api/admin/engines`, {
+    credentials: "include",
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error("Failed to fetch engines info");
   return data;
 }
 

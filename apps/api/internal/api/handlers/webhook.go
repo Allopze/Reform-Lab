@@ -16,6 +16,7 @@ import (
 
 type WebhookHandler struct {
 	Webhooks repository.WebhookRepository
+	Audit    repository.AuditRepository
 }
 
 type webhookRequest struct {
@@ -111,6 +112,20 @@ func (h *WebhookHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusCreated, buildWebhookResponse(*webhook, nil))
+
+	if h.Audit != nil {
+		u := currentUser(r)
+		details := map[string]interface{}{"webhookId": webhook.ID.String(), "url": webhook.URL}
+		if u != nil {
+			details["adminId"] = u.ID.String()
+		}
+		_ = h.Audit.Create(r.Context(), &domain.AuditEvent{
+			ID:        uuid.New(),
+			EventType: domain.AuditAdminWebhookCreated,
+			Details:   details,
+			CreatedAt: now,
+		})
+	}
 }
 
 func (h *WebhookHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -168,6 +183,20 @@ func (h *WebhookHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, buildWebhookResponse(*current, deliveries))
+
+	if h.Audit != nil {
+		u := currentUser(r)
+		details := map[string]interface{}{"webhookId": current.ID.String(), "url": current.URL}
+		if u != nil {
+			details["adminId"] = u.ID.String()
+		}
+		_ = h.Audit.Create(r.Context(), &domain.AuditEvent{
+			ID:        uuid.New(),
+			EventType: domain.AuditAdminWebhookUpdated,
+			Details:   details,
+			CreatedAt: time.Now().UTC(),
+		})
+	}
 }
 
 func (h *WebhookHandler) Delete(w http.ResponseWriter, r *http.Request) {
@@ -183,6 +212,20 @@ func (h *WebhookHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+
+	if h.Audit != nil {
+		u := currentUser(r)
+		details := map[string]interface{}{"webhookId": webhookID.String()}
+		if u != nil {
+			details["adminId"] = u.ID.String()
+		}
+		_ = h.Audit.Create(r.Context(), &domain.AuditEvent{
+			ID:        uuid.New(),
+			EventType: domain.AuditAdminWebhookDeleted,
+			Details:   details,
+			CreatedAt: time.Now().UTC(),
+		})
+	}
 }
 
 func buildWebhookResponse(webhook domain.WebhookSubscription, deliveries []domain.WebhookDelivery) webhookResponse {

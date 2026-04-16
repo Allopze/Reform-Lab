@@ -209,6 +209,8 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 	router := api.NewRouter(api.Deps{
 		Logger:                         logger,
 		Metrics:                        metrics,
+		Database:                       db,
+		StorageBasePath:                storagePath,
 		Store:                          store,
 		Files:                          fileRepo,
 		Jobs:                           jobRepo,
@@ -241,6 +243,9 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 			"audio":    72,
 			"video":    96,
 		},
+		QueueMode:         "in-process",
+		WorkerConcurrency: 1,
+		RedisURL:          "",
 	})
 
 	return &testEnv{
@@ -319,6 +324,24 @@ func doPutClient(client *http.Client, url string, body interface{}, token string
 	return resp, data
 }
 
+func doPatchClient(client *http.Client, url string, body interface{}) (*http.Response, map[string]interface{}) {
+	var r io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		r = bytes.NewReader(b)
+	}
+	req, _ := http.NewRequest(http.MethodPatch, url, r)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, _ := client.Do(req)
+	data := decode(resp)
+	return resp, data
+}
+
 func doGet(url, token string) (*http.Response, map[string]interface{}) {
 	return doGetClient(nil, url, token)
 }
@@ -334,6 +357,54 @@ func doGetClient(client *http.Client, url, token string) (*http.Response, map[st
 	resp, _ := client.Do(req)
 	data := decode(resp)
 	return resp, data
+}
+
+func doGetRawClient(client *http.Client, url, token string) (*http.Response, []byte) {
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	if token != "" {
+		req.AddCookie(&http.Cookie{Name: "reform_session", Value: token})
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return &http.Response{StatusCode: http.StatusServiceUnavailable}, nil
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp, body
+}
+
+func doDeleteClient(client *http.Client, url, token string) (*http.Response, map[string]interface{}) {
+	req, _ := http.NewRequest(http.MethodDelete, url, nil)
+	if token != "" {
+		req.AddCookie(&http.Cookie{Name: "reform_session", Value: token})
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, _ := client.Do(req)
+	data := decode(resp)
+	return resp, data
+}
+
+func doGetArrayClient(client *http.Client, url, token string) (*http.Response, []interface{}) {
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	if token != "" {
+		req.AddCookie(&http.Cookie{Name: "reform_session", Value: token})
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return &http.Response{StatusCode: http.StatusServiceUnavailable}, nil
+	}
+	defer resp.Body.Close()
+	var arr []interface{}
+	json.NewDecoder(resp.Body).Decode(&arr)
+	return resp, arr
 }
 
 func decode(resp *http.Response) map[string]interface{} {
@@ -567,6 +638,20 @@ func TestE2E_AdminDetailedHealth(t *testing.T) {
 	featureFlags := data["featureFlags"].(map[string]interface{})
 	if disabledCaps, ok := featureFlags["disabledCapabilities"].([]interface{}); !ok || len(disabledCaps) != 0 {
 		t.Fatalf("expected no disabled capabilities by default, got %v", featureFlags["disabledCapabilities"])
+	}
+
+	runtime := data["runtime"].(map[string]interface{})
+	queueInfo := runtime["queue"].(map[string]interface{})
+	if queueInfo["mode"] != "in-process" {
+		t.Fatalf("expected queue mode in-process, got %v", queueInfo["mode"])
+	}
+	deps := data["dependencies"].(map[string]interface{})
+	database := deps["database"].(map[string]interface{})
+	if database["status"] != "up" {
+		t.Fatalf("expected database dependency up, got %v", database["status"])
+	}
+	if _, ok := data["alerts"].([]interface{}); !ok {
+		t.Fatalf("expected alerts to be an array, got %T", data["alerts"])
 	}
 }
 
@@ -1858,5 +1943,333 @@ func TestE2E_AdminEmailTemplates(t *testing.T) {
 	// Preview should have the example variables rendered.
 	if !strings.Contains(subjectContent, "Usuario de Ejemplo") {
 		t.Fatalf("expected preview subject to contain rendered name, got %q", subjectContent)
+	}
+}
+
+func TestE2E_AdminWebhookCRUD(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	adminClient := registerUserClient(t, env, "WebhookAdmin", "webhook-admin@test.com")
+	userClient := registerUserClient(t, env, "RegularUser", "regular@test.com")
+
+	// Non-admin cannot list webhooks.
+	resp, _ := doGetClient(userClient, env.server.URL+"/api/admin/webhooks", "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin webhook list, got %d", resp.StatusCode)
+	}
+
+	// Admin lists webhooks — initially empty.
+	resp, webhooks := doGetArrayClient(adminClient, env.server.URL+"/api/admin/webhooks", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin webhook list: expected 200, got %d", resp.StatusCode)
+	}
+
+	// Admin creates a webhook.
+	resp, data := doPostClient(adminClient, env.server.URL+"/api/admin/webhooks", map[string]interface{}{
+		"url":        "https://example.com/hook",
+		"secret":     "s3cret",
+		"eventTypes": []string{"job.completed", "job.failed"},
+		"enabled":    true,
+	}, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("admin webhook create: expected 201, got %d — %v", resp.StatusCode, data)
+	}
+	webhookID, _ := data["id"].(string)
+	if webhookID == "" {
+		t.Fatal("expected webhook id in create response")
+	}
+
+	// Non-admin cannot create a webhook.
+	resp, _ = doPostClient(userClient, env.server.URL+"/api/admin/webhooks", map[string]interface{}{
+		"url":        "https://evil.com/hook",
+		"eventTypes": []string{"job.completed"},
+		"enabled":    true,
+	}, "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin webhook create, got %d", resp.StatusCode)
+	}
+
+	// Admin lists again — should have one webhook.
+	resp, webhooks = doGetArrayClient(adminClient, env.server.URL+"/api/admin/webhooks", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin webhook list: expected 200, got %d", resp.StatusCode)
+	}
+	if len(webhooks) != 1 {
+		t.Fatalf("expected 1 webhook, got %d", len(webhooks))
+	}
+
+	// Admin updates the webhook.
+	resp, data = doPutClient(adminClient, env.server.URL+"/api/admin/webhooks/"+webhookID, map[string]interface{}{
+		"url":        "https://example.com/hook-v2",
+		"eventTypes": []string{"job.completed"},
+		"enabled":    false,
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin webhook update: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+
+	// Non-admin cannot update.
+	resp, _ = doPutClient(userClient, env.server.URL+"/api/admin/webhooks/"+webhookID, map[string]interface{}{
+		"url":        "https://evil.com/hook",
+		"eventTypes": []string{"job.completed"},
+		"enabled":    true,
+	}, "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin webhook update, got %d", resp.StatusCode)
+	}
+
+	// Non-admin cannot delete.
+	resp, _ = doDeleteClient(userClient, env.server.URL+"/api/admin/webhooks/"+webhookID, "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin webhook delete, got %d", resp.StatusCode)
+	}
+
+	// Admin deletes the webhook.
+	resp, _ = doDeleteClient(adminClient, env.server.URL+"/api/admin/webhooks/"+webhookID, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin webhook delete: expected 200, got %d", resp.StatusCode)
+	}
+
+	// List again — should be empty.
+	resp, webhooks = doGetArrayClient(adminClient, env.server.URL+"/api/admin/webhooks", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin webhook list after delete: expected 200, got %d", resp.StatusCode)
+	}
+	if len(webhooks) != 0 {
+		t.Fatalf("expected 0 webhooks after delete, got %d", len(webhooks))
+	}
+}
+
+func TestE2E_AdminJobsList(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	adminClient := registerUserClient(t, env, "JobsAdmin", "jobs-admin@test.com")
+	userClient := registerUserClient(t, env, "RegularUser", "regular-jobs@test.com")
+
+	// Non-admin cannot list jobs.
+	resp, _ := doGetClient(userClient, env.server.URL+"/api/admin/jobs", "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin jobs list, got %d", resp.StatusCode)
+	}
+
+	// Admin can list jobs — initially empty.
+	resp, data := doGetClient(adminClient, env.server.URL+"/api/admin/jobs", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin jobs list: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	total, _ := data["total"].(float64)
+	if total != 0 {
+		t.Fatalf("expected 0 total jobs, got %v", total)
+	}
+
+	// Upload a file so we can create a job.
+	resp, fileData := uploadPNGClient(adminClient, env.server.URL, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("upload: expected 201, got %d — %v", resp.StatusCode, fileData)
+	}
+	fileID, _ := fileData["id"].(string)
+	caps, _ := fileData["capabilities"].([]interface{})
+	if len(caps) == 0 {
+		t.Skip("no capabilities for PNG, skipping job creation")
+	}
+	firstCap := caps[0].(map[string]interface{})
+	capID, _ := firstCap["id"].(string)
+	outputFormat, _ := firstCap["outputFormat"].(string)
+
+	// Create a conversion job.
+	resp, _ = doPostClient(adminClient, env.server.URL+"/api/files/"+fileID+"/convert", map[string]interface{}{
+		"capabilityId": capID,
+		"outputFormat": outputFormat,
+	}, "")
+	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusCreated {
+		t.Fatalf("convert: expected 201 or 202, got %d", resp.StatusCode)
+	}
+
+	// Admin can list jobs — should now have one.
+	resp, data = doGetClient(adminClient, env.server.URL+"/api/admin/jobs", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin jobs list: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	total, _ = data["total"].(float64)
+	if total < 1 {
+		t.Fatalf("expected at least 1 total job, got %v", total)
+	}
+
+	// Test status filter.
+	resp, data = doGetClient(adminClient, env.server.URL+"/api/admin/jobs?status=queued", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin jobs list filtered: expected 200, got %d", resp.StatusCode)
+	}
+
+	// Test search filter.
+	resp, data = doGetClient(adminClient, env.server.URL+"/api/admin/jobs?q=JobsAdmin", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin jobs list search: expected 200, got %d", resp.StatusCode)
+	}
+	total, _ = data["total"].(float64)
+	if total < 1 {
+		t.Fatalf("expected at least 1 job matching search, got %v", total)
+	}
+}
+
+func TestE2E_AdminUsersList(t *testing.T) {
+	env := setupE2E(t)
+	defer env.server.Close()
+
+	adminClient := registerUserClient(t, env, "adminUser", "admin-users@test.com")
+	normalClient := registerUserClient(t, env, "normalUser", "normal-users@test.com")
+
+	// Non-admin cannot list users.
+	resp, _ := doGetClient(normalClient, env.server.URL+"/api/admin/users", "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin list users: expected 403, got %d", resp.StatusCode)
+	}
+
+	// Admin can list users.
+	resp2, data := doGetClient(adminClient, env.server.URL+"/api/admin/users", "")
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("admin list users: expected 200, got %d", resp2.StatusCode)
+	}
+	usersArr, _ := data["users"].([]interface{})
+	if len(usersArr) != 2 {
+		t.Fatalf("expected 2 users, got %d", len(usersArr))
+	}
+	total, _ := data["total"].(float64)
+	if int(total) != 2 {
+		t.Fatalf("expected total=2 users, got %v", total)
+	}
+
+	// Admin can filter users by search.
+	resp2, data = doGetClient(adminClient, env.server.URL+"/api/admin/users?q=normal-users", "")
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("admin list users search: expected 200, got %d", resp2.StatusCode)
+	}
+	usersArr, _ = data["users"].([]interface{})
+	if len(usersArr) != 1 {
+		t.Fatalf("expected 1 user from search filter, got %d", len(usersArr))
+	}
+
+	// Admin can paginate users.
+	resp2, data = doGetClient(adminClient, env.server.URL+"/api/admin/users?limit=1&offset=0", "")
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("admin list users pagination: expected 200, got %d", resp2.StatusCode)
+	}
+	usersArr, _ = data["users"].([]interface{})
+	if len(usersArr) != 1 {
+		t.Fatalf("expected 1 user on paginated page, got %d", len(usersArr))
+	}
+
+	// Find the normal user's ID.
+	var normalUserID string
+	var adminUserID string
+	for _, u := range usersArr {
+		m := u.(map[string]interface{})
+		if m["email"] == "normal-users@test.com" {
+			normalUserID = m["id"].(string)
+		}
+		if m["email"] == "admin-users@test.com" {
+			adminUserID = m["id"].(string)
+		}
+	}
+	if normalUserID == "" {
+		t.Fatal("could not find normal user in list")
+	}
+
+	// Non-admin cannot change roles.
+	resp, _ = doPatchClient(normalClient, env.server.URL+"/api/admin/users/"+normalUserID+"/role",
+		map[string]string{"role": "admin"})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin update role: expected 403, got %d", resp.StatusCode)
+	}
+
+	// Admin can promote user.
+	resp, _ = doPatchClient(adminClient, env.server.URL+"/api/admin/users/"+normalUserID+"/role",
+		map[string]string{"role": "admin"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin promote user: expected 200, got %d", resp.StatusCode)
+	}
+
+	// Role filter should now include both admins.
+	resp2, data = doGetClient(adminClient, env.server.URL+"/api/admin/users?role=admin", "")
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("admin list users role=admin: expected 200, got %d", resp2.StatusCode)
+	}
+	usersArr, _ = data["users"].([]interface{})
+	if len(usersArr) != 2 {
+		t.Fatalf("expected 2 admins after promotion, got %d", len(usersArr))
+	}
+
+	// Admin cannot demote themselves.
+	resp, _ = doPatchClient(adminClient, env.server.URL+"/api/admin/users/"+adminUserID+"/role",
+		map[string]string{"role": "user"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("admin self-demote: expected 400, got %d", resp.StatusCode)
+	}
+
+	// Admin can demote another admin (the previously promoted user).
+	resp, _ = doPatchClient(adminClient, env.server.URL+"/api/admin/users/"+normalUserID+"/role",
+		map[string]string{"role": "user"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin demote user: expected 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestE2E_AdminAuditListAndExport(t *testing.T) {
+	env := setupE2E(t)
+	defer env.server.Close()
+
+	adminClient := registerUserClient(t, env, "AuditAdmin", "audit-admin@test.com")
+	normalClient := registerUserClient(t, env, "AuditUser", "audit-user@test.com")
+
+	// Non-admin cannot access admin audit endpoints.
+	resp, _ := doGetClient(normalClient, env.server.URL+"/api/admin/audit", "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-admin audit list: expected 403, got %d", resp.StatusCode)
+	}
+
+	// Trigger at least one admin audit event.
+	resp, _ = doPutClient(adminClient, env.server.URL+"/api/admin/footer-message", map[string]string{
+		"message": "Audit trail marker",
+	}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin footer update: expected 200, got %d", resp.StatusCode)
+	}
+
+	// Admin can list only admin_* events.
+	resp, data := doGetClient(adminClient, env.server.URL+"/api/admin/audit?group=admin&limit=10", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin audit list: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	total, _ := data["total"].(float64)
+	if total < 1 {
+		t.Fatalf("expected at least 1 admin audit event, got %v", total)
+	}
+
+	events, ok := data["events"].([]interface{})
+	if !ok || len(events) == 0 {
+		t.Fatalf("expected non-empty audit events list, got %v", data["events"])
+	}
+	first := events[0].(map[string]interface{})
+	eventType, _ := first["eventType"].(string)
+	if !strings.HasPrefix(eventType, "admin_") {
+		t.Fatalf("expected admin_* event type, got %q", eventType)
+	}
+
+	// Admin can export CSV for admin events.
+	respRaw, body := doGetRawClient(adminClient, env.server.URL+"/api/admin/audit/export?group=admin&limit=50", "")
+	if respRaw.StatusCode != http.StatusOK {
+		t.Fatalf("admin audit export: expected 200, got %d", respRaw.StatusCode)
+	}
+	contentType := respRaw.Header.Get("Content-Type")
+	if !strings.Contains(contentType, "text/csv") {
+		t.Fatalf("expected text/csv content type, got %q", contentType)
+	}
+	if !strings.Contains(string(body), "eventType") {
+		t.Fatalf("expected CSV header in export body, got %q", string(body))
+	}
+	if !strings.Contains(string(body), "admin_footer_updated") {
+		t.Fatalf("expected exported event type admin_footer_updated, got %q", string(body))
 	}
 }
