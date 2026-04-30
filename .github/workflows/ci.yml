@@ -136,7 +136,7 @@ jobs:
         run: docker compose down -v --remove-orphans
 
       - name: Scan API image
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: reform-api:ci
           format: table
@@ -144,7 +144,7 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Scan Worker image
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: reform-worker:ci
           format: table
