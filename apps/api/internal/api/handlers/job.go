@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 
 	"github.com/allopze/reform-lab/apps/api/internal/capabilities"
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
@@ -132,7 +133,18 @@ func (h *JobHandler) Retry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	retryJob, err := h.Orchestrator.RetryFailedJob(r.Context(), job, *capability, h.Store.OriginalPath(job.FileID.String()))
+	inputPath, ok := originalPathIfAvailable(h.Store, job.FileID)
+	if !ok {
+		respondError(w, http.StatusGone, "original file expired or unavailable")
+		return
+	}
+
+	var retryJob *domain.Job
+	if file.UserID == nil && file.GuestSessionID != nil {
+		retryJob, err = h.Orchestrator.RetryFailedJobForGuest(r.Context(), *file.GuestSessionID, job, *capability, inputPath)
+	} else {
+		retryJob, err = h.Orchestrator.RetryFailedJob(r.Context(), job, *capability, inputPath)
+	}
 	if err != nil {
 		if errors.Is(err, domain.ErrJobIntakePaused) {
 			respondError(w, http.StatusServiceUnavailable, "job intake is temporarily paused by admin")
@@ -153,7 +165,7 @@ func (h *JobHandler) CancelBatch(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	guestSessionID := currentGuestSessionID(r)
 
-	jobIDs, jobs, _, err := h.batchTargetJobs(r, u, guestSessionID)
+	jobIDs, jobs, _, _, err := h.batchTargetJobs(r, u, guestSessionID)
 	if err != nil {
 		respondError(w, err.status, err.message)
 		return
@@ -173,7 +185,7 @@ func (h *JobHandler) RetryBatch(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	guestSessionID := currentGuestSessionID(r)
 
-	_, jobs, fileOwner, err := h.batchTargetJobs(r, u, guestSessionID)
+	_, jobs, fileOwner, batchGuestSessionID, err := h.batchTargetJobs(r, u, guestSessionID)
 	if err != nil {
 		respondError(w, err.status, err.message)
 		return
@@ -198,14 +210,26 @@ func (h *JobHandler) RetryBatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		inputPath, ok := originalPathIfAvailable(h.Store, job.FileID)
+		if !ok {
+			respondError(w, http.StatusGone, "original file expired or unavailable")
+			return
+		}
+
 		requests = append(requests, orchestrator.BatchRequest{
 			FileID:     job.FileID,
 			Capability: *capability,
-			InputPath:  h.Store.OriginalPath(job.FileID.String()),
+			InputPath:  inputPath,
 		})
 	}
 
-	retriedJobs, retryErr := h.Orchestrator.CreateAndEnqueueBatch(r.Context(), fileOwner, requests)
+	var retriedJobs []domain.Job
+	var retryErr error
+	if fileOwner == nil && batchGuestSessionID != nil {
+		retriedJobs, retryErr = h.Orchestrator.CreateAndEnqueueBatchForGuest(r.Context(), *batchGuestSessionID, requests)
+	} else {
+		retriedJobs, retryErr = h.Orchestrator.CreateAndEnqueueBatch(r.Context(), fileOwner, requests)
+	}
 	if retryErr != nil {
 		if errors.Is(retryErr, domain.ErrJobIntakePaused) {
 			respondError(w, http.StatusServiceUnavailable, "job intake is temporarily paused by admin")
@@ -227,46 +251,48 @@ type batchJobTargetsError struct {
 	message string
 }
 
-func (h *JobHandler) batchTargetJobs(r *http.Request, u *domain.User, guestSessionID *uuid.UUID) ([]string, []*domain.Job, *uuid.UUID, *batchJobTargetsError) {
+func (h *JobHandler) batchTargetJobs(r *http.Request, u *domain.User, guestSessionID *uuid.UUID) ([]string, []*domain.Job, *uuid.UUID, *uuid.UUID, *batchJobTargetsError) {
 	var req batchJobActionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		return nil, nil, nil, &batchJobTargetsError{status: http.StatusBadRequest, message: "invalid request body"}
+		return nil, nil, nil, nil, &batchJobTargetsError{status: http.StatusBadRequest, message: "invalid request body"}
 	}
 	if len(req.JobIDs) == 0 {
-		return nil, nil, nil, &batchJobTargetsError{status: http.StatusBadRequest, message: "at least one job ID is required"}
+		return nil, nil, nil, nil, &batchJobTargetsError{status: http.StatusBadRequest, message: "at least one job ID is required"}
 	}
 
 	jobIDs := make([]string, 0, len(req.JobIDs))
 	jobs := make([]*domain.Job, 0, len(req.JobIDs))
 	var ownerID *uuid.UUID
+	var ownerGuestSessionID *uuid.UUID
 	for _, rawID := range req.JobIDs {
 		jobID, err := uuid.Parse(rawID)
 		if err != nil {
-			return nil, nil, nil, &batchJobTargetsError{status: http.StatusBadRequest, message: "invalid job ID"}
+			return nil, nil, nil, nil, &batchJobTargetsError{status: http.StatusBadRequest, message: "invalid job ID"}
 		}
 
 		job, err := h.Orchestrator.GetJob(r.Context(), jobID)
 		if err != nil {
-			return nil, nil, nil, &batchJobTargetsError{status: http.StatusNotFound, message: "job not found"}
+			return nil, nil, nil, nil, &batchJobTargetsError{status: http.StatusNotFound, message: "job not found"}
 		}
 		file, err := h.Files.GetByID(r.Context(), job.FileID)
 		if err != nil {
-			return nil, nil, nil, &batchJobTargetsError{status: http.StatusNotFound, message: "file not found"}
+			return nil, nil, nil, nil, &batchJobTargetsError{status: http.StatusNotFound, message: "file not found"}
 		}
 		if !canAccessResource(u, guestSessionID, file.UserID, file.GuestSessionID) {
-			return nil, nil, nil, &batchJobTargetsError{status: http.StatusForbidden, message: "forbidden"}
+			return nil, nil, nil, nil, &batchJobTargetsError{status: http.StatusForbidden, message: "forbidden"}
 		}
 		if len(jobs) == 0 {
 			ownerID = job.UserID
-		} else if !sameOptionalUUID(ownerID, job.UserID) {
-			return nil, nil, nil, &batchJobTargetsError{status: http.StatusBadRequest, message: "all jobs in a batch action must share the same owner"}
+			ownerGuestSessionID = file.GuestSessionID
+		} else if !sameOptionalUUID(ownerID, job.UserID) || !sameOptionalUUID(ownerGuestSessionID, file.GuestSessionID) {
+			return nil, nil, nil, nil, &batchJobTargetsError{status: http.StatusBadRequest, message: "all jobs in a batch action must share the same owner"}
 		}
 
 		jobIDs = append(jobIDs, jobID.String())
 		jobs = append(jobs, job)
 	}
 
-	return jobIDs, jobs, ownerID, nil
+	return jobIDs, jobs, ownerID, ownerGuestSessionID, nil
 }
 
 func sameOptionalUUID(left, right *uuid.UUID) bool {
@@ -274,6 +300,14 @@ func sameOptionalUUID(left, right *uuid.UUID) bool {
 		return left == nil && right == nil
 	}
 	return *left == *right
+}
+
+func originalPathIfAvailable(store storage.Store, fileID uuid.UUID) (string, bool) {
+	path := store.OriginalPath(fileID.String())
+	if _, err := os.Stat(path); err != nil {
+		return path, false
+	}
+	return path, true
 }
 
 func (h *JobHandler) buildJobResponse(r *http.Request, job *domain.Job) *jobResponse {

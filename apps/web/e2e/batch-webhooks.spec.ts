@@ -353,6 +353,7 @@ test.describe("Suggested flows", () => {
     await mockAdminWebhookApi(page);
 
     await page.goto("/admin");
+    await page.getByRole("button", { name: "Limite de archivo" }).click();
 
     await expect(
       page.getByRole("heading", { name: "Webhooks" }),

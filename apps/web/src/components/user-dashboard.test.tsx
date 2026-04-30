@@ -12,6 +12,7 @@ import {
   retryJobs,
   type UserDashboardData,
 } from "@/lib/api";
+import { requestEmailVerification } from "@/lib/auth";
 
 const pushMock = vi.fn();
 
@@ -19,8 +20,11 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
 }));
 
-let authState: { user: { name: string; role: string } | null; loading: boolean } = {
-  user: { name: "Test", role: "user" },
+let authState: {
+  user: { name: string; role: string; emailVerifiedAt?: string } | null;
+  loading: boolean;
+} = {
+  user: { name: "Test", role: "user", emailVerifiedAt: "2026-04-11T08:00:00Z" },
   loading: false,
 };
 
@@ -35,6 +39,10 @@ vi.mock("@/lib/api", () => ({
   downloadArtifact: vi.fn(),
   retryJob: vi.fn(),
   retryJobs: vi.fn(),
+}));
+
+vi.mock("@/lib/auth", () => ({
+  requestEmailVerification: vi.fn(),
 }));
 
 const succeededJob = {
@@ -91,7 +99,8 @@ describe("UserDashboard", () => {
       createdAt: "2026-04-11T10:00:00Z",
     });
     vi.mocked(retryJobs).mockResolvedValue([]);
-    authState = { user: { name: "Test", role: "user" }, loading: false };
+    vi.mocked(requestEmailVerification).mockResolvedValue({ status: "ok" });
+    authState = { user: { name: "Test", role: "user", emailVerifiedAt: "2026-04-11T08:00:00Z" }, loading: false };
   });
 
   it("renders loading state then summary", async () => {
@@ -197,6 +206,20 @@ describe("UserDashboard", () => {
     await waitFor(() => {
       expect(screen.getByText("network error")).toBeInTheDocument();
     });
+  });
+
+  it("lets unverified users request a verification email", async () => {
+    const user = userEvent.setup();
+    authState = { user: { name: "Test", role: "user" }, loading: false };
+    render(<IntlWrapper><UserDashboard /></IntlWrapper>);
+
+    await waitFor(() => {
+      expect(screen.getByText("Correo pendiente de verificación")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Enviar verificación" }));
+
+    expect(requestEmailVerification).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Te enviamos un nuevo enlace de verificación.")).toBeInTheDocument();
   });
 
   it("redirects to /acceso when not authenticated", () => {

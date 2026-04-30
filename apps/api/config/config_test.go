@@ -123,6 +123,20 @@ func TestLoadParsesBootstrapAdminEmails(t *testing.T) {
 	}
 }
 
+func TestLoadParsesVerifiedEmailSensitiveActionPolicy(t *testing.T) {
+	t.Setenv("ENV_FILE", "/tmp/reform-nonexistent.env")
+	t.Setenv("JWT_SECRET", "test-strong-jwt-secret-1234567890")
+	t.Setenv("REQUIRE_VERIFIED_EMAIL_FOR_SENSITIVE_ACTIONS", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected valid config, got %v", err)
+	}
+	if !cfg.RequireVerifiedEmailForSensitiveActions {
+		t.Fatal("expected sensitive actions to require verified email")
+	}
+}
+
 func TestLoadUsesStricterDefaultGuestQuota(t *testing.T) {
 	t.Setenv("ENV_FILE", "/tmp/reform-nonexistent.env")
 	t.Setenv("JWT_SECRET", "test-strong-jwt-secret-1234567890")

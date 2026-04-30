@@ -33,6 +33,7 @@ type UploadHandler struct {
 	Metrics                        *observability.Metrics
 	GuestCumulativeQuotaBytes      int64
 	RegisteredCumulativeQuotaBytes int64
+	TrustProxyHeaders              bool
 }
 
 func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
@@ -42,7 +43,7 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		guestSessionID = nil
 	}
 	if u == nil && guestSessionID == nil {
-		guestSessionID = ensureGuestSession(w, r)
+		guestSessionID = ensureGuestSession(w, r, h.TrustProxyHeaders)
 	}
 
 	policy, err := loadUploadPolicy(r.Context(), h.Settings)

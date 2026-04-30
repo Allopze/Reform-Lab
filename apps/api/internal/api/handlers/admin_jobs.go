@@ -29,6 +29,8 @@ type adminBatchJobActionRequest struct {
 	Filter *repository.AdminJobFilter `json:"filter"`
 }
 
+const maxAdminBatchJobAction = 500
+
 func (h *AdminJobsHandler) List(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
@@ -92,7 +94,18 @@ func (h *AdminJobsHandler) RetryBatch(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusConflict, "capability no longer eligible for one or more retries")
 			return
 		}
-		retried, retryErr := h.Orchestrator.RetryFailedJob(r.Context(), job, *capability, h.Store.OriginalPath(job.FileID.String()))
+		inputPath, ok := originalPathIfAvailable(h.Store, job.FileID)
+		if !ok {
+			respondError(w, http.StatusGone, "original file expired or unavailable")
+			return
+		}
+		var retried *domain.Job
+		var retryErr error
+		if file.UserID == nil && file.GuestSessionID != nil {
+			retried, retryErr = h.Orchestrator.RetryFailedJobForGuest(r.Context(), *file.GuestSessionID, job, *capability, inputPath)
+		} else {
+			retried, retryErr = h.Orchestrator.RetryFailedJob(r.Context(), job, *capability, inputPath)
+		}
 		if retryErr != nil {
 			if errors.Is(retryErr, domain.ErrJobIntakePaused) {
 				respondError(w, http.StatusServiceUnavailable, "job intake is temporarily paused by admin")
@@ -145,6 +158,9 @@ func (h *AdminJobsHandler) resolveBatchJobs(r *http.Request) ([]string, []*domai
 	}
 	if len(ids) == 0 {
 		return nil, nil, "", &adminBatchResolveError{status: http.StatusBadRequest, message: "no jobs matched the requested action"}
+	}
+	if len(ids) > maxAdminBatchJobAction {
+		return nil, nil, "", &adminBatchResolveError{status: http.StatusRequestEntityTooLarge, message: "too many jobs matched the requested action"}
 	}
 	jobIDs := make([]string, 0, len(ids))
 	jobs := make([]*domain.Job, 0, len(ids))

@@ -55,6 +55,22 @@ func (r *stubUserRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.User, e
 	}
 	return u, nil
 }
+func (r *stubUserRepo) UpdatePasswordHash(_ context.Context, id uuid.UUID, passwordHash string) error {
+	u, ok := r.users[id]
+	if !ok || u == nil {
+		return domain.ErrUserNotFound
+	}
+	u.PasswordHash = passwordHash
+	return nil
+}
+func (r *stubUserRepo) UpdateEmailVerifiedAt(_ context.Context, id uuid.UUID, verifiedAt *time.Time) error {
+	u, ok := r.users[id]
+	if !ok || u == nil {
+		return domain.ErrUserNotFound
+	}
+	u.EmailVerifiedAt = verifiedAt
+	return nil
+}
 func (r *stubUserRepo) Count(_ context.Context) (int, error) { return len(r.users), nil }
 func (r *stubUserRepo) HasAdmin(_ context.Context) (bool, error) {
 	for _, u := range r.users {

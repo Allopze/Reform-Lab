@@ -115,17 +115,17 @@ func (h *Handler) ProcessPayload(ctx context.Context, taskType string, data []by
 	start := time.Now()
 	capability := capabilities.ByID(payload.CapabilityID)
 	if capability == nil {
-		return h.fail(ctx, jobID, logger, "resolve capability", fmt.Errorf("capability definition not found"))
+		return h.fail(ctx, payload.CapabilityID, jobID, logger, "resolve capability", fmt.Errorf("capability definition not found"))
 	}
 	if !capabilities.DefaultFlags.Allows(*capability) {
-		return h.fail(ctx, jobID, logger, "feature flag", fmt.Errorf("capability disabled by feature flag"))
+		return h.fail(ctx, payload.CapabilityID, jobID, logger, "feature flag", fmt.Errorf("capability disabled by feature flag"))
 	}
 
 	// Create temp dir for this job.
 	_ = h.Orch.UpdateProgress(ctx, jobID, 20) // preparing workspace
 	tempDir, err := h.Store.CreateTempDir(ctx, payload.JobID)
 	if err != nil {
-		return h.fail(ctx, jobID, logger, "create temp dir", err)
+		return h.fail(ctx, payload.CapabilityID, jobID, logger, "create temp dir", err)
 	}
 	defer h.Store.CleanupTemp(ctx, payload.JobID)
 
@@ -133,7 +133,7 @@ func (h *Handler) ProcessPayload(ctx context.Context, taskType string, data []by
 	_ = h.Orch.UpdateProgress(ctx, jobID, 30) // resolving engine
 	engine, err := h.Registry.Get(payload.CapabilityID)
 	if err != nil {
-		return h.fail(ctx, jobID, logger, "find engine", err)
+		return h.fail(ctx, payload.CapabilityID, jobID, logger, "find engine", err)
 	}
 
 	// Execute conversion.
@@ -146,7 +146,7 @@ func (h *Handler) ProcessPayload(ctx context.Context, taskType string, data []by
 			logger.Info().Msg("job cancelled during engine execution")
 			return nil
 		}
-		return h.fail(ctx, jobID, logger, "execute conversion", err)
+		return h.fail(ctx, payload.CapabilityID, jobID, logger, "execute conversion", err)
 	}
 
 	artifactFormat := outputArtifactFormat(outputPath, payload.OutputFormat)
@@ -155,7 +155,7 @@ func (h *Handler) ProcessPayload(ctx context.Context, taskType string, data []by
 	_ = h.Orch.UpdateProgress(ctx, jobID, 70) // validating output
 	info, err := validateOutputArtifact(outputPath, artifactFormat)
 	if err != nil {
-		return h.fail(ctx, jobID, logger, "validate output", err)
+		return h.fail(ctx, payload.CapabilityID, jobID, logger, "validate output", err)
 	}
 	if h.isCancelled(ctx, jobID) {
 		logger.Info().Msg("job cancelled before artifact persistence")
@@ -167,14 +167,14 @@ func (h *Handler) ProcessPayload(ctx context.Context, taskType string, data []by
 	artifactID := uuid.New()
 	outputFile, err := os.Open(outputPath)
 	if err != nil {
-		return h.fail(ctx, jobID, logger, "open output", err)
+		return h.fail(ctx, payload.CapabilityID, jobID, logger, "open output", err)
 	}
 	defer outputFile.Close()
 
 	fileName := outputArtifactFileName(outputPath, artifactFormat)
 	storagePath, err := h.Store.SaveArtifact(ctx, artifactID.String(), fileName, outputFile)
 	if err != nil {
-		return h.fail(ctx, jobID, logger, "save artifact", err)
+		return h.fail(ctx, payload.CapabilityID, jobID, logger, "save artifact", err)
 	}
 
 	now := time.Now().UTC()
@@ -193,7 +193,7 @@ func (h *Handler) ProcessPayload(ctx context.Context, taskType string, data []by
 
 	if err := h.Artifacts.Create(ctx, &artifact); err != nil {
 		_ = os.RemoveAll(filepath.Dir(storagePath))
-		return h.fail(ctx, jobID, logger, "persist artifact record", err)
+		return h.fail(ctx, payload.CapabilityID, jobID, logger, "persist artifact record", err)
 	}
 	if h.isCancelled(ctx, jobID) {
 		logger.Info().Str("artifact_id", artifactID.String()).Msg("job cancelled after artifact persistence; cleaning artifact")
@@ -231,11 +231,11 @@ func (h *Handler) ProcessPayload(ctx context.Context, taskType string, data []by
 	return nil
 }
 
-func (h *Handler) fail(ctx context.Context, jobID uuid.UUID, logger zerolog.Logger, step string, err error) error {
+func (h *Handler) fail(ctx context.Context, capabilityID string, jobID uuid.UUID, logger zerolog.Logger, step string, err error) error {
 	msg := classifyError(step, err)
 	logger.Error().Err(err).Str("step", step).Msg("conversion failed")
 	_ = h.Orch.MarkFailed(ctx, jobID, msg)
-	h.Metrics.JobsTotal.WithLabelValues("", "failed").Inc()
+	h.Metrics.JobsTotal.WithLabelValues(capabilityID, "failed").Inc()
 	h.Metrics.ErrorsTotal.WithLabelValues(step).Inc()
 	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 		span.SetStatus(codes.Error, msg)
@@ -261,7 +261,7 @@ func classifyError(step string, err error) string {
 	case containsAny(errText, "exit status"):
 		return "El motor de conversión no pudo procesar este archivo."
 	default:
-		return fmt.Sprintf("%s: %v", step, err)
+		return "La conversión falló por un error interno. Intenta de nuevo."
 	}
 }
 

@@ -35,6 +35,7 @@ __pycache__/
 .env
 .env.local
 .env.*.local
+.env.dev-backup
 
 # Build outputs
 dist/
@@ -54,6 +55,9 @@ logs/
 
 # Generated files
 *.lock
+apps/api/server
+apps/web/tsconfig.tsbuildinfo
+apps/web/test-results/
 
 # Docker Compose runtime state
 runtime/
@@ -62,5 +66,8 @@ releases/
 # SQLite databases and backups (contain user data)
 apps/api/data/*.db
 apps/api/data/*.db-*
+apps/api/data/artifacts/
+apps/api/data/originals/
+apps/api/data/temp/
 apps/api/data/backups/
 apps/api/apps/

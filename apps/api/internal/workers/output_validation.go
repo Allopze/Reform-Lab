@@ -8,13 +8,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"slices"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/gabriel-vasile/mimetype"
 )
 
 const outputValidationSampleLimit = 128 * 1024
+const maxZipOutputEntries = 2000
 
 var allowedOutputMIMEs = map[string][]string{
 	"pdf":  {"application/pdf"},
@@ -172,13 +175,37 @@ func validateZipOutput(path string) error {
 	}
 	defer reader.Close()
 
+	files := 0
 	for _, file := range reader.File {
-		if !file.FileInfo().IsDir() {
-			return nil
+		if err := validateZipEntryName(file.Name); err != nil {
+			return err
+		}
+		if file.FileInfo().IsDir() {
+			continue
+		}
+		if file.UncompressedSize64 == 0 {
+			return fmt.Errorf("zip output contains empty file %q", file.Name)
+		}
+		files++
+		if files > maxZipOutputEntries {
+			return fmt.Errorf("zip output contains too many files")
 		}
 	}
+	if files == 0 {
+		return fmt.Errorf("zip output has no files")
+	}
+	return nil
+}
 
-	return fmt.Errorf("zip output has no files")
+func validateZipEntryName(name string) error {
+	cleaned := path.Clean(name)
+	if name == "" || cleaned == "." || strings.HasPrefix(cleaned, "../") || cleaned == ".." || path.IsAbs(name) {
+		return fmt.Errorf("zip output contains unsafe path %q", name)
+	}
+	if strings.Contains(name, "\\") || strings.Contains(name, "\x00") {
+		return fmt.Errorf("zip output contains unsafe path %q", name)
+	}
+	return nil
 }
 
 func validateOOXMLOutput(path, requiredEntry string) error {

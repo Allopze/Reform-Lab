@@ -52,6 +52,20 @@ func TestValidateOutputArtifactValidatesZipOutputs(t *testing.T) {
 	if _, err := validateOutputArtifact(emptyZip, "zip"); err == nil {
 		t.Fatal("expected empty zip output to be rejected")
 	}
+
+	traversalZip := writeZipValidationFile(t, "traversal.zip", map[string]string{
+		"../outside.txt": "nope",
+	})
+	if _, err := validateOutputArtifact(traversalZip, "zip"); err == nil {
+		t.Fatal("expected zip path traversal to be rejected")
+	}
+
+	emptyFileZip := writeZipValidationFile(t, "empty-file.zip", map[string]string{
+		"frame-001.jpg": "",
+	})
+	if _, err := validateOutputArtifact(emptyFileZip, "zip"); err == nil {
+		t.Fatal("expected zip with empty file to be rejected")
+	}
 }
 
 func TestValidateOutputArtifactValidatesOOXMLOutputs(t *testing.T) {

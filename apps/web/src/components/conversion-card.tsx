@@ -101,23 +101,39 @@ export default function ConversionCard({ category }: ConversionCardProps) {
 
   function uploadSupportLabel(policy: UploadPolicy | null) {
     if (!policy) return tc(`${effectiveCategoryId}.supportLabel`);
+    const cumulativeQuota = policy.cumulativeQuotaBytes ?? policy.effectiveMaxBytes;
+    const cumulativeUsed = policy.cumulativeUsedBytes ?? 0;
+    const remaining = Math.max(
+      0,
+      cumulativeQuota - cumulativeUsed,
+    );
     return policy.viewerType === "registered"
       ? t("registeredSupport", {
           limit: formatMegabytes(policy.effectiveMaxBytes),
+          remaining: formatMegabytes(remaining),
         })
-      : t("guestSupport", { limit: formatMegabytes(policy.effectiveMaxBytes) });
+      : t("guestSupport", {
+          limit: formatMegabytes(policy.effectiveMaxBytes),
+          remaining: formatMegabytes(remaining),
+        });
   }
 
   function uploadPolicyDetail(policy: UploadPolicy | null) {
     if (!policy) return null;
+    const quota = formatMegabytes(policy.cumulativeQuotaBytes ?? policy.effectiveMaxBytes);
+    const used = formatMegabytes(policy.cumulativeUsedBytes ?? 0);
     if (policy.viewerType === "registered") {
       return t("registeredLimit", {
         limit: formatMegabytes(policy.effectiveMaxBytes),
+        quota,
+        used,
       });
     }
     return t("guestLimit", {
       guestLimit: formatMegabytes(policy.effectiveMaxBytes),
       registeredLimit: formatMegabytes(policy.registeredMaxBytes),
+      quota,
+      used,
     });
   }
 
@@ -289,9 +305,11 @@ export default function ConversionCard({ category }: ConversionCardProps) {
                   {item.status === "converting" ? (
                     <div className="mt-3 px-2">
                       <div className="h-2 w-full overflow-hidden rounded-full bg-stone-100">
-                        <div
-                          className="h-full rounded-full bg-coral-500 transition-all duration-300"
-                          style={{ width: `${item.progress}%` }}
+                        <progress
+                          aria-label={t("converting", { progress: item.progress })}
+                          className="conversion-progress"
+                          max={100}
+                          value={item.progress}
                         />
                       </div>
                     </div>

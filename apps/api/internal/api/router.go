@@ -21,42 +21,46 @@ import (
 
 // Deps groups all dependencies needed to wire up routes.
 type Deps struct {
-	Logger                         zerolog.Logger
-	Metrics                        *observability.Metrics
-	Database                       *sql.DB
-	StorageBasePath                string
-	Store                          storage.Store
-	Files                          repository.FileRepository
-	Jobs                           repository.JobRepository
-	Artifacts                      repository.ArtifactRepository
-	Audit                          repository.AuditRepository
-	Users                          repository.UserRepository
-	Dashboard                      repository.DashboardRepository
-	Workers                        repository.WorkerStatusRepository
-	RuntimeControls                repository.RuntimeControlRepository
-	SiteSettings                   repository.SiteSettingRepository
-	EmailTemplates                 repository.EmailTemplateRepository
-	Webhooks                       repository.WebhookRepository
-	EmailService                   *email.Service
-	SecretKeeper                   *security.SecretKeeper
-	Queue                          queue.JobQueue
-	Orchestrator                   *orchestrator.Service
-	AuthService                    *auth.Service
-	CORSOrigin                     string
-	ExposeMetrics                  bool
-	MetricsToken                   string
-	TrustProxyHeaders              bool
-	ArtifactTTLHours               int
-	ArtifactTTLByFamily            map[string]int
-	QueueMode                      string
-	WorkerConcurrency              int
-	RedisURL                       string
-	UserUploadsPerMinute           int
-	UserUploadBurst                int
-	UserConversionsPerMinute       int
-	UserConversionBurst            int
-	GuestCumulativeQuotaBytes      int64
-	RegisteredCumulativeQuotaBytes int64
+	Logger                                  zerolog.Logger
+	Metrics                                 *observability.Metrics
+	Database                                *sql.DB
+	StorageBasePath                         string
+	Store                                   storage.Store
+	Files                                   repository.FileRepository
+	Jobs                                    repository.JobRepository
+	Artifacts                               repository.ArtifactRepository
+	Audit                                   repository.AuditRepository
+	Users                                   repository.UserRepository
+	PasswordResets                          repository.PasswordResetRepository
+	EmailVerifications                      repository.EmailVerificationRepository
+	Dashboard                               repository.DashboardRepository
+	Workers                                 repository.WorkerStatusRepository
+	RuntimeControls                         repository.RuntimeControlRepository
+	SiteSettings                            repository.SiteSettingRepository
+	EmailTemplates                          repository.EmailTemplateRepository
+	Webhooks                                repository.WebhookRepository
+	EmailService                            *email.Service
+	SecretKeeper                            *security.SecretKeeper
+	Queue                                   queue.JobQueue
+	Orchestrator                            *orchestrator.Service
+	AuthService                             *auth.Service
+	AppURL                                  string
+	CORSOrigin                              string
+	ExposeMetrics                           bool
+	MetricsToken                            string
+	TrustProxyHeaders                       bool
+	ArtifactTTLHours                        int
+	ArtifactTTLByFamily                     map[string]int
+	QueueMode                               string
+	WorkerConcurrency                       int
+	RedisURL                                string
+	UserUploadsPerMinute                    int
+	UserUploadBurst                         int
+	UserConversionsPerMinute                int
+	UserConversionBurst                     int
+	GuestCumulativeQuotaBytes               int64
+	RegisteredCumulativeQuotaBytes          int64
+	RequireVerifiedEmailForSensitiveActions bool
 }
 
 // NewRouter creates the chi router with all middleware and routes.
@@ -77,11 +81,12 @@ func NewRouter(d Deps) *chi.Mux {
 
 	// Global middleware
 	r.Use(chimw.Recoverer)
-	r.Use(middleware.SecurityHeaders)
+	r.Use(middleware.SecurityHeadersWithTrustProxy(d.TrustProxyHeaders))
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Logging(d.Logger))
 	r.Use(middleware.MetricsMiddleware(d.Metrics))
 	r.Use(middleware.CORS(d.CORSOrigin))
+	r.Use(middleware.CSRF(d.CORSOrigin, d.TrustProxyHeaders))
 	r.Use(middleware.RateLimit(20, 40, d.TrustProxyHeaders, d.Metrics))
 	r.Use(middleware.MaxBodySize(500 * 1024 * 1024)) // 500 MB global limit
 
@@ -109,14 +114,22 @@ func NewRouter(d Deps) *chi.Mux {
 
 		// Auth routes (public)
 		authH := &handlers.AuthHandler{
-			Auth:   d.AuthService,
-			Email:  d.EmailService,
-			Queue:  d.Queue,
-			Audit:  d.Audit,
-			Logger: d.Logger,
+			Auth:               d.AuthService,
+			Email:              d.EmailService,
+			Queue:              d.Queue,
+			PasswordResets:     d.PasswordResets,
+			EmailVerifications: d.EmailVerifications,
+			Users:              d.Users,
+			AppURL:             d.AppURL,
+			Audit:              d.Audit,
+			Logger:             d.Logger,
+			TrustProxyHeaders:  d.TrustProxyHeaders,
 		}
 		r.With(middleware.RateLimit(1, 5, d.TrustProxyHeaders, d.Metrics)).Post("/auth/register", authH.Register)
 		r.With(middleware.RateLimit(1, 5, d.TrustProxyHeaders, d.Metrics)).Post("/auth/login", authH.Login)
+		r.With(middleware.RateLimit(1, 5, d.TrustProxyHeaders, d.Metrics)).Post("/auth/password-reset/request", authH.PasswordResetRequest)
+		r.With(middleware.RateLimit(1, 5, d.TrustProxyHeaders, d.Metrics)).Post("/auth/password-reset/confirm", authH.PasswordResetConfirm)
+		r.With(middleware.RateLimit(1, 5, d.TrustProxyHeaders, d.Metrics)).Post("/auth/email-verification/confirm", authH.EmailVerificationConfirm)
 		r.Post("/auth/logout", authH.Logout)
 
 		// File and conversion routes — optional authentication keeps ownership when
@@ -136,6 +149,7 @@ func NewRouter(d Deps) *chi.Mux {
 				Metrics:                        d.Metrics,
 				GuestCumulativeQuotaBytes:      d.GuestCumulativeQuotaBytes,
 				RegisteredCumulativeQuotaBytes: d.RegisteredCumulativeQuotaBytes,
+				TrustProxyHeaders:              d.TrustProxyHeaders,
 			}
 			r.Get("/upload-policy", uploadPolicy.Get)
 			r.With(middleware.RateLimit(1, 2, d.TrustProxyHeaders, d.Metrics), uploadQuota).Post("/files", upload.Handle)
@@ -180,17 +194,22 @@ func NewRouter(d Deps) *chi.Mux {
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Auth(d.AuthService, d.Users))
 			r.Get("/auth/me", authH.Me)
+			r.With(middleware.RateLimit(1, 5, d.TrustProxyHeaders, d.Metrics)).Post("/auth/email-verification/request", authH.EmailVerificationRequest)
 
 			dashboard := &handlers.DashboardHandler{Dashboard: d.Dashboard, Audit: d.Audit}
 			r.Get("/dashboard/me", dashboard.Me)
 
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.RequireAdmin)
+				adminMutations := r
+				if d.RequireVerifiedEmailForSensitiveActions {
+					adminMutations = r.With(middleware.RequireVerifiedEmail)
+				}
 				r.Get("/admin/health", detailedHealth.Handle)
 				r.Get("/admin/overview", dashboard.AdminOverview)
 				r.Get("/admin/engines", dashboard.AdminEngines)
-				r.Put("/admin/footer-message", footer.Update)
-				r.Put("/admin/upload-policy", uploadPolicy.Update)
+				adminMutations.Put("/admin/footer-message", footer.Update)
+				adminMutations.Put("/admin/upload-policy", uploadPolicy.Update)
 
 				// SMTP settings
 				smtpH := &handlers.SMTPSettingsHandler{
@@ -200,8 +219,8 @@ func NewRouter(d Deps) *chi.Mux {
 					Audit:    d.Audit,
 				}
 				r.Get("/admin/smtp-settings", smtpH.Get)
-				r.Put("/admin/smtp-settings", smtpH.Update)
-				r.Post("/admin/smtp-test", smtpH.Test)
+				adminMutations.Put("/admin/smtp-settings", smtpH.Update)
+				adminMutations.Post("/admin/smtp-test", smtpH.Test)
 
 				// Email templates
 				emailTmplH := &handlers.EmailTemplateHandler{
@@ -212,18 +231,18 @@ func NewRouter(d Deps) *chi.Mux {
 				webhookH := &handlers.WebhookHandler{Webhooks: d.Webhooks, Audit: d.Audit}
 				adminJobsH := &handlers.AdminJobsHandler{Jobs: d.Jobs, Orchestrator: d.Orchestrator, Files: d.Files, Store: d.Store, Audit: d.Audit}
 				r.Get("/admin/email-templates", emailTmplH.List)
-				r.Post("/admin/email-templates", emailTmplH.Create)
+				adminMutations.Post("/admin/email-templates", emailTmplH.Create)
 				r.Get("/admin/email-templates/{key}", emailTmplH.Get)
-				r.Put("/admin/email-templates/{key}", emailTmplH.Update)
-				r.Delete("/admin/email-templates/{key}", emailTmplH.Delete)
-				r.Post("/admin/email-templates/{key}/preview", emailTmplH.Preview)
+				adminMutations.Put("/admin/email-templates/{key}", emailTmplH.Update)
+				adminMutations.Delete("/admin/email-templates/{key}", emailTmplH.Delete)
+				adminMutations.Post("/admin/email-templates/{key}/preview", emailTmplH.Preview)
 				r.Get("/admin/webhooks", webhookH.List)
-				r.Post("/admin/webhooks", webhookH.Create)
-				r.Put("/admin/webhooks/{webhookId}", webhookH.Update)
-				r.Delete("/admin/webhooks/{webhookId}", webhookH.Delete)
+				adminMutations.Post("/admin/webhooks", webhookH.Create)
+				adminMutations.Put("/admin/webhooks/{webhookId}", webhookH.Update)
+				adminMutations.Delete("/admin/webhooks/{webhookId}", webhookH.Delete)
 				r.Get("/admin/jobs", adminJobsH.List)
-				r.Post("/admin/jobs/batch/cancel", adminJobsH.CancelBatch)
-				r.Post("/admin/jobs/batch/retry", adminJobsH.RetryBatch)
+				adminMutations.Post("/admin/jobs/batch/cancel", adminJobsH.CancelBatch)
+				adminMutations.Post("/admin/jobs/batch/retry", adminJobsH.RetryBatch)
 
 				adminUsersH := &handlers.AdminUsersHandler{Users: d.Users, Audit: d.Audit}
 				adminAuditH := &handlers.AdminAuditHandler{Audit: d.Audit}
@@ -235,12 +254,12 @@ func NewRouter(d Deps) *chi.Mux {
 					Audit:           d.Audit,
 				}
 				r.Get("/admin/users", adminUsersH.List)
-				r.Patch("/admin/users/{userId}/role", adminUsersH.UpdateRole)
-				r.Patch("/admin/users/{userId}/suspension", adminUsersH.UpdateSuspension)
-				r.Post("/admin/users/{userId}/revoke-sessions", adminUsersH.RevokeSessions)
-				r.Patch("/admin/support/queue/intake", supportH.UpdateJobIntake)
-				r.Post("/admin/support/queue/drain", supportH.DrainQueuedJobs)
-				r.Post("/admin/support/workers/prune-stale", supportH.PruneStaleWorkers)
+				adminMutations.Patch("/admin/users/{userId}/role", adminUsersH.UpdateRole)
+				adminMutations.Patch("/admin/users/{userId}/suspension", adminUsersH.UpdateSuspension)
+				adminMutations.Post("/admin/users/{userId}/revoke-sessions", adminUsersH.RevokeSessions)
+				adminMutations.Patch("/admin/support/queue/intake", supportH.UpdateJobIntake)
+				adminMutations.Post("/admin/support/queue/drain", supportH.DrainQueuedJobs)
+				adminMutations.Post("/admin/support/workers/prune-stale", supportH.PruneStaleWorkers)
 				r.Get("/admin/audit", adminAuditH.List)
 				r.Get("/admin/audit/export", adminAuditH.ExportCSV)
 			})

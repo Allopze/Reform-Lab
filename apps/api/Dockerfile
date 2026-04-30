@@ -41,8 +41,8 @@ RUN apt-get update && \
 		&& /opt/reform-lab-python/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
 		&& rm -rf /var/lib/apt/lists/* \
 		&& rm -f /tmp/requirements.txt \
-		&& groupadd --system app \
-		&& useradd --system --gid app --create-home --home-dir /home/app app \
+		&& groupadd --gid 10001 app \
+		&& useradd --uid 10001 --gid app --create-home --home-dir /home/app app \
 		&& mkdir -p /data /tmp/reform-home /app \
 		&& chown -R app:app /app /data /tmp/reform-home /home/app
 WORKDIR /app
@@ -52,4 +52,5 @@ COPY scripts/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod 755 /app/docker-entrypoint.sh
 
 EXPOSE 8080
+USER app
 ENTRYPOINT ["/app/docker-entrypoint.sh", "/app/server"]

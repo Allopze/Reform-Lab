@@ -9,7 +9,7 @@ import (
 const guestSessionCookieName = "reform_guest_session"
 const guestSessionCookieMaxAgeSeconds = 72 * 60 * 60
 
-func ensureGuestSession(w http.ResponseWriter, r *http.Request) *uuid.UUID {
+func ensureGuestSession(w http.ResponseWriter, r *http.Request, trustProxyHeaders bool) *uuid.UUID {
 	if guestID := currentGuestSessionID(r); guestID != nil {
 		return guestID
 	}
@@ -21,7 +21,7 @@ func ensureGuestSession(w http.ResponseWriter, r *http.Request) *uuid.UUID {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   requestUsesHTTPS(r),
+		Secure:   requestUsesHTTPS(r, trustProxyHeaders),
 		MaxAge:   guestSessionCookieMaxAgeSeconds,
 	})
 	return &guestID

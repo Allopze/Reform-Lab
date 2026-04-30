@@ -129,7 +129,7 @@ Persistencia del despliegue:
 
 - archivos originales, temporales, artefactos y SQLite quedan en `./runtime/data`
 - Redis persiste en `./runtime/redis`
-- los contenedores `api` y `worker` reclaman la propiedad de `./runtime/data` al arrancar para que SQLite y storage puedan escribir aunque el bind mount se haya creado como `root:root`
+- el servicio one-shot `data-permissions` prepara la propiedad de `./runtime/data` antes de arrancar `api` y `worker`; los procesos runtime corren como usuario no-root sin capacidades añadidas
 
 Eso significa que, si despliegas el proyecto en `/opt/reform-lab`, los archivos subidos quedarán físicamente bajo `/opt/reform-lab/runtime/data/originals` y los artefactos bajo `/opt/reform-lab/runtime/data/artifacts`.
 
@@ -216,6 +216,7 @@ Notas operativas:
 | `SECRET_ENCRYPTION_KEY` | no, pero muy recomendable si usas SMTP/webhooks configurados desde admin | vacío | clave para cifrar en reposo secretos persistidos por panel admin; acepta 32 bytes raw o base64 de 32 bytes |
 | `REDIS_URL` | no en local, sí en producción | vacío | activa cola Redis; vacío usa cola en proceso |
 | `BOOTSTRAP_ADMIN_EMAILS` | no | vacío | lista separada por comas con los emails autorizados a reclamar el primer admin en `production` |
+| `REQUIRE_VERIFIED_EMAIL_FOR_SENSITIVE_ACTIONS` | no | `false` | si está activo, exige email verificado para mutaciones sensibles autenticadas como cambios admin, webhooks, usuarios y soporte |
 | `APP_URL` | no | hereda `CORS_ORIGIN` | URL pública base usada por emails y links generados por backend; en producción debería ser la URL HTTPS pública del proxy |
 | `MAX_ACTIVE_JOBS_PER_GUEST_SESSION` | no | `1` | limita cuántas conversiones activas puede mantener una sesión anónima simultáneamente |
 | `EXPOSE_METRICS` | no | `false` | expone `/metrics` para Prometheus |
@@ -286,6 +287,7 @@ Notas sobre Sentry:
 
 - `NEXT_PUBLIC_SENTRY_DSN` es la llave que realmente activa la integración
 - `SENTRY_ORG` y `SENTRY_PROJECT` solo tienen sentido si estás construyendo la web con soporte Sentry habilitado
+- la advertencia de build de Sentry/OpenTelemetry sobre dependencias dinámicas en instrumentación Prisma se acepta como no bloqueante mientras `npm run build`, tests y auditorías sigan pasando; revisarla al actualizar Sentry u OpenTelemetry
 
 ### Variables de despliegue Docker Compose
 

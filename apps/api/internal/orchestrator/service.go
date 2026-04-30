@@ -334,6 +334,14 @@ func (s *Service) CancelJob(ctx context.Context, id uuid.UUID) error {
 
 // RetryFailedJob creates a new queued job from a previously failed job.
 func (s *Service) RetryFailedJob(ctx context.Context, sourceJob *domain.Job, cap domain.Capability, inputPath string) (*domain.Job, error) {
+	return s.retryFailedJob(ctx, sourceJob, nil, cap, inputPath)
+}
+
+func (s *Service) RetryFailedJobForGuest(ctx context.Context, guestSessionID uuid.UUID, sourceJob *domain.Job, cap domain.Capability, inputPath string) (*domain.Job, error) {
+	return s.retryFailedJob(ctx, sourceJob, &guestSessionID, cap, inputPath)
+}
+
+func (s *Service) retryFailedJob(ctx context.Context, sourceJob *domain.Job, guestSessionID *uuid.UUID, cap domain.Capability, inputPath string) (*domain.Job, error) {
 	if sourceJob == nil {
 		return nil, fmt.Errorf("source job is required")
 	}
@@ -341,7 +349,13 @@ func (s *Service) RetryFailedJob(ctx context.Context, sourceJob *domain.Job, cap
 		return nil, fmt.Errorf("%w: retry only allowed for failed jobs", domain.ErrInvalidTransition)
 	}
 
-	retryJob, err := s.CreateAndEnqueue(ctx, sourceJob.UserID, sourceJob.FileID, cap, inputPath)
+	var retryJob *domain.Job
+	var err error
+	if guestSessionID != nil {
+		retryJob, err = s.CreateAndEnqueueForGuest(ctx, *guestSessionID, sourceJob.FileID, cap, inputPath)
+	} else {
+		retryJob, err = s.CreateAndEnqueue(ctx, sourceJob.UserID, sourceJob.FileID, cap, inputPath)
+	}
 	if err != nil {
 		return nil, err
 	}

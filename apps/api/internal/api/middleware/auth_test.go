@@ -1,10 +1,15 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/allopze/reform-lab/apps/api/internal/domain"
+	"github.com/google/uuid"
 )
 
 func TestCORSAllowsAnyConfiguredOriginFromList(t *testing.T) {
@@ -95,5 +100,47 @@ func TestBearerTokenAuthRejectsMismatchedToken(t *testing.T) {
 	}
 	if got := res.Header().Get("WWW-Authenticate"); got == "" {
 		t.Fatal("expected WWW-Authenticate header on unauthorized response")
+	}
+}
+
+func TestRequireVerifiedEmailRejectsUnverifiedUser(t *testing.T) {
+	handler := RequireVerifiedEmail(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/webhooks", nil)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey{}, &domain.User{
+		ID:    uuid.New(),
+		Email: "unverified@example.com",
+		Role:  domain.RoleAdmin,
+	}))
+	res := httptest.NewRecorder()
+
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", res.Code)
+	}
+}
+
+func TestRequireVerifiedEmailAcceptsVerifiedUser(t *testing.T) {
+	handler := RequireVerifiedEmail(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	now := time.Now().UTC()
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/webhooks", nil)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey{}, &domain.User{
+		ID:              uuid.New(),
+		Email:           "verified@example.com",
+		Role:            domain.RoleAdmin,
+		EmailVerifiedAt: &now,
+	}))
+	res := httptest.NewRecorder()
+
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", res.Code)
 	}
 }

@@ -105,7 +105,8 @@ export default function AdminJobsTable() {
     job.status === "queued" || job.status === "running";
   const isRetryable = (job: AdminJobRow) => job.status === "failed";
 
-  const totalPages = Math.ceil(page.total / PAGE_SIZE);
+  const pageTotal = page.total;
+  const totalPages = Math.ceil(pageTotal / PAGE_SIZE);
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
   const selectedJobs = page.jobs.filter((job) => selectedJobIds.includes(job.jobId));
   const selectableJobs = page.jobs.filter((job) => isCancelable(job) || isRetryable(job));
@@ -200,7 +201,7 @@ export default function AdminJobsTable() {
   }
 
   async function handleFilterAction(action: "cancel" | "retry") {
-    if (!window.confirm(t(action === "cancel" ? "confirmCancelFilter" : "confirmRetryFilter", { count: page.total }))) {
+    if (!window.confirm(t(action === "cancel" ? "confirmCancelFilter" : "confirmRetryFilter", { count: pageTotal }))) {
       return;
     }
     try {
@@ -257,7 +258,7 @@ export default function AdminJobsTable() {
         </label>
 
         <span className="ml-auto text-xs text-stone-500">
-          {t("totalJobs", { count: page.total })}
+          {t("totalJobs", { count: pageTotal })}
         </span>
       </div>
 
@@ -293,7 +294,7 @@ export default function AdminJobsTable() {
         </button>
         <button
           type="button"
-          disabled={page.total === 0 || bulkAction !== null}
+          disabled={pageTotal === 0 || bulkAction !== null}
           onClick={() => {
             void handleFilterAction("cancel");
           }}
@@ -303,7 +304,7 @@ export default function AdminJobsTable() {
         </button>
         <button
           type="button"
-          disabled={page.total === 0 || bulkAction !== null}
+          disabled={pageTotal === 0 || bulkAction !== null}
           onClick={() => {
             void handleFilterAction("retry");
           }}

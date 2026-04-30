@@ -2,7 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 const playwrightPort = process.env.PLAYWRIGHT_PORT ?? "5070";
 const baseURL = `http://127.0.0.1:${playwrightPort}`;
-const webServerCommand = `sh -ac 'set -a; . ../../.env; set +a; exec next dev -p ${playwrightPort}'`;
+const webServerCommand = `sh -ac 'set -a; [ ! -f ../../.env ] || . ../../.env; set +a; exec next dev -p ${playwrightPort}'`;
 
 export default defineConfig({
   testDir: "./e2e",

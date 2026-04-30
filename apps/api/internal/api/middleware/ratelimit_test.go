@@ -138,7 +138,7 @@ func TestRateLimitIgnoresForwardedForWhenProxyHeadersDisabled(t *testing.T) {
 }
 
 func TestSecurityHeaders(t *testing.T) {
-	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := SecurityHeadersWithTrustProxy(true)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 

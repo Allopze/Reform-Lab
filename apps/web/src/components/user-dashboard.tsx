@@ -13,6 +13,7 @@ import {
   type UserDashboardData,
   type UserDashboardJob,
 } from "@/lib/api";
+import { requestEmailVerification } from "@/lib/auth";
 import { useAuth } from "@/lib/auth-context";
 
 function formatDate(value: string): string {
@@ -32,6 +33,8 @@ export default function UserDashboard() {
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [verificationStatus, setVerificationStatus] = useState<string | null>(null);
+  const [verificationSending, setVerificationSending] = useState(false);
   const [selectedJobIds, setSelectedJobIds] = useState<string[]>([]);
 
   const refreshDashboard = useCallback(async () => {
@@ -125,8 +128,47 @@ export default function UserDashboard() {
     }
   }
 
+  async function handleVerificationRequest() {
+    try {
+      setError(null);
+      setVerificationStatus(null);
+      setVerificationSending(true);
+      const result = await requestEmailVerification();
+      setVerificationStatus(
+        result.status === "already_verified"
+          ? t("emailAlreadyVerified")
+          : t("emailVerificationSent"),
+      );
+    } catch (err) {
+      setVerificationStatus(err instanceof Error ? err.message : t("emailVerificationError"));
+    } finally {
+      setVerificationSending(false);
+    }
+  }
+
   return (
     <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1.45fr)_minmax(280px,0.55fr)]">
+      {user && !user.emailVerifiedAt ? (
+        <section className="lg:col-span-2 rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-900">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-medium">{t("emailVerificationTitle")}</p>
+              <p className="mt-1 text-amber-800">{t("emailVerificationDescription")}</p>
+              {verificationStatus ? (
+                <p className="mt-2 font-medium">{verificationStatus}</p>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleVerificationRequest()}
+              disabled={verificationSending}
+              className="h-10 rounded-lg border border-amber-300 bg-white px-4 text-sm font-medium text-amber-900 transition-colors duration-150 hover:border-amber-400 disabled:cursor-not-allowed disabled:text-amber-400"
+            >
+              {verificationSending ? tCommon("sending") : t("sendVerificationEmail")}
+            </button>
+          </div>
+        </section>
+      ) : null}
       <section className="overflow-hidden rounded-xl border border-stone-200 bg-white">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 px-5 py-4">
           <div>
@@ -223,9 +265,11 @@ export default function UserDashboard() {
                     {(job.status === "running" || job.status === "queued") && job.progress > 0 ? (
                       <div className="flex items-center gap-2">
                         <div className="h-1.5 w-16 rounded-full bg-stone-200">
-                          <div
-                            className="h-full rounded-full bg-coral-600 transition-all"
-                            style={{ width: `${job.progress}%` }}
+                          <progress
+                            aria-label={t(`status.${job.status}`)}
+                            className="conversion-progress conversion-progress--compact"
+                            max={100}
+                            value={job.progress}
                           />
                         </div>
                         <span className="text-xs text-stone-500">{job.progress}%</span>

@@ -4,7 +4,9 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -38,8 +40,6 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/security"
 	"github.com/allopze/reform-lab/apps/api/internal/storage"
 	"github.com/allopze/reform-lab/apps/api/internal/workers"
-	"github.com/allopze/reform-lab/apps/api/internal/workers/document"
-	workerImage "github.com/allopze/reform-lab/apps/api/internal/workers/image"
 	"github.com/google/uuid"
 )
 
@@ -87,7 +87,7 @@ func setupE2E(t *testing.T) *testEnv {
 		userConversionBurst:      3,
 		maxActiveJobsPerUser:     3,
 		maxActiveJobsPerGuest:    1,
-	}, false)
+	}, false, false)
 }
 
 func setupE2EWithWorker(t *testing.T) *testEnv {
@@ -99,15 +99,27 @@ func setupE2EWithWorker(t *testing.T) *testEnv {
 		userConversionBurst:      3,
 		maxActiveJobsPerUser:     3,
 		maxActiveJobsPerGuest:    1,
-	}, true)
+	}, true, false)
 }
 
 func setupE2EWithLimits(t *testing.T, limits e2eLimits) *testEnv {
 	t.Helper()
-	return setupE2EWithConfig(t, limits, false)
+	return setupE2EWithConfig(t, limits, false, false)
 }
 
-func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEnv {
+func setupE2ERequiringVerifiedEmail(t *testing.T) *testEnv {
+	t.Helper()
+	return setupE2EWithConfig(t, e2eLimits{
+		userUploadsPerMinute:     12,
+		userUploadBurst:          4,
+		userConversionsPerMinute: 6,
+		userConversionBurst:      3,
+		maxActiveJobsPerUser:     3,
+		maxActiveJobsPerGuest:    1,
+	}, false, true)
+}
+
+func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool, requireVerifiedEmailForSensitiveActions bool) *testEnv {
 	t.Helper()
 
 	tmpDir := t.TempDir()
@@ -162,10 +174,7 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 	// tests can opt into an embedded worker path.
 	var workerHandler *workers.Handler
 	if withWorker {
-		registry := workers.NewRegistry()
-		registry.Register("image-heic-to-png", &workerImage.HEIFConvertEngine{})
-		registry.Register("presentation-to-jpg", &document.PresentationToImagesEngine{})
-		registry.Register("spreadsheet-to-csv", &document.ToCSVEngine{})
+		registry := workers.BuildDefaultRegistry()
 
 		workerHandler = &workers.Handler{
 			Registry:    registry,
@@ -210,39 +219,45 @@ func setupE2EWithConfig(t *testing.T, limits e2eLimits, withWorker bool) *testEn
 	// Email
 	emailTemplateRepo := repository.NewEmailTemplateRepository(db)
 	emailSvc := emailpkg.NewService(&config.Config{SecretEncryptionKey: "0123456789abcdef0123456789abcdef"}, siteSettingRepo, emailTemplateRepo, logger, emailpkg.WithSecretKeeper(secretKeeper))
+	passwordResetRepo := repository.NewPasswordResetRepository(db)
+	emailVerificationRepo := repository.NewEmailVerificationRepository(db)
 
 	router := api.NewRouter(api.Deps{
-		Logger:                         logger,
-		Metrics:                        metrics,
-		Database:                       db,
-		StorageBasePath:                storagePath,
-		Store:                          store,
-		Files:                          fileRepo,
-		Jobs:                           jobRepo,
-		Artifacts:                      artifactRepo,
-		Audit:                          auditRepo,
-		Users:                          userRepo,
-		Dashboard:                      dashboardRepo,
-		Workers:                        workerStatusRepo,
-		RuntimeControls:                runtimeControlRepo,
-		SiteSettings:                   siteSettingRepo,
-		EmailTemplates:                 emailTemplateRepo,
-		Webhooks:                       webhookRepo,
-		EmailService:                   emailSvc,
-		SecretKeeper:                   secretKeeper,
-		Queue:                          jobQueue,
-		Orchestrator:                   orch,
-		AuthService:                    authSvc,
-		CORSOrigin:                     "*",
-		ExposeMetrics:                  false,
-		TrustProxyHeaders:              false,
-		UserUploadsPerMinute:           limits.userUploadsPerMinute,
-		UserUploadBurst:                limits.userUploadBurst,
-		UserConversionsPerMinute:       limits.userConversionsPerMinute,
-		UserConversionBurst:            limits.userConversionBurst,
-		GuestCumulativeQuotaBytes:      500 * 1024 * 1024, // 500 MB for test
-		RegisteredCumulativeQuotaBytes: 500 * 1024 * 1024, // 500 MB for test
-		ArtifactTTLHours:               24,
+		Logger:                                  logger,
+		Metrics:                                 metrics,
+		Database:                                db,
+		StorageBasePath:                         storagePath,
+		Store:                                   store,
+		Files:                                   fileRepo,
+		Jobs:                                    jobRepo,
+		Artifacts:                               artifactRepo,
+		Audit:                                   auditRepo,
+		Users:                                   userRepo,
+		PasswordResets:                          passwordResetRepo,
+		EmailVerifications:                      emailVerificationRepo,
+		Dashboard:                               dashboardRepo,
+		Workers:                                 workerStatusRepo,
+		RuntimeControls:                         runtimeControlRepo,
+		SiteSettings:                            siteSettingRepo,
+		EmailTemplates:                          emailTemplateRepo,
+		Webhooks:                                webhookRepo,
+		EmailService:                            emailSvc,
+		SecretKeeper:                            secretKeeper,
+		Queue:                                   jobQueue,
+		Orchestrator:                            orch,
+		AuthService:                             authSvc,
+		AppURL:                                  "http://localhost",
+		CORSOrigin:                              "*",
+		ExposeMetrics:                           false,
+		TrustProxyHeaders:                       false,
+		UserUploadsPerMinute:                    limits.userUploadsPerMinute,
+		UserUploadBurst:                         limits.userUploadBurst,
+		UserConversionsPerMinute:                limits.userConversionsPerMinute,
+		UserConversionBurst:                     limits.userConversionBurst,
+		GuestCumulativeQuotaBytes:               500 * 1024 * 1024, // 500 MB for test
+		RegisteredCumulativeQuotaBytes:          500 * 1024 * 1024, // 500 MB for test
+		RequireVerifiedEmailForSensitiveActions: requireVerifiedEmailForSensitiveActions,
+		ArtifactTTLHours:                        24,
 		ArtifactTTLByFamily: map[string]int{
 			"pdf":      48,
 			"image":    12,
@@ -278,6 +293,11 @@ func registerUserClient(t *testing.T, env *testEnv, name, email string) *http.Cl
 		t.Fatalf("register %s: token should not be exposed in auth response", email)
 	}
 	return client
+}
+
+func e2eTokenHash(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
 }
 
 // ── Helpers ──
@@ -709,6 +729,48 @@ func TestE2E_AdminCanUpdateFooterMessage(t *testing.T) {
 	}
 }
 
+func TestE2E_VerifiedEmailPolicyGatesSensitiveAdminMutations(t *testing.T) {
+	env := setupE2ERequiringVerifiedEmail(t)
+	defer env.close()
+
+	adminClient := registerUserClient(t, env, "VerifiedPolicyAdmin", "verified-policy-admin@test.com")
+
+	resp, data := doGetClient(adminClient, env.server.URL+"/api/admin/overview", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin overview should remain readable: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+
+	resp, data = doPutClient(adminClient, env.server.URL+"/api/admin/footer-message", map[string]string{"message": "bloqueado"}, "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("unverified admin mutation: expected 403, got %d — %v", resp.StatusCode, data)
+	}
+	if data["error"] != "email verification required" {
+		t.Fatalf("unexpected unverified admin error: %v", data["error"])
+	}
+
+	resp, me := doGetClient(adminClient, env.server.URL+"/api/auth/me", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("auth/me: expected 200, got %d — %v", resp.StatusCode, me)
+	}
+	userID, ok := me["id"].(string)
+	if !ok || userID == "" {
+		t.Fatalf("expected user id in /auth/me response, got %v", me["id"])
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := env.db.Exec(`UPDATE users SET email_verified_at = ? WHERE id = ?`, now, userID); err != nil {
+		t.Fatalf("mark email verified: %v", err)
+	}
+
+	nextMessage := "Politica sensible con email verificado"
+	resp, data = doPutClient(adminClient, env.server.URL+"/api/admin/footer-message", map[string]string{"message": nextMessage}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("verified admin mutation: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	if data["message"] != nextMessage {
+		t.Fatalf("expected updated footer message, got %v", data["message"])
+	}
+}
+
 func TestE2E_AdminCanUpdateUploadPolicy(t *testing.T) {
 	env := setupE2E(t)
 	defer env.close()
@@ -886,6 +948,60 @@ func TestE2E_RegisterAndLogin(t *testing.T) {
 	}
 	if !seenLogin || !seenLoginFailed || !seenLogout {
 		t.Fatalf("expected session audit events (login, login_failed, logout), got %v", events)
+	}
+}
+
+func TestE2E_EmailVerificationConfirmMarksUserVerified(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+	client := registerUserClient(t, env, "Verifier", "verify@test.com")
+
+	resp, me := doGetClient(client, env.server.URL+"/api/auth/me", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("auth/me: expected 200, got %d — %v", resp.StatusCode, me)
+	}
+	if _, ok := me["emailVerifiedAt"]; ok {
+		t.Fatalf("email should start unverified, got %v", me["emailVerifiedAt"])
+	}
+	userID, ok := me["id"].(string)
+	if !ok || userID == "" {
+		t.Fatalf("expected user id in /auth/me response, got %v", me["id"])
+	}
+
+	rawToken := "verify-token-for-e2e"
+	now := time.Now().UTC()
+	_, err := env.db.Exec(
+		`INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at, used_at, created_at)
+		 VALUES (?, ?, ?, ?, NULL, ?)`,
+		uuid.New().String(),
+		userID,
+		e2eTokenHash(rawToken),
+		now.Add(time.Hour).Format(time.RFC3339),
+		now.Format(time.RFC3339),
+	)
+	if err != nil {
+		t.Fatalf("insert verification token: %v", err)
+	}
+
+	resp, data := doPost(env.server.URL+"/api/auth/email-verification/confirm", map[string]string{"token": rawToken}, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("confirm email verification: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+	if data["status"] != "email_verified" {
+		t.Fatalf("unexpected verification status: %v", data["status"])
+	}
+
+	resp, me = doGetClient(client, env.server.URL+"/api/auth/me", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("auth/me after verification: expected 200, got %d — %v", resp.StatusCode, me)
+	}
+	if me["emailVerifiedAt"] == nil || me["emailVerifiedAt"] == "" {
+		t.Fatalf("expected emailVerifiedAt after verification, got %v", me["emailVerifiedAt"])
+	}
+
+	resp, data = doPost(env.server.URL+"/api/auth/email-verification/confirm", map[string]string{"token": rawToken}, "")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("reusing verification token: expected 400, got %d — %v", resp.StatusCode, data)
 	}
 }
 
@@ -1463,6 +1579,53 @@ func TestE2E_RealFixtureHEIFConversion(t *testing.T) {
 	}
 }
 
+func TestE2E_RealUploadConvertDownloadPNGThumbnail(t *testing.T) {
+	env := setupE2EWithWorker(t)
+	defer env.close()
+
+	client := registerUserClient(t, env, "ImageUser", "image-real@test.com")
+	resp, fileData := uploadNoisyPNGClient(client, env.server.URL, "", 640)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("upload png fixture: expected 201, got %d — %v", resp.StatusCode, fileData)
+	}
+	fileID := fileData["id"].(string)
+
+	_, capsData := doGetClient(client, fmt.Sprintf("%s/api/files/%s/capabilities", env.server.URL, fileID), "")
+	capID := requireCapabilityID(t, capsData, "image-thumbnail-png")
+
+	resp, jobData := doPostClient(client, env.server.URL+"/api/conversions", map[string]string{
+		"fileId":       fileID,
+		"capabilityId": capID,
+	}, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create png thumbnail conversion: expected 201, got %d — %v", resp.StatusCode, jobData)
+	}
+
+	terminal := waitForTerminalJob(t, client, env.server.URL, jobData["id"].(string))
+	if terminal["status"] != "succeeded" {
+		t.Fatalf("expected succeeded thumbnail job, got %v", terminal)
+	}
+	if terminal["artifactFileName"] != "converted.png" {
+		t.Fatalf("expected artifact filename converted.png, got %v", terminal["artifactFileName"])
+	}
+	if terminal["artifactMimeType"] != "image/png" {
+		t.Fatalf("expected artifact mime image/png, got %v", terminal["artifactMimeType"])
+	}
+
+	artifactID := terminal["artifactId"].(string)
+	downloadResp, body := downloadArtifactClient(client, env.server.URL, artifactID)
+	if downloadResp.StatusCode != http.StatusOK {
+		t.Fatalf("download png thumbnail artifact: expected 200, got %d", downloadResp.StatusCode)
+	}
+	decoded, _, err := image.DecodeConfig(bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("decode thumbnail png artifact: %v", err)
+	}
+	if decoded.Width > 320 || decoded.Height > 320 {
+		t.Fatalf("expected thumbnail <= 320px, got %dx%d", decoded.Width, decoded.Height)
+	}
+}
+
 func TestE2E_RealFixtureComplexHEIFConversion(t *testing.T) {
 	if !capabilities.DefaultProber.IsAvailable("libheif") {
 		t.Skip("libheif runtime not available")
@@ -1865,6 +2028,85 @@ func TestE2E_MaxActiveJobsPerGuestSession(t *testing.T) {
 	}
 	if data["error"] != "too many active jobs for this guest session" {
 		t.Fatalf("unexpected guest active job error: %v", data["error"])
+	}
+}
+
+func TestE2E_RetryFailedGuestJobRespectsActiveJobLimit(t *testing.T) {
+	env := setupE2EWithLimits(t, e2eLimits{
+		userUploadsPerMinute:     60,
+		userUploadBurst:          10,
+		userConversionsPerMinute: 60,
+		userConversionBurst:      10,
+		maxActiveJobsPerUser:     10,
+		maxActiveJobsPerGuest:    1,
+	})
+	defer env.close()
+
+	client := newCookieClient(t)
+	_, fileData := uploadPNGClient(client, env.server.URL, "")
+	fileID := fileData["id"].(string)
+	_, capsData := doGetClient(client, fmt.Sprintf("%s/api/files/%s/capabilities", env.server.URL, fileID), "")
+	capID := capsData["capabilities"].([]interface{})[0].(map[string]interface{})["id"].(string)
+
+	resp, jobData := doPostClient(client, env.server.URL+"/api/conversions", map[string]string{
+		"fileId":       fileID,
+		"capabilityId": capID,
+	}, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("guest job: expected 201, got %d — %v", resp.StatusCode, jobData)
+	}
+	jobID := jobData["id"].(string)
+	parsedJobID := uuid.MustParse(jobID)
+	if err := env.orch.MarkRunning(context.Background(), parsedJobID); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if err := env.orch.MarkFailed(context.Background(), parsedJobID, "simulated worker failure"); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+
+	resp, retryData := doPostClient(client, fmt.Sprintf("%s/api/jobs/%s/retry", env.server.URL, jobID), nil, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("first retry: expected 201, got %d — %v", resp.StatusCode, retryData)
+	}
+	resp, retryData = doPostClient(client, fmt.Sprintf("%s/api/jobs/%s/retry", env.server.URL, jobID), nil, "")
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("second retry should be blocked by guest active limit, got %d — %v", resp.StatusCode, retryData)
+	}
+}
+
+func TestE2E_RetryFailedJobReturnsGoneWhenOriginalMissing(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	client := registerUserClient(t, env, "ExpiredRetryUser", "expired-retry@test.com")
+	_, fileData := uploadPNGClient(client, env.server.URL, "")
+	fileID := fileData["id"].(string)
+	_, capsData := doGetClient(client, fmt.Sprintf("%s/api/files/%s/capabilities", env.server.URL, fileID), "")
+	capID := capsData["capabilities"].([]interface{})[0].(map[string]interface{})["id"].(string)
+
+	resp, jobData := doPostClient(client, env.server.URL+"/api/conversions", map[string]string{
+		"fileId":       fileID,
+		"capabilityId": capID,
+	}, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("job: expected 201, got %d — %v", resp.StatusCode, jobData)
+	}
+	jobID := jobData["id"].(string)
+	parsedJobID := uuid.MustParse(jobID)
+	if err := env.orch.MarkRunning(context.Background(), parsedJobID); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if err := env.orch.MarkFailed(context.Background(), parsedJobID, "simulated worker failure"); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+	originalPath := filepath.Join(env.tmpDir, "storage", "originals", fileID, "data")
+	if err := os.Remove(originalPath); err != nil {
+		t.Fatalf("remove original: %v", err)
+	}
+
+	resp, retryData := doPostClient(client, fmt.Sprintf("%s/api/jobs/%s/retry", env.server.URL, jobID), nil, "")
+	if resp.StatusCode != http.StatusGone {
+		t.Fatalf("retry should return 410 when original is missing, got %d — %v", resp.StatusCode, retryData)
 	}
 }
 

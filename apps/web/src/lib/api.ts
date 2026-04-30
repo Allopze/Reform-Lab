@@ -1,8 +1,9 @@
 import { API_URL } from "./config";
+import { csrfHeaders } from "./csrf";
 import { DEFAULT_FOOTER_MESSAGE } from "./footer-message";
 
 function headers(): HeadersInit {
-  return {};
+  return csrfHeaders();
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -41,6 +42,8 @@ export interface UploadPolicy {
   effectiveMaxBytes: number;
   viewerType: "guest" | "registered";
   absoluteMaxBytes: number;
+  cumulativeQuotaBytes: number;
+  cumulativeUsedBytes: number;
 }
 
 export async function getUploadPolicy(): Promise<UploadPolicy> {

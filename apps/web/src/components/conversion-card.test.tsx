@@ -216,6 +216,8 @@ describe("ConversionCard", () => {
       effectiveMaxBytes: 5 * 1024 * 1024,
       viewerType: "guest",
       absoluteMaxBytes: 500 * 1024 * 1024,
+      cumulativeQuotaBytes: 15 * 1024 * 1024,
+      cumulativeUsedBytes: 5 * 1024 * 1024,
     });
   });
 
@@ -375,11 +377,11 @@ describe("ConversionCard", () => {
     );
 
     expect(
-      await screen.findByText("hasta 5 MB como invitado"),
+      await screen.findByText("hasta 5 MB por archivo como invitado; quedan 10 MB"),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        /Como invitado puedes subir hasta 5 MB por archivo; con cuenta registrada, hasta 25 MB\./,
+        /Como invitado puedes subir hasta 5 MB por archivo; con cuenta registrada, hasta 25 MB\. Cuota usada: 5 MB de 15 MB\./,
       ),
     ).toBeInTheDocument();
 

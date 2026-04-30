@@ -1,10 +1,14 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -23,11 +27,16 @@ const sessionCookieMaxAgeSeconds = 72 * 60 * 60
 
 // AuthHandler handles POST /api/auth/register and /api/auth/login.
 type AuthHandler struct {
-	Auth   *auth.Service
-	Email  *email.Service
-	Queue  queue.JobQueue
-	Audit  repository.AuditRepository
-	Logger zerolog.Logger
+	Auth               *auth.Service
+	Email              *email.Service
+	Queue              queue.JobQueue
+	PasswordResets     repository.PasswordResetRepository
+	EmailVerifications repository.EmailVerificationRepository
+	Users              repository.UserRepository
+	AppURL             string
+	Audit              repository.AuditRepository
+	Logger             zerolog.Logger
+	TrustProxyHeaders  bool
 }
 
 type registerRequest struct {
@@ -40,6 +49,19 @@ type registerRequest struct {
 type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+}
+
+type passwordResetRequest struct {
+	Email string `json:"email"`
+}
+
+type passwordResetConfirmRequest struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+
+type emailVerificationConfirmRequest struct {
+	Token string `json:"token"`
 }
 
 // Register handles POST /api/auth/register.
@@ -82,7 +104,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeSessionCookie(w, r, result.SessionToken)
+	h.writeSessionCookie(w, r, result.SessionToken)
 
 	// Enqueue welcome email (best-effort, never blocks registration).
 	if h.Email != nil && h.Queue != nil && h.Email.Configured(r.Context()) {
@@ -99,6 +121,9 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			h.Logger.Warn().Err(err).Str("user_id", result.User.ID.String()).Msg("failed to enqueue welcome email")
 		}
+	}
+	if err := h.enqueueEmailVerification(r, result.User); err != nil {
+		h.Logger.Warn().Err(err).Str("user_id", result.User.ID.String()).Msg("failed to enqueue email verification")
 	}
 
 	respondJSON(w, http.StatusCreated, result)
@@ -145,7 +170,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeSessionCookie(w, r, result.SessionToken)
+	h.writeSessionCookie(w, r, result.SessionToken)
 	h.auditSession(r, domain.AuditSessionLogin, &result.User.ID, map[string]interface{}{
 		"role": result.User.Role,
 	})
@@ -165,7 +190,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.auditSession(r, domain.AuditSessionLogout, userID, details)
-	clearSessionCookie(w, r)
+	h.clearSessionCookie(w, r)
 	respondJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
 
@@ -179,35 +204,321 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, u)
 }
 
-func writeSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
+// PasswordResetRequest handles POST /api/auth/password-reset/request.
+// It creates a one-time reset token and sends it via email.
+func (h *AuthHandler) PasswordResetRequest(w http.ResponseWriter, r *http.Request) {
+	if h.Auth == nil || h.Users == nil || h.PasswordResets == nil {
+		respondError(w, http.StatusServiceUnavailable, "password reset unavailable")
+		return
+	}
+	if h.Email == nil || h.Queue == nil || !h.Email.Configured(r.Context()) {
+		respondError(w, http.StatusServiceUnavailable, "password reset unavailable")
+		return
+	}
+	if strings.TrimSpace(h.AppURL) == "" {
+		respondError(w, http.StatusServiceUnavailable, "password reset unavailable")
+		return
+	}
+
+	var req passwordResetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+	if req.Email == "" {
+		respondError(w, http.StatusBadRequest, "email is required")
+		return
+	}
+
+	u, err := h.Users.GetByEmail(r.Context(), req.Email)
+	if err != nil {
+		if errors.Is(err, domain.ErrUserNotFound) {
+			h.auditSession(r, domain.AuditPasswordResetRequested, nil, map[string]interface{}{"email": req.Email, "result": "no_user"})
+			respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "request failed")
+		return
+	}
+	if u == nil {
+		// Avoid leaking whether an email exists.
+		h.auditSession(r, domain.AuditPasswordResetRequested, nil, map[string]interface{}{"email": req.Email, "result": "no_user"})
+		respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+
+	rawToken, err := newResetToken()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "request failed")
+		return
+	}
+	tokenHash := hashResetToken(rawToken)
+	now := time.Now().UTC()
+	expiresAt := now.Add(1 * time.Hour)
+
+	// Keep it simple: single active token per user.
+	_ = h.PasswordResets.DeleteForUser(r.Context(), u.ID)
+	if err := h.PasswordResets.Create(r.Context(), u.ID, tokenHash, expiresAt, now); err != nil {
+		respondError(w, http.StatusInternalServerError, "request failed")
+		return
+	}
+
+	resetURL := buildPasswordResetURL(h.AppURL, rawToken)
+	err = h.Queue.EnqueueEmail(r.Context(), queue.EmailTaskPayload{
+		TemplateKey: "password-reset",
+		To:          u.Email,
+		Vars: map[string]string{
+			"Name":     u.Name,
+			"AppName":  "Reform Lab",
+			"ResetURL": resetURL,
+			"Year":     fmt.Sprintf("%d", time.Now().Year()),
+		},
+	}, queue.TaskOptions{MaxRetries: 3, Timeout: 30 * time.Second})
+	if err != nil {
+		h.Logger.Warn().Err(err).Str("user_id", u.ID.String()).Msg("failed to enqueue password reset email")
+		respondError(w, http.StatusInternalServerError, "request failed")
+		return
+	}
+
+	h.auditSession(r, domain.AuditPasswordResetRequested, &u.ID, map[string]interface{}{"email": u.Email, "result": "enqueued"})
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// PasswordResetConfirm handles POST /api/auth/password-reset/confirm.
+// It consumes a token, updates the password, and revokes sessions.
+func (h *AuthHandler) PasswordResetConfirm(w http.ResponseWriter, r *http.Request) {
+	if h.Auth == nil || h.Users == nil || h.PasswordResets == nil {
+		respondError(w, http.StatusServiceUnavailable, "password reset unavailable")
+		return
+	}
+
+	var req passwordResetConfirmRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.Token = strings.TrimSpace(req.Token)
+	if req.Token == "" {
+		respondError(w, http.StatusBadRequest, "token is required")
+		return
+	}
+	req.Password = strings.TrimSpace(req.Password)
+	if len(req.Password) < 8 {
+		respondError(w, http.StatusBadRequest, "password must be at least 8 characters")
+		return
+	}
+
+	userID, err := h.PasswordResets.Consume(r.Context(), hashResetToken(req.Token), time.Now().UTC())
+	if err != nil {
+		if errors.Is(err, domain.ErrPasswordResetTokenInvalid) {
+			h.auditSession(r, domain.AuditPasswordResetCompleted, nil, map[string]interface{}{"result": "invalid_token"})
+			respondError(w, http.StatusBadRequest, "invalid or expired token")
+			return
+		}
+		h.auditSession(r, domain.AuditPasswordResetCompleted, nil, map[string]interface{}{"result": "internal_error"})
+		respondError(w, http.StatusInternalServerError, "reset failed")
+		return
+	}
+
+	passwordHash, err := h.Auth.HashPassword(req.Password)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "reset failed")
+		return
+	}
+	if err := h.Users.UpdatePasswordHash(r.Context(), userID, passwordHash); err != nil {
+		respondError(w, http.StatusInternalServerError, "reset failed")
+		return
+	}
+	_, _ = h.Users.RevokeSessions(r.Context(), userID)
+
+	h.clearSessionCookie(w, r)
+	h.auditSession(r, domain.AuditPasswordResetCompleted, &userID, map[string]interface{}{"result": "ok"})
+	respondJSON(w, http.StatusOK, map[string]string{"status": "password_reset"})
+}
+
+// EmailVerificationRequest handles POST /api/auth/email-verification/request.
+// It creates a new verification token for the current authenticated user.
+func (h *AuthHandler) EmailVerificationRequest(w http.ResponseWriter, r *http.Request) {
+	u := middleware.UserFromContext(r.Context())
+	if u == nil {
+		respondError(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	if u.EmailVerifiedAt != nil {
+		respondJSON(w, http.StatusOK, map[string]string{"status": "already_verified"})
+		return
+	}
+	if err := h.enqueueEmailVerification(r, u); err != nil {
+		if errors.Is(err, errEmailVerificationUnavailable) {
+			respondError(w, http.StatusServiceUnavailable, "email verification unavailable")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "request failed")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// EmailVerificationConfirm handles POST /api/auth/email-verification/confirm.
+// It consumes a one-time token and marks the user's email as verified.
+func (h *AuthHandler) EmailVerificationConfirm(w http.ResponseWriter, r *http.Request) {
+	if h.Users == nil || h.EmailVerifications == nil {
+		respondError(w, http.StatusServiceUnavailable, "email verification unavailable")
+		return
+	}
+
+	var req emailVerificationConfirmRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.Token = strings.TrimSpace(req.Token)
+	if req.Token == "" {
+		respondError(w, http.StatusBadRequest, "token is required")
+		return
+	}
+
+	now := time.Now().UTC()
+	userID, err := h.EmailVerifications.Consume(r.Context(), hashAuthToken(req.Token), now)
+	if err != nil {
+		if errors.Is(err, domain.ErrEmailVerificationTokenInvalid) {
+			h.auditSession(r, domain.AuditEmailVerificationCompleted, nil, map[string]interface{}{"result": "invalid_token"})
+			respondError(w, http.StatusBadRequest, "invalid or expired token")
+			return
+		}
+		h.auditSession(r, domain.AuditEmailVerificationCompleted, nil, map[string]interface{}{"result": "internal_error"})
+		respondError(w, http.StatusInternalServerError, "verification failed")
+		return
+	}
+	if err := h.Users.UpdateEmailVerifiedAt(r.Context(), userID, &now); err != nil {
+		respondError(w, http.StatusInternalServerError, "verification failed")
+		return
+	}
+
+	h.auditSession(r, domain.AuditEmailVerificationCompleted, &userID, map[string]interface{}{"result": "ok"})
+	respondJSON(w, http.StatusOK, map[string]string{"status": "email_verified"})
+}
+
+var errEmailVerificationUnavailable = errors.New("email verification unavailable")
+
+func (h *AuthHandler) enqueueEmailVerification(r *http.Request, u *domain.User) error {
+	if u == nil || u.EmailVerifiedAt != nil {
+		return nil
+	}
+	if h.Users == nil || h.EmailVerifications == nil || h.Email == nil || h.Queue == nil {
+		return errEmailVerificationUnavailable
+	}
+	if !h.Email.Configured(r.Context()) || strings.TrimSpace(h.AppURL) == "" {
+		return errEmailVerificationUnavailable
+	}
+
+	rawToken, err := newAuthToken()
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	expiresAt := now.Add(24 * time.Hour)
+
+	_ = h.EmailVerifications.DeleteForUser(r.Context(), u.ID)
+	if err := h.EmailVerifications.Create(r.Context(), u.ID, hashAuthToken(rawToken), expiresAt, now); err != nil {
+		return err
+	}
+
+	err = h.Queue.EnqueueEmail(r.Context(), queue.EmailTaskPayload{
+		TemplateKey: "email-verification",
+		To:          u.Email,
+		Vars: map[string]string{
+			"Name":      u.Name,
+			"AppName":   "Reform Lab",
+			"VerifyURL": buildEmailVerificationURL(h.AppURL, rawToken),
+			"Year":      fmt.Sprintf("%d", time.Now().Year()),
+		},
+	}, queue.TaskOptions{MaxRetries: 3, Timeout: 30 * time.Second})
+	if err != nil {
+		return err
+	}
+
+	h.auditSession(r, domain.AuditEmailVerificationRequested, &u.ID, map[string]interface{}{"email": u.Email, "result": "enqueued"})
+	return nil
+}
+
+func newResetToken() (string, error) {
+	return newAuthToken()
+}
+
+func newAuthToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func hashResetToken(raw string) string {
+	return hashAuthToken(raw)
+}
+
+func hashAuthToken(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+func buildPasswordResetURL(appURL string, token string) string {
+	parsed, err := url.Parse(strings.TrimSpace(appURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return strings.TrimRight(appURL, "/") + "/acceso?mode=reset&token=" + url.QueryEscape(token)
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/acceso"
+	q := parsed.Query()
+	q.Set("mode", "reset")
+	q.Set("token", token)
+	parsed.RawQuery = q.Encode()
+	return parsed.String()
+}
+
+func buildEmailVerificationURL(appURL string, token string) string {
+	parsed, err := url.Parse(strings.TrimSpace(appURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return strings.TrimRight(appURL, "/") + "/acceso?mode=verify&token=" + url.QueryEscape(token)
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/acceso"
+	q := parsed.Query()
+	q.Set("mode", "verify")
+	q.Set("token", token)
+	parsed.RawQuery = q.Encode()
+	return parsed.String()
+}
+
+func (h *AuthHandler) writeSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   requestUsesHTTPS(r),
+		Secure:   requestUsesHTTPS(r, h.TrustProxyHeaders),
 		MaxAge:   sessionCookieMaxAgeSeconds,
 	})
 }
 
-func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+func (h *AuthHandler) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   requestUsesHTTPS(r),
+		Secure:   requestUsesHTTPS(r, h.TrustProxyHeaders),
 		MaxAge:   -1,
 	})
 }
 
-func requestUsesHTTPS(r *http.Request) bool {
+func requestUsesHTTPS(r *http.Request, trustProxyHeaders bool) bool {
 	if r.TLS != nil {
 		return true
 	}
-	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+	return trustProxyHeaders && strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
 }
 
 func (h *AuthHandler) auditSession(r *http.Request, eventType domain.AuditEventType, userID *uuid.UUID, details map[string]interface{}) {

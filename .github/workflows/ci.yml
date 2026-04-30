@@ -66,6 +66,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Dependency audit
+        run: npm audit --omit=dev --audit-level=moderate
+
       - name: Lint
         run: npm run lint
 
@@ -77,20 +80,60 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8080
 
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Playwright tests
+        run: npm run test:e2e
+        env:
+          JWT_SECRET: test-strong-jwt-secret-for-playwright-1234567890
+          NEXT_PUBLIC_API_URL: http://127.0.0.1:5070
+
   docker:
-    name: Docker build
+    name: Docker compose
     runs-on: ubuntu-latest
     needs: [backend, frontend]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    env:
+      WEB_BIND_ADDRESS: 127.0.0.1
+      API_BIND_ADDRESS: 127.0.0.1
+      WEB_HOST_PORT: 5050
+      API_HOST_PORT: 8080
+      APP_ENV: production
+      CORS_ORIGIN: http://127.0.0.1:5050
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:8080
+      APP_URL: http://127.0.0.1:5050
+      JWT_SECRET: test-strong-jwt-secret-for-docker-ci-1234567890
+      SECRET_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef
+      REDIS_URL: redis://redis:6379
+      TRUST_PROXY_HEADERS: "false"
+      REQUIRE_VERIFIED_EMAIL_FOR_SENSITIVE_ACTIONS: "false"
 
     steps:
       - uses: actions/checkout@v5
+
+      - name: Validate compose config
+        run: docker compose config
 
       - name: Build API image
         run: docker build -f apps/api/Dockerfile -t reform-api:ci apps/api
 
       - name: Build Worker image
         run: docker build -f apps/api/Dockerfile.worker -t reform-worker:ci apps/api
+
+      - name: Compose up with clean runtime
+        run: |
+          rm -rf runtime
+          docker compose up -d --build
+          curl --fail --retry 20 --retry-delay 3 http://127.0.0.1:8080/api/health
+
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Compose down
+        if: always()
+        run: docker compose down -v --remove-orphans
 
       - name: Scan API image
         uses: aquasecurity/trivy-action@0.33.1

@@ -42,7 +42,7 @@ Es una guía para actuar sin improvisar.
 
 - SQLite, originales, temporales y artefactos viven en `./runtime/data` relativo al directorio donde se ejecuta `docker compose`
 - Redis persiste en `./runtime/redis`
-- `api` y `worker` corrigen la ownership de `./runtime/data` al arrancar para evitar fallos de SQLite en despliegues nuevos con bind mounts vacíos
+- `data-permissions` corrige la ownership de `./runtime/data` antes de que arranquen `api` y `worker`; después, los procesos runtime escriben como usuario no-root sin capacidades añadidas
 
 ### Procedimiento base
 
@@ -62,6 +62,13 @@ Es una guía para actuar sin improvisar.
 - cambios en `NEXT_PUBLIC_API_URL` requieren rebuild del servicio `web`
 - no borrar manualmente `./runtime/data` sin entender el impacto en SQLite y artefactos
 - si el servidor queda detrás de proxy, mantener `TRUST_PROXY_HEADERS=true` solo si ese proxy sanea `X-Forwarded-*`
+- `REQUIRE_VERIFIED_EMAIL_FOR_SENSITIVE_ACTIONS=true` exige email verificado para mutaciones sensibles; actívalo solo después de comprobar que SMTP y el flujo de verificación funcionan para los administradores
+
+### Advertencia conocida: Sentry/OpenTelemetry en build web
+
+`npm run build` puede emitir una advertencia no bloqueante de Sentry/OpenTelemetry por dependencia dinámica en instrumentación Prisma.
+La política operativa actual es aceptarla si el build termina OK y siguen pasando tests, `npm audit --omit=dev` y `govulncheck`.
+Revisar esta nota cuando se actualicen Sentry, OpenTelemetry o la instrumentación de Next.js.
 
 ---
 

@@ -18,6 +18,12 @@ function formatMegabytes(bytes: number) {
   return `${Math.round(bytes / BYTES_PER_MB)} MB`;
 }
 
+function cumulativeRemaining(policy: UploadPolicy) {
+  const quota = policy.cumulativeQuotaBytes ?? policy.effectiveMaxBytes;
+  const used = policy.cumulativeUsedBytes ?? 0;
+  return Math.max(0, quota - used);
+}
+
 function makeLocalId(file: File, index: number) {
   return `${file.name}-${file.size}-${index}-${crypto.randomUUID()}`;
 }
@@ -127,10 +133,12 @@ export function useUpload(
 
       setItems(nextItems);
 
+      let reservedBytes = 0;
       for (let index = 0; index < nextItems.length; index += 1) {
+        const fileSize = nextItems[index].file.size;
         if (
           uploadPolicy &&
-          nextItems[index].file.size > uploadPolicy.effectiveMaxBytes
+          fileSize > uploadPolicy.effectiveMaxBytes
         ) {
           nextItems[index] = {
             ...nextItems[index],
@@ -142,9 +150,33 @@ export function useUpload(
           setItems([...nextItems]);
           continue;
         }
+        if (
+          uploadPolicy &&
+          fileSize > cumulativeRemaining(uploadPolicy) - reservedBytes
+        ) {
+          const remaining = Math.max(0, cumulativeRemaining(uploadPolicy) - reservedBytes);
+          nextItems[index] = {
+            ...nextItems[index],
+            status: "error",
+            message: t("exceedsQuota", {
+              remaining: formatMegabytes(remaining),
+            }),
+          };
+          setItems([...nextItems]);
+          continue;
+        }
 
         try {
           const uploaded = await uploadFile(nextItems[index].file);
+          reservedBytes += fileSize;
+          setUploadPolicy((current) =>
+            current
+              ? {
+                  ...current,
+                  cumulativeUsedBytes: current.cumulativeUsedBytes + fileSize,
+                }
+              : current,
+          );
           nextItems[index] = {
             ...nextItems[index],
             uploadedFileId: uploaded.id,

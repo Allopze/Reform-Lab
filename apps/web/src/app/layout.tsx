@@ -14,16 +14,26 @@ const geist = Geist({
   variable: "--font-geist",
 });
 
+function publicAppUrl() {
+  const configured = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL;
+  try {
+    return new URL(configured || "https://reformlab.app");
+  } catch {
+    return new URL("https://reformlab.app");
+  }
+}
+
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("metadata");
+  const appUrl = publicAppUrl();
   return {
     title: t("title"),
     description: t("description"),
-    metadataBase: new URL("https://reformlab.app"),
+    metadataBase: appUrl,
     openGraph: {
       title: t("ogTitle"),
       description: t("ogDescription"),
-      url: "https://reformlab.app",
+      url: appUrl.toString(),
       siteName: "Reform Lab",
       locale: "es_ES",
       type: "website",

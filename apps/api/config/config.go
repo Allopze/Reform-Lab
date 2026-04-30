@@ -14,35 +14,36 @@ import (
 
 // Config holds all application configuration loaded from environment variables.
 type Config struct {
-	AppEnv                         string
-	Port                           int
-	DatabasePath                   string
-	MigrationsPath                 string
-	RedisURL                       string // empty = use in-process queue (no Redis needed)
-	StorageBasePath                string
-	CORSOrigin                     string
-	LogLevel                       string
-	JWTSecret                      string
-	ExposeMetrics                  bool
-	MetricsToken                   string // optional bearer token to protect /metrics
-	TrustProxyHeaders              bool
-	InProcessConcurrency           int
-	WorkerConcurrency              int
-	UserUploadsPerMinute           int
-	UserUploadBurst                int
-	UserConversionsPerMinute       int
-	UserConversionBurst            int
-	MaxActiveJobsPerUser           int
-	MaxActiveJobsPerGuestSession   int
-	ArtifactTTLHours               int // how many hours artifacts are retained before cleanup
-	OriginalTTLHours               int
-	TempTTLHours                   int
-	ArtifactTTLByFamily            map[domain.FormatFamily]int
-	GuestCumulativeQuotaBytes      int64 // max total bytes across all files for a guest session
-	RegisteredCumulativeQuotaBytes int64 // max total bytes across all files for a registered user
-	DisabledCapabilities           []string
-	DisabledEngines                []string
-	BootstrapAdminEmails           []string
+	AppEnv                                  string
+	Port                                    int
+	DatabasePath                            string
+	MigrationsPath                          string
+	RedisURL                                string // empty = use in-process queue (no Redis needed)
+	StorageBasePath                         string
+	CORSOrigin                              string
+	LogLevel                                string
+	JWTSecret                               string
+	ExposeMetrics                           bool
+	MetricsToken                            string // optional bearer token to protect /metrics
+	TrustProxyHeaders                       bool
+	InProcessConcurrency                    int
+	WorkerConcurrency                       int
+	UserUploadsPerMinute                    int
+	UserUploadBurst                         int
+	UserConversionsPerMinute                int
+	UserConversionBurst                     int
+	MaxActiveJobsPerUser                    int
+	MaxActiveJobsPerGuestSession            int
+	ArtifactTTLHours                        int // how many hours artifacts are retained before cleanup
+	OriginalTTLHours                        int
+	TempTTLHours                            int
+	ArtifactTTLByFamily                     map[domain.FormatFamily]int
+	GuestCumulativeQuotaBytes               int64 // max total bytes across all files for a guest session
+	RegisteredCumulativeQuotaBytes          int64 // max total bytes across all files for a registered user
+	DisabledCapabilities                    []string
+	DisabledEngines                         []string
+	BootstrapAdminEmails                    []string
+	RequireVerifiedEmailForSensitiveActions bool
 
 	AppURL string // public URL for email links; defaults to CORS_ORIGIN
 
@@ -139,6 +140,7 @@ func Load() (*Config, error) {
 	disabledCapabilities := parseCSVEnv("FEATURE_DISABLE_CAPABILITIES")
 	disabledEngines := parseCSVEnv("FEATURE_DISABLE_ENGINES")
 	bootstrapAdminEmails := parseCSVEnv("BOOTSTRAP_ADMIN_EMAILS")
+	requireVerifiedEmailForSensitiveActions := lookupBoolEnv("REQUIRE_VERIFIED_EMAIL_FOR_SENSITIVE_ACTIONS", false)
 
 	appURL := os.Getenv("APP_URL")
 	if appURL == "" {
@@ -162,43 +164,44 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		AppEnv:                         appEnv,
-		Port:                           port,
-		DatabasePath:                   dbPath,
-		MigrationsPath:                 migrationsPath,
-		RedisURL:                       redisURL,
-		StorageBasePath:                storagePath,
-		CORSOrigin:                     corsOrigin,
-		LogLevel:                       logLevel,
-		JWTSecret:                      jwtSecret,
-		ExposeMetrics:                  exposeMetrics,
-		MetricsToken:                   metricsToken,
-		TrustProxyHeaders:              trustProxyHeaders,
-		InProcessConcurrency:           inProcessConcurrency,
-		WorkerConcurrency:              workerConcurrency,
-		UserUploadsPerMinute:           userUploadsPerMinute,
-		UserUploadBurst:                userUploadBurst,
-		UserConversionsPerMinute:       userConversionsPerMinute,
-		UserConversionBurst:            userConversionBurst,
-		MaxActiveJobsPerUser:           maxActiveJobsPerUser,
-		MaxActiveJobsPerGuestSession:   maxActiveJobsPerGuestSession,
-		GuestCumulativeQuotaBytes:      guestCumulativeQuota,
-		RegisteredCumulativeQuotaBytes: registeredCumulativeQuota,
-		ArtifactTTLHours:               artifactTTL,
-		OriginalTTLHours:               originalTTL,
-		TempTTLHours:                   tempTTL,
-		ArtifactTTLByFamily:            artifactTTLByFamily,
-		DisabledCapabilities:           disabledCapabilities,
-		DisabledEngines:                disabledEngines,
-		BootstrapAdminEmails:           bootstrapAdminEmails,
-		AppURL:                         appURL,
-		SMTPHost:                       smtpHost,
-		SMTPPort:                       smtpPort,
-		SMTPUser:                       smtpUser,
-		SMTPPassword:                   smtpPassword,
-		SMTPFrom:                       smtpFrom,
-		SMTPUseTLS:                     smtpUseTLS,
-		SecretEncryptionKey:            secretEncryptionKey,
+		AppEnv:                                  appEnv,
+		Port:                                    port,
+		DatabasePath:                            dbPath,
+		MigrationsPath:                          migrationsPath,
+		RedisURL:                                redisURL,
+		StorageBasePath:                         storagePath,
+		CORSOrigin:                              corsOrigin,
+		LogLevel:                                logLevel,
+		JWTSecret:                               jwtSecret,
+		ExposeMetrics:                           exposeMetrics,
+		MetricsToken:                            metricsToken,
+		TrustProxyHeaders:                       trustProxyHeaders,
+		InProcessConcurrency:                    inProcessConcurrency,
+		WorkerConcurrency:                       workerConcurrency,
+		UserUploadsPerMinute:                    userUploadsPerMinute,
+		UserUploadBurst:                         userUploadBurst,
+		UserConversionsPerMinute:                userConversionsPerMinute,
+		UserConversionBurst:                     userConversionBurst,
+		MaxActiveJobsPerUser:                    maxActiveJobsPerUser,
+		MaxActiveJobsPerGuestSession:            maxActiveJobsPerGuestSession,
+		GuestCumulativeQuotaBytes:               guestCumulativeQuota,
+		RegisteredCumulativeQuotaBytes:          registeredCumulativeQuota,
+		ArtifactTTLHours:                        artifactTTL,
+		OriginalTTLHours:                        originalTTL,
+		TempTTLHours:                            tempTTL,
+		ArtifactTTLByFamily:                     artifactTTLByFamily,
+		DisabledCapabilities:                    disabledCapabilities,
+		DisabledEngines:                         disabledEngines,
+		BootstrapAdminEmails:                    bootstrapAdminEmails,
+		RequireVerifiedEmailForSensitiveActions: requireVerifiedEmailForSensitiveActions,
+		AppURL:                                  appURL,
+		SMTPHost:                                smtpHost,
+		SMTPPort:                                smtpPort,
+		SMTPUser:                                smtpUser,
+		SMTPPassword:                            smtpPassword,
+		SMTPFrom:                                smtpFrom,
+		SMTPUseTLS:                              smtpUseTLS,
+		SecretEncryptionKey:                     secretEncryptionKey,
 	}, nil
 }
 

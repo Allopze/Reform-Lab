@@ -8,6 +8,7 @@ x-runtime-env: &runtime-env
   JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set to a strong value}"
   APP_URL: "${APP_URL:-http://localhost:${WEB_HOST_PORT:-5050}}"
   BOOTSTRAP_ADMIN_EMAILS: "${BOOTSTRAP_ADMIN_EMAILS:-}"
+  REQUIRE_VERIFIED_EMAIL_FOR_SENSITIVE_ACTIONS: "${REQUIRE_VERIFIED_EMAIL_FOR_SENSITIVE_ACTIONS:-false}"
   ORIGINAL_RETENTION_HOURS: "${ORIGINAL_RETENTION_HOURS:-24}"
   TEMP_RETENTION_HOURS: "${TEMP_RETENTION_HOURS:-6}"
   ARTIFACT_TTL_HOURS: "${ARTIFACT_TTL_HOURS:-24}"
@@ -44,6 +45,8 @@ services:
     environment:
       PORT: "5050"
       HOSTNAME: "0.0.0.0"
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set to a strong value}"
+      APP_URL: "${APP_URL:-http://localhost:${WEB_HOST_PORT:-5050}}"
       NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL must point to the public API URL}"
     networks:
       - public
@@ -74,12 +77,15 @@ services:
       - worker_internal
 
   api:
+    image: reform-lab-api:local
     build:
       context: ./apps/api
       dockerfile: Dockerfile
     init: true
     restart: unless-stopped
     depends_on:
+      data-permissions:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     ports:
@@ -109,12 +115,6 @@ services:
       - /run:size=16777216,mode=755
     cap_drop:
       - ALL
-    cap_add:
-      - CHOWN
-      - DAC_OVERRIDE
-      - FOWNER
-      - SETUID
-      - SETGID
     security_opt:
       - no-new-privileges:true
     healthcheck:
@@ -131,12 +131,15 @@ services:
       - worker_internal
 
   worker:
+    image: reform-lab-worker:local
     build:
       context: ./apps/api
       dockerfile: Dockerfile.worker
     init: true
     restart: unless-stopped
     depends_on:
+      data-permissions:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       api:
@@ -152,17 +155,25 @@ services:
       - /run:size=16777216,mode=755
     cap_drop:
       - ALL
-    cap_add:
-      - CHOWN
-      - DAC_OVERRIDE
-      - FOWNER
-      - SETUID
-      - SETGID
     security_opt:
       - no-new-privileges:true
     pids_limit: 512
     mem_limit: "${WORKER_MEMORY_LIMIT:-2048m}"
     cpus: "${WORKER_CPUS:-2.00}"
+    networks:
+      - worker_internal
+
+  data-permissions:
+    image: reform-lab-api:local
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command: "mkdir -p /data && chown -R 10001:10001 /data"
+    restart: "no"
+    volumes:
+      - ./runtime/data:/data
     networks:
       - worker_internal
 

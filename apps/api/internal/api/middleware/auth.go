@@ -107,6 +107,23 @@ func RequireAdmin(next http.Handler) http.Handler {
 	})
 }
 
+// RequireVerifiedEmail gates sensitive authenticated mutations behind an
+// explicitly verified account email.
+func RequireVerifiedEmail(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u := UserFromContext(r.Context())
+		if u == nil {
+			respondJSON(w, http.StatusUnauthorized, map[string]string{"error": "not authenticated"})
+			return
+		}
+		if u.EmailVerifiedAt == nil {
+			respondJSON(w, http.StatusForbidden, map[string]string{"error": "email verification required"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func respondJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

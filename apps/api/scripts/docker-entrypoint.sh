@@ -8,6 +8,5 @@ if [ "$#" -eq 0 ]; then
 fi
 
 mkdir -p /data "$HOME"
-chown -R app:app /data "$HOME"
 
-exec setpriv --reuid=app --regid=app --init-groups "$@"
+exec "$@"
