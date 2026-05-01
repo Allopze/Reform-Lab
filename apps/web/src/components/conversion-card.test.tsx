@@ -368,6 +368,81 @@ describe("ConversionCard", () => {
     );
   });
 
+  it("explains when an uploaded batch has no available capabilities", async () => {
+    getBatchCapabilitiesMock.mockResolvedValue([]);
+
+    const user = userEvent.setup();
+    render(
+      <IntlWrapper>
+        <ConversionCard category={getCategoryById("auto")} />
+      </IntlWrapper>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "mock-dropzone" }));
+    await waitFor(() => expect(uploadFileMock).toHaveBeenCalledTimes(2));
+
+    expect(
+      screen.getByText(
+        "No hay capacidades disponibles para este lote con la politica actual.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: "Opciones disponibles" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Convertir documento" }),
+    ).toBeDisabled();
+  });
+
+  it("explains mixed detected families when the batch has no common capability", async () => {
+    uploadFileMock.mockReset();
+    uploadFileMock
+      .mockResolvedValueOnce({
+        id: "file-1",
+        originalName: "slides-1.pptx",
+        size: 1024,
+        detectedFormat: {
+          mimeType: "application/pdf",
+          family: "pdf",
+          extension: "pdf",
+        },
+        uploadedAt: "2026-04-09T10:00:00Z",
+      })
+      .mockResolvedValueOnce({
+        id: "file-2",
+        originalName: "slides-2.pptx",
+        size: 1024,
+        detectedFormat: {
+          mimeType: "image/jpeg",
+          family: "image",
+          extension: "jpg",
+        },
+        uploadedAt: "2026-04-09T10:00:01Z",
+      });
+    getBatchCapabilitiesMock.mockResolvedValue([]);
+
+    const user = userEvent.setup();
+    render(
+      <IntlWrapper>
+        <ConversionCard category={getCategoryById("auto")} />
+      </IntlWrapper>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "mock-dropzone" }));
+    await waitFor(() => expect(uploadFileMock).toHaveBeenCalledTimes(2));
+
+    expect(
+      screen.getByText(
+        "Este lote mezcla familias detectadas y no tiene una capacidad comun. Selecciona archivos del mismo tipo para convertirlos juntos.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "No hay capacidades disponibles para este lote con la politica actual.",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows the active guest upload limit from backend policy", async () => {
     const user = userEvent.setup();
     render(

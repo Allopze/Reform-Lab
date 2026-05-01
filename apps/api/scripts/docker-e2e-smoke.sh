@@ -202,6 +202,39 @@ if not data.startswith(b'%PDF-'):
 PY
 }
 
+assert_webp() {
+	python3 - <<'PY' "$1"
+from pathlib import Path
+import sys
+
+data = Path(sys.argv[1]).read_bytes()
+if len(data) < 12 or data[:4] != b'RIFF' or data[8:12] != b'WEBP':
+    raise SystemExit(f'unexpected WebP header: {data[:16]!r}')
+PY
+}
+
+assert_mp3() {
+	python3 - <<'PY' "$1"
+from pathlib import Path
+import sys
+
+data = Path(sys.argv[1]).read_bytes()
+if not (data.startswith(b'ID3') or (len(data) >= 2 and data[0] == 0xff and (data[1] & 0xe0) == 0xe0)):
+    raise SystemExit(f'unexpected MP3 header: {data[:16]!r}')
+PY
+}
+
+assert_gif() {
+	python3 - <<'PY' "$1"
+from pathlib import Path
+import sys
+
+data = Path(sys.argv[1]).read_bytes()
+if not (data.startswith(b'GIF87a') or data.startswith(b'GIF89a')):
+    raise SystemExit(f'unexpected GIF header: {data[:12]!r}')
+PY
+}
+
 assert_zip_entries() {
 	python3 - <<'PY' "$1" "$2"
 from pathlib import Path
@@ -241,6 +274,119 @@ create_svg_fixture() {
 EOF
 }
 
+create_pdf_fixture() {
+	local pdf_path=$1
+	python3 - <<'PY' "$pdf_path"
+from pathlib import Path
+import sys
+
+output = Path(sys.argv[1])
+stream = b"BT\n/F1 18 Tf\n36 96 Td\n(Reform Lab PDF smoke text) Tj\nET\n"
+objects = [
+    b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+    b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+    b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n",
+    b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+    b"5 0 obj\n<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"endstream\nendobj\n",
+]
+data = bytearray(b"%PDF-1.4\n")
+offsets = [0]
+for obj in objects:
+    offsets.append(len(data))
+    data.extend(obj)
+xref_offset = len(data)
+data.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+data.extend(b"0000000000 65535 f \n")
+for offset in offsets[1:]:
+    data.extend(f"{offset:010d} 00000 n \n".encode())
+data.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode())
+output.write_bytes(data)
+PY
+}
+
+create_png_fixture() {
+	local png_path=$1
+	python3 - <<'PY' "$png_path"
+from pathlib import Path
+import base64
+import sys
+
+Path(sys.argv[1]).write_bytes(base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFElEQVR4nGP8z8DAwMDAxMDAwMAAAAYAAYdwhpQAAAAASUVORK5CYII="
+))
+PY
+}
+
+create_wav_fixture() {
+	local wav_path=$1
+	python3 - <<'PY' "$wav_path"
+from pathlib import Path
+import math
+import struct
+import sys
+import wave
+
+sample_rate = 8000
+duration = 1.0
+frames = int(sample_rate * duration)
+with wave.open(str(Path(sys.argv[1])), "wb") as wav:
+    wav.setnchannels(1)
+    wav.setsampwidth(2)
+    wav.setframerate(sample_rate)
+    for i in range(frames):
+        sample = int(12000 * math.sin(2 * math.pi * 440 * i / sample_rate))
+        wav.writeframes(struct.pack("<h", sample))
+PY
+}
+
+create_docx_fixture() {
+	local docx_path=$1
+	python3 - <<'PY' "$docx_path"
+from pathlib import Path
+import sys
+import zipfile
+
+files = {
+    "[Content_Types].xml": """<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>""",
+    "_rels/.rels": """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>""",
+    "word/document.xml": """<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Reform Lab DOCX smoke text</w:t></w:r></w:p>
+    <w:sectPr/>
+  </w:body>
+</w:document>""",
+}
+with zipfile.ZipFile(Path(sys.argv[1]), "w", zipfile.ZIP_DEFLATED) as zf:
+    for name, content in files.items():
+        zf.writestr(name, content)
+PY
+}
+
+create_video_fixture() {
+	local video_path=$1
+	local container_path="/tmp/reform-lab-smoke-video.mp4"
+	(
+		cd "$API_DIR"
+		docker compose -f docker-compose.yml exec -T api \
+			ffmpeg -y -hide_banner -loglevel error \
+			-f lavfi -i testsrc=size=160x120:rate=12 \
+			-t 2 \
+			-c:v mpeg4 \
+			-pix_fmt yuv420p \
+			"$container_path"
+		docker compose -f docker-compose.yml cp "api:$container_path" "$video_path" >/dev/null
+	)
+}
+
 log 'Starting Docker Compose stack'
 (
 	cd "$API_DIR"
@@ -256,6 +402,66 @@ log 'Starting Docker Compose stack'
 
 log 'Waiting for /api/health'
 wait_for_health
+
+log 'PDF -> TXT'
+register_user pdf
+create_pdf_fixture "$TMP_DIR/text.pdf"
+job_json=$(run_conversion "$TMP_DIR/text.pdf" pdf-to-txt)
+if [[ $(json_field "$job_json" status) != 'succeeded' ]]; then
+	printf 'PDF text extraction failed: %s\n' "$job_json" >&2
+	exit 1
+fi
+pdf_txt_artifact_id=$(json_field "$job_json" artifactId)
+download_artifact "$pdf_txt_artifact_id" "$TMP_DIR/pdf.txt"
+assert_file_contains "$TMP_DIR/pdf.txt" 'Reform Lab PDF smoke text'
+
+log 'PNG -> WebP'
+register_user png
+create_png_fixture "$TMP_DIR/image.png"
+job_json=$(run_conversion "$TMP_DIR/image.png" image-to-webp)
+if [[ $(json_field "$job_json" status) != 'succeeded' ]]; then
+	printf 'PNG to WebP conversion failed: %s\n' "$job_json" >&2
+	exit 1
+fi
+png_artifact_id=$(json_field "$job_json" artifactId)
+download_artifact "$png_artifact_id" "$TMP_DIR/image.webp"
+assert_webp "$TMP_DIR/image.webp"
+
+log 'WAV -> MP3'
+register_user wav
+create_wav_fixture "$TMP_DIR/tone.wav"
+job_json=$(run_conversion "$TMP_DIR/tone.wav" audio-to-mp3)
+if [[ $(json_field "$job_json" status) != 'succeeded' ]]; then
+	printf 'WAV to MP3 conversion failed: %s\n' "$job_json" >&2
+	exit 1
+fi
+audio_artifact_id=$(json_field "$job_json" artifactId)
+download_artifact "$audio_artifact_id" "$TMP_DIR/tone.mp3"
+assert_mp3 "$TMP_DIR/tone.mp3"
+
+log 'MP4 -> GIF'
+register_user mp4
+create_video_fixture "$TMP_DIR/video.mp4"
+job_json=$(run_conversion "$TMP_DIR/video.mp4" video-to-gif)
+if [[ $(json_field "$job_json" status) != 'succeeded' ]]; then
+	printf 'MP4 to GIF conversion failed: %s\n' "$job_json" >&2
+	exit 1
+fi
+video_artifact_id=$(json_field "$job_json" artifactId)
+download_artifact "$video_artifact_id" "$TMP_DIR/video.gif"
+assert_gif "$TMP_DIR/video.gif"
+
+log 'DOCX -> PDF'
+register_user docx
+create_docx_fixture "$TMP_DIR/document.docx"
+job_json=$(run_conversion "$TMP_DIR/document.docx" doc-to-pdf)
+if [[ $(json_field "$job_json" status) != 'succeeded' ]]; then
+	printf 'DOCX to PDF conversion failed: %s\n' "$job_json" >&2
+	exit 1
+fi
+docx_artifact_id=$(json_field "$job_json" artifactId)
+download_artifact "$docx_artifact_id" "$TMP_DIR/document.pdf"
+assert_pdf "$TMP_DIR/document.pdf"
 
 log 'HEIF -> PNG'
 register_user heif

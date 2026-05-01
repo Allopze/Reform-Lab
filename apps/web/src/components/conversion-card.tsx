@@ -223,6 +223,19 @@ export default function ConversionCard({ category }: ConversionCardProps) {
     () => items.filter((item) => item.status === "error"),
     [items],
   );
+  const uploadedDetectedFamilies = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          items
+            .filter((item) => item.uploadedFileId && item.status !== "error")
+            .map((item) => item.detectedFamily)
+            .filter(Boolean),
+        ),
+      ),
+    [items],
+  );
+  const hasMixedDetectedFamilies = uploadedDetectedFamilies.length > 1;
   const canStartConversion =
     selectedItems.length > 0 &&
     !isConverting &&
@@ -358,7 +371,9 @@ export default function ConversionCard({ category }: ConversionCardProps) {
           </div>
         ) : items.some((item) => item.uploadedFileId) ? (
           <div className="mt-6 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-4 text-sm text-stone-500">
-            {t("noCapabilities")}
+            {hasMixedDetectedFamilies
+              ? t("mixedBatchNoCapabilities")
+              : t("noCapabilities")}
           </div>
         ) : null}
 

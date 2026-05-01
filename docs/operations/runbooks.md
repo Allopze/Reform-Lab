@@ -26,8 +26,18 @@ Es una guía para actuar sin improvisar.
 ## Smoke de runtime
 
 - existe un smoke reproducible en `apps/api/scripts/docker-e2e-smoke.sh`
-- el smoke valida `HEIF -> PNG`, `SVG -> PDF`, `PPTX -> JPG ZIP` y `XLSX -> CSV` contra la stack real de Docker Compose
+- el smoke valida familias críticas contra la stack real de Docker Compose:
+  - `PDF -> TXT`
+  - `PNG -> WebP`
+  - `WAV -> MP3`
+  - `MP4 -> GIF`
+  - `DOCX -> PDF`
+  - `HEIF -> PNG`
+  - `SVG -> PDF`
+  - `PPTX -> JPG ZIP`
+  - `XLSX -> CSV`
 - el script espera `/api/health`, crea usuarios aislados por escenario y evita confundir cuotas anti-abuso con fallos funcionales
+- los fixtures simples de PDF, PNG, WAV, MP4 y DOCX se generan en runtime para no guardar binarios pesados o frágiles en el repo
 - usar un `JWT_SECRET` válido y suficientemente largo al ejecutarlo fuera de un entorno ya configurado
 
 ## Despliegue: Docker Compose en servidor
@@ -63,6 +73,15 @@ Es una guía para actuar sin improvisar.
 - no borrar manualmente `./runtime/data` sin entender el impacto en SQLite y artefactos
 - si el servidor queda detrás de proxy, mantener `TRUST_PROXY_HEADERS=true` solo si ese proxy sanea `X-Forwarded-*`
 - `REQUIRE_VERIFIED_EMAIL_FOR_SENSITIVE_ACTIONS=true` exige email verificado para mutaciones sensibles; actívalo solo después de comprobar que SMTP y el flujo de verificación funcionan para los administradores
+
+### Contrato de engines API/worker
+
+- La API resuelve `Capability` consultando la disponibilidad local de engines en su propio proceso.
+- En despliegues con worker standalone, API y worker deben construirse con el mismo set efectivo de binarios y `PATH` compatible.
+- Si falta un engine en la API, la UI puede ocultar una capacidad aunque el worker pudiera ejecutarla.
+- Si falta un engine en el worker, la API puede mostrar una capacidad que luego fallará en ejecución.
+- Tras cada despliegue, revisar `/api/admin/engines` y al menos un smoke de conversión real para las familias críticas del entorno.
+- Si se decide separar runtimes livianos/pesados, cambiar antes el modelo de disponibilidad para que provenga de configuración explícita o health reportado por workers.
 
 ### Advertencia conocida: Sentry/OpenTelemetry en build web
 
