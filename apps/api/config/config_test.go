@@ -76,6 +76,37 @@ func TestLoadAcceptsProductionWithRedis(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsProductionMetricsWithoutToken(t *testing.T) {
+	t.Setenv("ENV_FILE", "/tmp/reform-nonexistent.env")
+	t.Setenv("JWT_SECRET", "test-strong-jwt-secret-1234567890")
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("REDIS_URL", "redis://localhost:6379")
+	t.Setenv("EXPOSE_METRICS", "true")
+	t.Setenv("METRICS_TOKEN", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load to reject exposed production metrics without token")
+	}
+}
+
+func TestLoadAcceptsProductionMetricsWithToken(t *testing.T) {
+	t.Setenv("ENV_FILE", "/tmp/reform-nonexistent.env")
+	t.Setenv("JWT_SECRET", "test-strong-jwt-secret-1234567890")
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("REDIS_URL", "redis://localhost:6379")
+	t.Setenv("EXPOSE_METRICS", "true")
+	t.Setenv("METRICS_TOKEN", "metrics-secret")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected valid config, got %v", err)
+	}
+	if !cfg.ExposeMetrics || cfg.MetricsToken != "metrics-secret" {
+		t.Fatalf("unexpected metrics config: expose=%v token=%q", cfg.ExposeMetrics, cfg.MetricsToken)
+	}
+}
+
 func TestLoadAppURL_DefaultsToCORSOrigin(t *testing.T) {
 	t.Setenv("ENV_FILE", "/tmp/reform-nonexistent.env")
 	t.Setenv("JWT_SECRET", "test-strong-jwt-secret-1234567890")

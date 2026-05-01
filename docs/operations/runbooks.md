@@ -51,7 +51,7 @@ Es una guía para actuar sin improvisar.
 ### Persistencia en host
 
 - SQLite, originales, temporales y artefactos viven en `./runtime/data` relativo al directorio donde se ejecuta `docker compose`
-- Redis persiste en `./runtime/redis`
+- Redis persiste en `./runtime/redis` y debe fallar con presión de memoria antes de expulsar claves de cola
 - `data-permissions` corrige la ownership de `./runtime/data` antes de que arranquen `api` y `worker`; después, los procesos runtime escriben como usuario no-root sin capacidades añadidas
 
 ### Procedimiento base
@@ -72,6 +72,7 @@ Es una guía para actuar sin improvisar.
 - cambios en `NEXT_PUBLIC_API_URL` requieren rebuild del servicio `web`
 - no borrar manualmente `./runtime/data` sin entender el impacto en SQLite y artefactos
 - si el servidor queda detrás de proxy, mantener `TRUST_PROXY_HEADERS=true` solo si ese proxy sanea `X-Forwarded-*`
+- si activas `EXPOSE_METRICS=true` en producción, configura `METRICS_TOKEN`; el backend rechaza esa combinación insegura
 - `REQUIRE_VERIFIED_EMAIL_FOR_SENSITIVE_ACTIONS=true` exige email verificado para mutaciones sensibles; actívalo solo después de comprobar que SMTP y el flujo de verificación funcionan para los administradores
 
 ### Contrato de engines API/worker

@@ -108,6 +108,9 @@ func Load() (*Config, error) {
 
 	exposeMetrics := lookupBoolEnv("EXPOSE_METRICS", false)
 	metricsToken := os.Getenv("METRICS_TOKEN")
+	if appEnv == "production" && exposeMetrics && strings.TrimSpace(metricsToken) == "" {
+		return nil, fmt.Errorf("METRICS_TOKEN is required when EXPOSE_METRICS=true in production")
+	}
 	trustProxyHeaders := lookupBoolEnv("TRUST_PROXY_HEADERS", false)
 	inProcessConcurrency := lookupPositiveIntEnv("IN_PROCESS_WORKER_CONCURRENCY", 2)
 	workerConcurrency := lookupPositiveIntEnv("WORKER_CONCURRENCY", 2)

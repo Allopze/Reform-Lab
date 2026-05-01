@@ -128,7 +128,7 @@ Ese stack levanta:
 Persistencia del despliegue:
 
 - archivos originales, temporales, artefactos y SQLite quedan en `./runtime/data`
-- Redis persiste en `./runtime/redis`
+- Redis persiste en `./runtime/redis` y usa política `noeviction` para no perder claves de cola bajo presión de memoria
 - el servicio one-shot `data-permissions` prepara la propiedad de `./runtime/data` antes de arrancar `api` y `worker`; los procesos runtime corren como usuario no-root sin capacidades añadidas
 
 Eso significa que, si despliegas el proyecto en `/opt/reform-lab`, los archivos subidos quedarán físicamente bajo `/opt/reform-lab/runtime/data/originals` y los artefactos bajo `/opt/reform-lab/runtime/data/artifacts`.
@@ -188,7 +188,7 @@ Ese ZIP incluye únicamente los archivos necesarios para reconstruir y levantar 
 Notas operativas:
 
 - si cambias `NEXT_PUBLIC_API_URL`, vuelve a construir la web con `docker compose up -d --build web`
-- si `EXPOSE_METRICS=true`, configura también `METRICS_TOKEN` para no dejar `/metrics` abierto
+- si `EXPOSE_METRICS=true` en producción, `METRICS_TOKEN` es obligatorio para no dejar `/metrics` abierto
 - el compose de `apps/api/` sigue existiendo como stack de desarrollo y smoke del backend, no como despliegue full stack de servidor
 
 ## Variables de entorno
@@ -220,7 +220,7 @@ Notas operativas:
 | `APP_URL` | no | hereda `CORS_ORIGIN` | URL pública base usada por emails y links generados por backend; en producción debería ser la URL HTTPS pública del proxy |
 | `MAX_ACTIVE_JOBS_PER_GUEST_SESSION` | no | `1` | limita cuántas conversiones activas puede mantener una sesión anónima simultáneamente |
 | `EXPOSE_METRICS` | no | `false` | expone `/metrics` para Prometheus |
-| `METRICS_TOKEN` | no | vacío | protege `/metrics` con bearer token cuando está configurado |
+| `METRICS_TOKEN` | obligatorio si `EXPOSE_METRICS=true` en producción | vacío | protege `/metrics` con bearer token cuando está configurado |
 | `TRUST_PROXY_HEADERS` | no | `false` | usa headers tipo `X-Forwarded-*` al calcular IP y seguridad; actívalo solo si la API recibe tráfico exclusivamente desde un proxy de confianza que sobrescribe esas cabeceras |
 
 ### Concurrencia y cuotas
@@ -295,9 +295,9 @@ Estas variables no las consume directamente `config.go`; las usa el `docker-comp
 
 | Variable | Obligatoria | Default del compose | Qué hace |
 | --- | --- | --- | --- |
-| `WEB_BIND_ADDRESS` | no | `0.0.0.0` | IP de bind del contenedor `web` en el host |
+| `WEB_BIND_ADDRESS` | no | `127.0.0.1` | IP de bind del contenedor `web` en el host |
 | `WEB_HOST_PORT` | no | `5050` | puerto expuesto para la web |
-| `API_BIND_ADDRESS` | no | `0.0.0.0` | IP de bind del contenedor `api` en el host |
+| `API_BIND_ADDRESS` | no | `127.0.0.1` | IP de bind del contenedor `api` en el host |
 | `API_HOST_PORT` | no | `8080` | puerto expuesto para la API |
 | `API_MEMORY_LIMIT` | no | `1024m` | límite de memoria del contenedor `api` |
 | `API_CPUS` | no | `1.00` | límite de CPU del contenedor `api` |

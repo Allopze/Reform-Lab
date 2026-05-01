@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -6,8 +6,10 @@ import { fileURLToPath } from "node:url";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDir, "..");
 const releasesDir = join(projectRoot, "releases");
-const stagingDir = join(releasesDir, "release");
+const runId = process.env.RELEASE_RUN_ID ?? buildRunId();
+const stagingDir = join(releasesDir, `.release-staging-${runId}`);
 const archivePath = join(releasesDir, "release.zip");
+const archiveTmpPath = join(releasesDir, `.release-${runId}.zip`);
 
 const manifest = [
   { path: "docker-compose.yml" },
@@ -47,16 +49,22 @@ const manifest = [
 
 prepareReleaseDirectory();
 copyManifest();
-createArchive();
+createArchive(archiveTmpPath);
+const finalArchivePath = finalizeArchive();
 rmSync(stagingDir, { recursive: true, force: true });
 
-console.log(`Created ${archivePath}`);
+console.log(`Created ${finalArchivePath}`);
 
 function prepareReleaseDirectory() {
   mkdirSync(releasesDir, { recursive: true });
+
+  // Use a unique staging directory per run so we don't depend on being
+  // able to delete leftover files from a prior (possibly sudo/root) run.
   rmSync(stagingDir, { recursive: true, force: true });
-  rmSync(archivePath, { force: true });
   mkdirSync(stagingDir, { recursive: true });
+
+  // Ensure we start with a clean temp archive path.
+  rmSync(archiveTmpPath, { force: true });
 }
 
 function copyManifest() {
@@ -108,8 +116,8 @@ function isFrontendTestPath(relativePath) {
   return relativePath === "test" || relativePath.startsWith("test/");
 }
 
-function createArchive() {
-  const zipfileResult = spawnSync("python3", ["-m", "zipfile", "-c", archivePath, "."], {
+function createArchive(outputPath) {
+  const zipfileResult = spawnSync("python3", ["-m", "zipfile", "-c", outputPath, "."], {
     cwd: stagingDir,
     stdio: "inherit",
   });
@@ -122,7 +130,7 @@ function createArchive() {
     throw zipfileResult.error;
   }
 
-  const zipResult = spawnSync("zip", ["-rq", archivePath, "."], {
+  const zipResult = spawnSync("zip", ["-rq", outputPath, "."], {
     cwd: stagingDir,
     stdio: "inherit",
   });
@@ -136,4 +144,49 @@ function createArchive() {
   }
 
   throw new Error("Unable to create releases/release.zip. Install python3 or zip on the machine running npm run release.");
+}
+
+function finalizeArchive() {
+  try {
+    rmSync(archivePath, { force: true });
+  } catch (error) {
+    if (error && (error.code === "EACCES" || error.code === "EPERM")) {
+      console.warn(
+        `WARN: Unable to remove existing ${archivePath} (${error.code}); leaving new archive at ${archiveTmpPath}`,
+      );
+      console.warn(`Fix: sudo chown -R \"$USER\":\"$USER\" ${releasesDir}  (or remove releases/release.zip manually)`);
+      return archiveTmpPath;
+    }
+    throw error;
+  }
+
+  try {
+    renameSync(archiveTmpPath, archivePath);
+    return archivePath;
+  } catch (error) {
+    if (error && (error.code === "EACCES" || error.code === "EPERM")) {
+      console.warn(
+        `WARN: Unable to move archive into place at ${archivePath} (${error.code}); leaving new archive at ${archiveTmpPath}`,
+      );
+      console.warn(`Fix: sudo chown -R \"$USER\":\"$USER\" ${releasesDir}  (or move the file manually)`);
+      return archiveTmpPath;
+    }
+    throw error;
+  }
+}
+
+function buildRunId() {
+  // Compact, filesystem-safe, sortable run id.
+  // Example: 20260501-154233-1234
+  const now = new Date();
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const pad3 = (n) => String(n).padStart(3, "0");
+  const y = now.getFullYear();
+  const m = pad2(now.getMonth() + 1);
+  const d = pad2(now.getDate());
+  const hh = pad2(now.getHours());
+  const mm = pad2(now.getMinutes());
+  const ss = pad2(now.getSeconds());
+  const ms = pad3(now.getMilliseconds());
+  return `${y}${m}${d}-${hh}${mm}${ss}-${ms}`;
 }

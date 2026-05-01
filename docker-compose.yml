@@ -6,6 +6,7 @@ x-runtime-env: &runtime-env
   REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
   LOG_LEVEL: "${LOG_LEVEL:-info}"
   JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set to a strong value}"
+  SECRET_ENCRYPTION_KEY: "${SECRET_ENCRYPTION_KEY:-}"
   APP_URL: "${APP_URL:-http://localhost:${WEB_HOST_PORT:-5050}}"
   BOOTSTRAP_ADMIN_EMAILS: "${BOOTSTRAP_ADMIN_EMAILS:-}"
   REQUIRE_VERIFIED_EMAIL_FOR_SENSITIVE_ACTIONS: "${REQUIRE_VERIFIED_EMAIL_FOR_SENSITIVE_ACTIONS:-false}"
@@ -25,9 +26,11 @@ x-runtime-env: &runtime-env
   SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
   SMTP_FROM: "${SMTP_FROM:-noreply@example.com}"
   SMTP_USE_TLS: "${SMTP_USE_TLS:-true}"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
 
 services:
   web:
+    image: reform-lab-web:local
     build:
       context: ./apps/web
       dockerfile: Dockerfile
@@ -61,7 +64,7 @@ services:
         "--maxmemory",
         "256mb",
         "--maxmemory-policy",
-        "allkeys-lru",
+        "noeviction",
       ]
     restart: unless-stopped
     healthcheck:
@@ -169,8 +172,49 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile
     user: "0:0"
-    entrypoint: ["/bin/sh", "-c"]
-    command: "mkdir -p /data && chown -R 10001:10001 /data"
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /data /data/originals /data/artifacts /data/temp /data/backups
+        if chown -R 10001:10001 /data 2>/tmp/chown.err; then
+          exit 0
+        fi
+        echo "data-permissions: WARN: chown failed; checking writability for uid/gid 10001" >&2
+        (cat /tmp/chown.err >&2) || true
+        check_writable() {
+          path="$$1"
+          uid="$$(stat -c '%u' "$$path")"
+          gid="$$(stat -c '%g' "$$path")"
+          perm="$$(stat -c '%a' "$$path")"
+          perm="$$(printf '%04d' "$$perm")"
+          perm="$${perm#?}"
+          owner="$${perm%??}"
+          rest="$${perm#?}"
+          group="$${rest%?}"
+          other="$${perm#??}"
+          can_write_digit() {
+            case "$$1" in
+              2|3|6|7) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          if [ "$$uid" = "10001" ] && can_write_digit "$$owner"; then return 0; fi
+          if [ "$$gid" = "10001" ] && can_write_digit "$$group"; then return 0; fi
+          if can_write_digit "$$other"; then return 0; fi
+          echo "data-permissions: ERROR: $$path not writable for uid/gid 10001 (uid=$$uid gid=$$gid perm=$$perm)" >&2
+          return 1
+        }
+        ok="1"
+        for d in /data /data/originals /data/artifacts /data/temp /data/backups; do
+          check_writable "$$d" || ok="0"
+        done
+        if [ "$$ok" = "1" ]; then
+          echo "data-permissions: proceeding despite chown failure (paths writable)" >&2
+          exit 0
+        fi
+        echo "data-permissions: Fix on host (bind mount): sudo chown -R 10001:10001 ./runtime/data" >&2
+        exit 1
     restart: "no"
     volumes:
       - ./runtime/data:/data
