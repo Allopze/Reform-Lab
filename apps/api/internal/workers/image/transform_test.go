@@ -355,6 +355,29 @@ func TestPrepareSanitizedSVGRemovesDangerousMarkup(t *testing.T) {
 	}
 }
 
+func TestPrepareSanitizedSVGAcceptsSelfClosingRoot(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "input.svg")
+	source := `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>`
+	if err := os.WriteFile(inputPath, []byte(source), 0o600); err != nil {
+		t.Fatalf("write svg: %v", err)
+	}
+
+	sanitizedPath, cleanup, err := prepareSanitizedSVG(inputPath, dir)
+	if err != nil {
+		t.Fatalf("prepareSanitizedSVG: %v", err)
+	}
+	defer cleanup()
+
+	sanitized, err := os.ReadFile(sanitizedPath)
+	if err != nil {
+		t.Fatalf("read sanitized svg: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(string(sanitized)), "<svg") {
+		t.Fatalf("expected sanitized root svg, got %s", string(sanitized))
+	}
+}
+
 func TestHEIFConvertEngineCreatesOutputs(t *testing.T) {
 	for _, bin := range []string{"heif-convert", "ffmpeg"} {
 		if _, err := exec.LookPath(bin); err != nil {

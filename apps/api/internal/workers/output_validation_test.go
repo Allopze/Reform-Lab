@@ -40,6 +40,14 @@ func TestValidateOutputArtifactRejectsMismatchedBinaryFormat(t *testing.T) {
 	}
 }
 
+func TestValidateOutputArtifactAcceptsHTMLWithCharsetMIME(t *testing.T) {
+	path := writeValidationFile(t, "page.html", []byte("<html><body>ok</body></html>"))
+
+	if _, err := validateOutputArtifact(path, "html"); err != nil {
+		t.Fatalf("expected html output to be accepted: %v", err)
+	}
+}
+
 func TestValidateOutputArtifactValidatesZipOutputs(t *testing.T) {
 	validZip := writeZipValidationFile(t, "preview.zip", map[string]string{
 		"frame-001.jpg": "fake-image-data",
@@ -149,6 +157,7 @@ func minimalPNG() []byte {
 func TestNormalizeOutputMIME(t *testing.T) {
 	tests := map[string]string{
 		"application/x-pdf":        "application/pdf",
+		"text/html; charset=utf-8": "text/html",
 		"audio/x-wav":              "audio/wav",
 		"audio/mp3":                "audio/mpeg",
 		"application/x-zip":        "application/zip",

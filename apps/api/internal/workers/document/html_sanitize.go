@@ -3,7 +3,7 @@ package document
 import (
 	"bytes"
 	"fmt"
-	"net/http"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -223,12 +223,20 @@ func looksLikeHTML(path string) bool {
 	}
 	defer f.Close()
 
-	buf := make([]byte, 512)
-	n, _ := f.Read(buf)
-	if n == 0 {
-		return false
+	tokenizer := html.NewTokenizer(io.LimitReader(f, 4096))
+	for {
+		tokenType := tokenizer.Next()
+		switch tokenType {
+		case html.ErrorToken:
+			return false
+		case html.StartTagToken:
+			return true
+		case html.TextToken:
+			if strings.TrimSpace(string(tokenizer.Text())) != "" {
+				return false
+			}
+		case html.CommentToken, html.DoctypeToken:
+			continue
+		}
 	}
-
-	contentType := http.DetectContentType(buf[:n])
-	return contentType == "text/html; charset=utf-8"
 }

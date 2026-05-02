@@ -3,6 +3,7 @@ package ingestion
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/xml"
 	"io"
 	"regexp"
 	"slices"
@@ -253,11 +254,24 @@ func looksLikeCSV(sample []byte) bool {
 }
 
 func looksLikeSVG(sample []byte) bool {
-	text := strings.ToLower(strings.TrimSpace(string(sample)))
-	if text == "" {
-		return false
+	decoder := xml.NewDecoder(bytes.NewReader(sample))
+	decoder.Strict = false
+
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return false
+		}
+
+		switch value := token.(type) {
+		case xml.StartElement:
+			return strings.EqualFold(value.Name.Local, "svg")
+		case xml.CharData:
+			if strings.TrimSpace(string(value)) != "" {
+				return false
+			}
+		}
 	}
-	return strings.Contains(text, "<svg") && strings.Contains(text, "</svg>")
 }
 
 func looksLikeOpus(sample []byte) bool {

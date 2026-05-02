@@ -243,6 +243,9 @@ func readOutputValidationSample(path string) ([]byte, error) {
 }
 
 func normalizeOutputMIME(mime string) string {
+	base, _, _ := strings.Cut(mime, ";")
+	mime = strings.TrimSpace(base)
+
 	switch mime {
 	case "application/x-pdf":
 		return "application/pdf"

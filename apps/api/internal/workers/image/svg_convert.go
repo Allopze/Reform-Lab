@@ -1,6 +1,7 @@
 package image
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	workerDocument "github.com/allopze/reform-lab/apps/api/internal/workers/document"
+	"golang.org/x/net/html"
 )
 
 // SVGConvertEngine rasterizes bitmap outputs and keeps vector PDF export via librsvg.
@@ -82,15 +84,36 @@ func prepareSanitizedSVG(inputPath, outputDir string) (string, func(), error) {
 }
 
 func extractSVGDocument(content []byte) []byte {
-	text := string(content)
-	lower := strings.ToLower(text)
-	start := strings.Index(lower, "<svg")
-	end := strings.LastIndex(lower, "</svg>")
-	if start == -1 || end == -1 {
+	doc, err := html.Parse(bytes.NewReader(content))
+	if err != nil {
 		return nil
 	}
-	end += len("</svg>")
-	return []byte(text[start:end])
+
+	svg := findSVGNode(doc)
+	if svg == nil {
+		return nil
+	}
+
+	var out bytes.Buffer
+	if err := html.Render(&out, svg); err != nil {
+		return nil
+	}
+	return out.Bytes()
+}
+
+func findSVGNode(node *html.Node) *html.Node {
+	if node.Type == html.ElementNode {
+		name := strings.ToLower(node.Data)
+		if name == "svg" || strings.HasSuffix(name, ":svg") {
+			return node
+		}
+	}
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if found := findSVGNode(child); found != nil {
+			return found
+		}
+	}
+	return nil
 }
 
 func renderSVG(ctx context.Context, inputPath, outputPath string) error {

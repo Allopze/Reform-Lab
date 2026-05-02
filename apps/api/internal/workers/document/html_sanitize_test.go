@@ -1,6 +1,8 @@
 package document
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -159,5 +161,27 @@ func TestSanitizeHTMLBytes_RemovesForeignObject(t *testing.T) {
 	s := string(result)
 	if strings.Contains(strings.ToLower(s), "foreignobject") {
 		t.Fatalf("expected foreignObject to be removed, got %s", s)
+	}
+}
+
+func TestLooksLikeHTMLAcceptsLeadingComment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "input.html")
+	if err := os.WriteFile(path, []byte(`<!-- exported by editor --><html><body>Hola</body></html>`), 0o600); err != nil {
+		t.Fatalf("write html: %v", err)
+	}
+
+	if !looksLikeHTML(path) {
+		t.Fatal("expected leading-comment HTML to be recognized")
+	}
+}
+
+func TestLooksLikeHTMLRejectsPlainText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "input.txt")
+	if err := os.WriteFile(path, []byte(`Hola mundo`), 0o600); err != nil {
+		t.Fatalf("write text: %v", err)
+	}
+
+	if looksLikeHTML(path) {
+		t.Fatal("expected plain text not to be recognized as HTML")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
@@ -40,6 +41,34 @@ func TestDetectFormatKeepsPlainTextWhenMarkdownSignalsAreWeak(t *testing.T) {
 	}
 	if format.MIMEType != "text/plain" {
 		t.Fatalf("expected text/plain, got %s", format.MIMEType)
+	}
+}
+
+func TestDetectFormatRecognizesLargeRootSVG(t *testing.T) {
+	source := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="4096" height="1024">` + strings.Repeat(`<path d="M 1 1 L 2 2"/>`, 5000) + `</svg>`)
+	format, err := DetectFormat(bytes.NewReader(source))
+	if err != nil {
+		t.Fatalf("DetectFormat returned error: %v", err)
+	}
+	if format.MIMEType != "image/svg+xml" {
+		t.Fatalf("expected image/svg+xml, got %s", format.MIMEType)
+	}
+	if format.Extension != "svg" {
+		t.Fatalf("expected svg extension, got %s", format.Extension)
+	}
+	if format.Family != domain.FamilyImage {
+		t.Fatalf("expected image family, got %s", format.Family)
+	}
+}
+
+func TestDetectFormatDoesNotTreatEmbeddedSVGAsRootSVG(t *testing.T) {
+	source := []byte(`<!doctype html><html><body><svg width="10" height="10"></svg></body></html>`)
+	format, err := DetectFormat(bytes.NewReader(source))
+	if err != nil {
+		t.Fatalf("DetectFormat returned error: %v", err)
+	}
+	if format.MIMEType == "image/svg+xml" {
+		t.Fatalf("expected embedded svg in html not to be detected as root svg")
 	}
 }
 
