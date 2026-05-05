@@ -45,9 +45,9 @@ func ValidateFile(size int64, format domain.DetectedFormat, meta domain.FileMeta
 	} else if format.Family == domain.FamilyImage {
 		// Dimensions could not be extracted (e.g. HEIF/SVG with no parseable header).
 		// Enforce a conservative file size limit to prevent decompression bombs.
-		const maxUnknownDimImageBytes int64 = 10 * 1024 * 1024 // 10 MB
+		const maxUnknownDimImageBytes int64 = 25 * 1024 * 1024 // 25 MB
 		if size > maxUnknownDimImageBytes {
-			return domain.ErrLimitExceeded
+			return domain.ErrImageDimensionsUnknown
 		}
 	}
 

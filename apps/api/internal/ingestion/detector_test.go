@@ -1,6 +1,7 @@
 package ingestion
 
 import (
+	"archive/zip"
 	"bytes"
 	"os"
 	"path/filepath"
@@ -112,6 +113,115 @@ func TestDetectFormatRecognizesComplexOfficeFixtures(t *testing.T) {
 			}
 			if format.Family != domain.FamilyDocument {
 				t.Fatalf("expected document family, got %s", format.Family)
+			}
+		})
+	}
+}
+
+func TestDetectFormatRecognizesLegacyDocFixture(t *testing.T) {
+	data, err := os.ReadFile(ingestionFixturePath("doc", "valid-basic.doc"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	format, err := DetectFormat(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("DetectFormat returned error: %v", err)
+	}
+	if format.MIMEType != "application/msword" {
+		t.Fatalf("expected application/msword, got %s", format.MIMEType)
+	}
+	if format.Extension != "doc" {
+		t.Fatalf("expected doc extension, got %s", format.Extension)
+	}
+	if format.Family != domain.FamilyDocument {
+		t.Fatalf("expected document family, got %s", format.Family)
+	}
+}
+
+func TestDetectOOXMLMimeRejectsExtremeZipCompressionRatio(t *testing.T) {
+	var buf bytes.Buffer
+	writer := zip.NewWriter(&buf)
+	entry, err := writer.Create("word/document.xml")
+	if err != nil {
+		t.Fatalf("create zip entry: %v", err)
+	}
+	if _, err := entry.Write(bytes.Repeat([]byte("0"), 256*1024)); err != nil {
+		t.Fatalf("write zip entry: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close zip: %v", err)
+	}
+
+	if got := detectOOXMLMimeFromZip(bytes.NewReader(buf.Bytes()), int64(buf.Len())); got != "" {
+		t.Fatalf("expected suspicious ZIP to be rejected, got %s", got)
+	}
+}
+
+func TestDetectFormatRejectsControlledZipBombFixture(t *testing.T) {
+	data, err := os.ReadFile(ingestionFixturePath("security", "zip-bomb-controlled.docx"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	if format, err := DetectFormat(bytes.NewReader(data)); err == nil {
+		t.Fatalf("expected controlled zip bomb fixture to be unsupported, got format %+v", format)
+	}
+}
+
+func TestCorruptedFixturesExerciseDetectionBoundaries(t *testing.T) {
+	testCases := []struct {
+		name         string
+		fixtureParts []string
+		expectedMIME string
+		wantErr      bool
+	}{
+		{
+			name:         "truncated pdf keeps pdf boundary",
+			fixtureParts: []string{"pdf", "corrupted-truncated.pdf"},
+			expectedMIME: "application/pdf",
+		},
+		{
+			name:         "truncated png keeps image boundary",
+			fixtureParts: []string{"image", "corrupted-truncated.png"},
+			expectedMIME: "image/png",
+		},
+		{
+			name:         "truncated wav keeps audio boundary",
+			fixtureParts: []string{"audio", "corrupted-truncated.wav"},
+			expectedMIME: "audio/wav",
+		},
+		{
+			name:         "truncated mp4 keeps video boundary",
+			fixtureParts: []string{"video", "corrupted-truncated.mp4"},
+			expectedMIME: "video/mp4",
+		},
+		{
+			name:         "broken docx zip is unsupported",
+			fixtureParts: []string{"docx", "corrupted-broken-zip.docx"},
+			wantErr:      true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := os.ReadFile(ingestionFixturePath(tc.fixtureParts...))
+			if err != nil {
+				t.Fatalf("read fixture: %v", err)
+			}
+
+			format, err := DetectFormat(bytes.NewReader(data))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected detection error, got format %+v", format)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DetectFormat returned error: %v", err)
+			}
+			if format.MIMEType != tc.expectedMIME {
+				t.Fatalf("expected MIME %s, got %s", tc.expectedMIME, format.MIMEType)
 			}
 		})
 	}

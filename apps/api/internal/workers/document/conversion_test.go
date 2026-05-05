@@ -65,6 +65,28 @@ func TestToPDFEngineConvertsTextFile(t *testing.T) {
 	}
 }
 
+func TestToPDFEngineConvertsLegacyDocFixture(t *testing.T) {
+	requireRuntime(t, "libreoffice")
+
+	dir := t.TempDir()
+	outputPath, err := (&ToPDFEngine{}).Execute(
+		context.Background(),
+		documentFixturePath("doc", "valid-basic.doc"),
+		dir,
+		"pdf",
+	)
+	if err != nil {
+		t.Fatalf("legacy doc to pdf: %v", err)
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read pdf: %v", err)
+	}
+	if !strings.HasPrefix(string(data[:5]), "%PDF-") {
+		t.Fatalf("expected pdf header, got %q", data[:5])
+	}
+}
+
 func TestToHTMLEngineConvertsDocxFile(t *testing.T) {
 	if _, err := exec.LookPath("libreoffice"); err != nil {
 		t.Skip("libreoffice not available")
@@ -91,6 +113,28 @@ func TestToHTMLEngineConvertsDocxFile(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(string(htmlData)), "<html") {
 		t.Fatalf("expected html document output")
+	}
+}
+
+func TestToDocxEngineConvertsLegacyDocFixture(t *testing.T) {
+	requireRuntime(t, "libreoffice")
+
+	dir := t.TempDir()
+	outputPath, err := (&ToDocxEngine{}).Execute(
+		context.Background(),
+		documentFixturePath("doc", "valid-basic.doc"),
+		dir,
+		"docx",
+	)
+	if err != nil {
+		t.Fatalf("legacy doc to docx: %v", err)
+	}
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read docx: %v", err)
+	}
+	if !strings.HasPrefix(string(data[:2]), "PK") {
+		t.Fatalf("expected docx zip header, got %q", data[:2])
 	}
 }
 

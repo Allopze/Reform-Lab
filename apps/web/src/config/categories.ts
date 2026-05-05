@@ -1,11 +1,13 @@
-import type { CategoryConfig, CategoryId } from "@/types";
+import type { CatalogFamily } from "@/lib/api";
+import type { CategoryConfig, CategoryId, FormatOption } from "@/types";
 
 /**
  * Category definitions for the conversion UI.
  *
- * IMPORTANT: `targetFormats` here are UI hints only (shown before a file is uploaded).
- * After upload, the actual available formats come exclusively from the backend
- * via GET /api/files/{fileId}/capabilities. Never use these for conversion logic.
+ * IMPORTANT: `acceptedFormats` and `targetFormats` here are UI hints only.
+ * The backend catalog is exposed by GET /api/catalog, and per-file availability
+ * still comes exclusively from GET /api/files/{fileId}/capabilities. Never use
+ * these static hints for conversion logic.
  */
 export const categories: CategoryConfig[] = [
   {
@@ -85,10 +87,11 @@ export const categories: CategoryConfig[] = [
     subtitle:
       "Pasa entre formatos de oficina y texto plano sin complicaciones.",
     dropzoneText: "Selecciona un documento para convertir",
-    dropzoneHint: "DOCX, ODT, TXT, RTF, MD, HTML, CSV, XLSX, ODS, PPTX, ODP",
+    dropzoneHint: "DOC, DOCX, ODT, TXT, RTF, MD, HTML, CSV, XLSX, ODS, PPTX, ODP",
     supportLabel: "limite real segun tu cuenta",
     cta: "Convertir documento",
     acceptedFormats: [
+      { value: "doc", label: "DOC" },
       { value: "docx", label: "DOCX" },
       { value: "odt", label: "ODT" },
       { value: "txt", label: "TXT" },
@@ -113,7 +116,7 @@ export const categories: CategoryConfig[] = [
       { value: "png", label: "PNG" },
     ],
     acceptedMimeTypes:
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.oasis.opendocument.text,text/plain,application/rtf,text/rtf,text/markdown,text/html,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.oasis.opendocument.spreadsheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.oasis.opendocument.presentation",
+      "application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.oasis.opendocument.text,text/plain,application/rtf,text/rtf,text/markdown,text/html,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.oasis.opendocument.spreadsheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.oasis.opendocument.presentation",
   },
   {
     id: "audio",
@@ -182,6 +185,154 @@ export const categories: CategoryConfig[] = [
 
 export const DEFAULT_CATEGORY: CategoryId = "pdf";
 
+const categoryFamilyById: Partial<Record<CategoryId, string>> = {
+  pdf: "pdf",
+  images: "image",
+  documents: "document",
+  audio: "audio",
+  video: "video",
+};
+
+const sourceFormatLabels: Record<string, FormatOption> = {
+  "application/pdf": { value: "pdf", label: "PDF" },
+  "application/msword": { value: "doc", label: "DOC" },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {
+    value: "docx",
+    label: "DOCX",
+  },
+  "application/vnd.oasis.opendocument.text": { value: "odt", label: "ODT" },
+  "application/rtf": { value: "rtf", label: "RTF" },
+  "text/rtf": { value: "rtf", label: "RTF" },
+  "text/plain": { value: "txt", label: "TXT" },
+  "text/html": { value: "html", label: "HTML" },
+  "text/markdown": { value: "md", label: "Markdown" },
+  "text/csv": { value: "csv", label: "CSV" },
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
+    value: "xlsx",
+    label: "XLSX",
+  },
+  "application/vnd.oasis.opendocument.spreadsheet": {
+    value: "ods",
+    label: "ODS",
+  },
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": {
+    value: "pptx",
+    label: "PPTX",
+  },
+  "application/vnd.oasis.opendocument.presentation": {
+    value: "odp",
+    label: "ODP",
+  },
+  "image/jpeg": { value: "jpg", label: "JPG" },
+  "image/png": { value: "png", label: "PNG" },
+  "image/webp": { value: "webp", label: "WEBP" },
+  "image/gif": { value: "gif", label: "GIF" },
+  "image/bmp": { value: "bmp", label: "BMP" },
+  "image/tiff": { value: "tiff", label: "TIFF" },
+  "image/heic": { value: "heic", label: "HEIC" },
+  "image/heif": { value: "heif", label: "HEIF" },
+  "image/svg+xml": { value: "svg", label: "SVG" },
+  "audio/mpeg": { value: "mp3", label: "MP3" },
+  "audio/wav": { value: "wav", label: "WAV" },
+  "audio/x-wav": { value: "wav", label: "WAV" },
+  "audio/ogg": { value: "ogg", label: "OGG" },
+  "audio/flac": { value: "flac", label: "FLAC" },
+  "audio/x-flac": { value: "flac", label: "FLAC" },
+  "audio/aac": { value: "aac", label: "AAC" },
+  "audio/mp4": { value: "m4a", label: "M4A" },
+  "audio/x-m4a": { value: "m4a", label: "M4A" },
+  "audio/opus": { value: "opus", label: "OPUS" },
+  "video/mp4": { value: "mp4", label: "MP4" },
+  "video/quicktime": { value: "mov", label: "MOV" },
+  "video/webm": { value: "webm", label: "WEBM" },
+  "video/x-msvideo": { value: "avi", label: "AVI" },
+};
+
+const fallbackTargetLabels: Record<string, string> = {
+  pdf: "PDF",
+  docx: "DOCX",
+  txt: "TXT",
+  html: "HTML",
+  md: "Markdown",
+  csv: "CSV",
+  xlsx: "XLSX",
+  jpg: "JPG",
+  png: "PNG",
+  webp: "WEBP",
+  avif: "AVIF",
+  gif: "GIF",
+  zip: "ZIP",
+  mp3: "MP3",
+  m4a: "M4A",
+  wav: "WAV",
+  flac: "FLAC",
+  aac: "AAC",
+  ogg: "OGG",
+  opus: "Opus",
+  mp4: "MP4",
+  webm: "WEBM",
+  json: "JSON",
+};
+
+function uniqueFormatOptions(options: FormatOption[]): FormatOption[] {
+  const seen = new Set<string>();
+  return options.filter((option) => {
+    if (seen.has(option.value)) return false;
+    seen.add(option.value);
+    return true;
+  });
+}
+
+function labelForTargetFormat(category: CategoryConfig, targetFormat: string) {
+  const staticLabel = category.targetFormats.find(
+    (format) => format.value === targetFormat,
+  )?.label;
+  return staticLabel ?? fallbackTargetLabels[targetFormat] ?? targetFormat.toUpperCase();
+}
+
+export function applyCatalogHints(
+  category: CategoryConfig,
+  catalogFamilies: CatalogFamily[] | null,
+): CategoryConfig {
+  if (!catalogFamilies || category.id === "auto") {
+    return category;
+  }
+
+  const family = categoryFamilyById[category.id];
+  const catalogFamily = catalogFamilies.find((entry) => entry.family === family);
+  if (!catalogFamily || catalogFamily.capabilities.length === 0) {
+    return category;
+  }
+
+  const acceptedMimeTypes = Array.from(
+    new Set(
+      catalogFamily.capabilities.flatMap((capability) => capability.sourceFormats),
+    ),
+  );
+  const acceptedFormats = uniqueFormatOptions(
+    acceptedMimeTypes.map(
+      (mime) =>
+        sourceFormatLabels[mime] ?? {
+          value: mime,
+          label: mime,
+        },
+    ),
+  );
+  const targetFormats = uniqueFormatOptions(
+    catalogFamily.capabilities.map((capability) => ({
+      value: capability.targetFormat,
+      label: labelForTargetFormat(category, capability.targetFormat),
+    })),
+  );
+
+  return {
+    ...category,
+    acceptedFormats,
+    targetFormats,
+    acceptedMimeTypes: acceptedMimeTypes.join(","),
+  };
+}
+
 function getNormalizedExtension(fileName: string): string {
   const lowerName = fileName.toLowerCase();
 
@@ -224,6 +375,7 @@ export function detectCategoryIdFromFile(file: File): Exclude<CategoryId, "auto"
 
   if (
     [
+      "application/msword",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "application/vnd.oasis.opendocument.text",
       "text/plain",
@@ -237,7 +389,7 @@ export function detectCategoryIdFromFile(file: File): Exclude<CategoryId, "auto"
       "application/vnd.openxmlformats-officedocument.presentationml.presentation",
       "application/vnd.oasis.opendocument.presentation",
     ].includes(mimeType) ||
-    ["docx", "odt", "txt", "rtf", "md", "html", "csv", "xlsx", "ods", "pptx", "odp"].includes(extension)
+    ["doc", "docx", "odt", "txt", "rtf", "md", "html", "csv", "xlsx", "ods", "pptx", "odp"].includes(extension)
   ) {
     return "documents";
   }

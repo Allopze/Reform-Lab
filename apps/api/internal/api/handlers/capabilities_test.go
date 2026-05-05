@@ -38,6 +38,44 @@ func TestIntersectCapabilitiesReturnsEmptyForMixedFamilies(t *testing.T) {
 	}
 }
 
+func TestCatalogByFamilyIncludesLegacyDocCapability(t *testing.T) {
+	grouped := catalogByFamily(capabilities.Catalog)
+
+	var documentCaps []catalogCapabilityResponse
+	for _, family := range grouped {
+		if family.Family == string(domain.FamilyDocument) {
+			documentCaps = family.Capabilities
+			break
+		}
+	}
+	if len(documentCaps) == 0 {
+		t.Fatal("expected document capabilities in catalog")
+	}
+
+	for _, cap := range documentCaps {
+		if cap.ID != "doc-to-docx" {
+			continue
+		}
+		for _, source := range cap.SourceFormats {
+			if source == "application/msword" {
+				return
+			}
+		}
+		t.Fatal("expected doc-to-docx to expose application/msword source format")
+	}
+	t.Fatal("expected doc-to-docx in catalog")
+}
+
+func TestCatalogByFamilyPreservesCatalogOrder(t *testing.T) {
+	grouped := catalogByFamily(capabilities.Catalog)
+	if len(grouped) == 0 || len(grouped[0].Capabilities) == 0 {
+		t.Fatal("expected non-empty catalog")
+	}
+	if grouped[0].Capabilities[0].ID != capabilities.Catalog[0].ID {
+		t.Fatalf("expected first catalog capability %q, got %q", capabilities.Catalog[0].ID, grouped[0].Capabilities[0].ID)
+	}
+}
+
 func withoutExternalEngines(t *testing.T) {
 	t.Helper()
 

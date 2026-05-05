@@ -136,7 +136,11 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	originalName := security.SanitizeFileName(originalFileName)
 
 	// Extract metadata from the staged file before committing it to long-lived storage.
+	metadataStart := time.Now()
 	meta, err := ingestion.ExtractMetadata(r.Context(), tempPath, detected)
+	if h.Metrics != nil {
+		h.Metrics.MetadataDuration.WithLabelValues(string(detected.Family)).Observe(time.Since(metadataStart).Seconds())
+	}
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			respondError(w, http.StatusRequestEntityTooLarge, "file is too complex to inspect safely")
@@ -158,6 +162,8 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusUnprocessableEntity, "file appears empty or corrupted")
 		case domain.ErrLimitExceeded:
 			respondError(w, http.StatusRequestEntityTooLarge, "file exceeds size limit")
+		case domain.ErrImageDimensionsUnknown:
+			respondError(w, http.StatusUnprocessableEntity, "image dimensions could not be verified safely")
 		case domain.ErrProtectedUnsupported:
 			respondError(w, http.StatusUnprocessableEntity, "protected or encrypted files not supported")
 		default:
@@ -195,11 +201,15 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		UploadedAt:     now,
 	}
 
-	if err := h.Files.Create(r.Context(), &record); err != nil {
+	if err := h.createFileRecord(r.Context(), u, guestSessionID, &record); err != nil {
 		// Clean up the stored file to avoid orphan data.
 		// storagePath is like <base>/originals/<fileID>/data — remove the parent dir.
 		if dir := filepath.Dir(storagePath); dir != "." {
 			_ = os.RemoveAll(dir)
+		}
+		if errors.Is(err, domain.ErrQuotaExceeded) {
+			respondError(w, http.StatusRequestEntityTooLarge, "cumulative storage quota exceeded")
+			return
 		}
 		h.Logger.Error().Err(err).Str("file_id", fileID.String()).Msg("persist file record failed")
 		respondError(w, http.StatusInternalServerError, "failed to register file")
@@ -276,4 +286,26 @@ func (h *UploadHandler) enforceCumulativeQuota(ctx context.Context, u *domain.Us
 		return domain.ErrQuotaExceeded
 	}
 	return nil
+}
+
+type quotaFileCreator interface {
+	CreateIfUnderQuota(ctx context.Context, f *domain.OriginalFile, quotaBytes int64) error
+}
+
+func (h *UploadHandler) createFileRecord(ctx context.Context, u *domain.User, guestSessionID *uuid.UUID, record *domain.OriginalFile) error {
+	quota := h.cumulativeQuotaFor(u, guestSessionID)
+	if creator, ok := h.Files.(quotaFileCreator); ok {
+		return creator.CreateIfUnderQuota(ctx, record, quota)
+	}
+	return h.Files.Create(ctx, record)
+}
+
+func (h *UploadHandler) cumulativeQuotaFor(u *domain.User, guestSessionID *uuid.UUID) int64 {
+	if u != nil {
+		return h.RegisteredCumulativeQuotaBytes
+	}
+	if guestSessionID != nil {
+		return h.GuestCumulativeQuotaBytes
+	}
+	return 0
 }

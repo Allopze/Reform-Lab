@@ -640,6 +640,43 @@ func TestE2E_HealthEndpoint(t *testing.T) {
 	}
 }
 
+func TestE2E_PublicCatalogEndpoint(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	resp, data := doGet(env.server.URL+"/api/catalog", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("catalog: expected 200, got %d — %v", resp.StatusCode, data)
+	}
+
+	families, _ := data["families"].([]interface{})
+	if len(families) == 0 {
+		t.Fatal("expected catalog families")
+	}
+	for _, rawFamily := range families {
+		family, _ := rawFamily.(map[string]interface{})
+		if family["family"] != "document" {
+			continue
+		}
+		caps, _ := family["capabilities"].([]interface{})
+		for _, rawCap := range caps {
+			capability, _ := rawCap.(map[string]interface{})
+			if capability["id"] != "doc-to-docx" {
+				continue
+			}
+			sources, _ := capability["sourceFormats"].([]interface{})
+			for _, source := range sources {
+				if source == "application/msword" {
+					return
+				}
+			}
+			t.Fatal("expected doc-to-docx sourceFormats to include application/msword")
+		}
+		t.Fatal("expected document catalog to include doc-to-docx")
+	}
+	t.Fatal("expected document family in catalog")
+}
+
 func TestE2E_AdminDetailedHealth(t *testing.T) {
 	env := setupE2E(t)
 	defer env.close()
@@ -1057,6 +1094,9 @@ func TestE2E_ArtifactDownloadIsAudited(t *testing.T) {
 	if string(body) != "audit-download" {
 		t.Fatalf("unexpected downloaded body: %q", string(body))
 	}
+	if got := downloadResp.Header.Get("Content-Length"); got != "14" {
+		t.Fatalf("expected Content-Length 14, got %q", got)
+	}
 
 	resp, auditData := doGetClient(client, env.server.URL+"/api/admin/audit?eventType=artifact_downloaded&limit=20", "")
 	if resp.StatusCode != http.StatusOK {
@@ -1065,6 +1105,67 @@ func TestE2E_ArtifactDownloadIsAudited(t *testing.T) {
 	total, _ := auditData["total"].(float64)
 	if total < 1 {
 		t.Fatalf("expected at least one artifact_downloaded event, got %v", total)
+	}
+}
+
+func TestE2E_ArtifactDownloadRejectsTraversalFileName(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	client := registerUserClient(t, env, "TraversalUser", "artifact-traversal@test.com")
+	resp, me := doGetClient(client, env.server.URL+"/api/auth/me", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("auth me: expected 200, got %d — %v", resp.StatusCode, me)
+	}
+	userID, _ := me["id"].(string)
+	if userID == "" {
+		t.Fatal("expected user id in /auth/me response")
+	}
+
+	now := time.Now().UTC()
+	fileID := uuid.New()
+	jobID := uuid.New()
+	artifactID := uuid.New()
+	artifactDir := filepath.Join(env.tmpDir, "storage", "artifacts", artifactID.String())
+	if err := os.MkdirAll(artifactDir, 0o750); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "safe.txt"), []byte("safe"), 0o600); err != nil {
+		t.Fatalf("write safe artifact file: %v", err)
+	}
+	outsidePath := filepath.Join(env.tmpDir, "storage", "artifacts", "outside.txt")
+	if err := os.WriteFile(outsidePath, []byte("outside-secret"), 0o600); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+
+	if _, err := env.db.Exec(
+		`INSERT INTO files (id, user_id, guest_session_id, internal_name, original_name, size, mime_type, format_family, detected_extension, metadata, uploaded_at)
+		 VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fileID.String(), userID, "fixture", "fixture.txt", 4, "text/plain", "document", "txt", `{}`, now.Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert file row: %v", err)
+	}
+	if _, err := env.db.Exec(
+		`INSERT INTO jobs (id, user_id, file_id, capability_id, output_format, status, progress, created_at, started_at, completed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		jobID.String(), userID, fileID.String(), "doc-to-txt", "txt", string(domain.JobSucceeded), 100, now.Add(-2*time.Minute).Format(time.RFC3339Nano), now.Add(-90*time.Second).Format(time.RFC3339Nano), now.Add(-time.Minute).Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert job row: %v", err)
+	}
+	if _, err := env.db.Exec(
+		`INSERT INTO artifacts (id, user_id, job_id, file_id, file_name, mime_type, size, storage_path, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		artifactID.String(), userID, jobID.String(), fileID.String(), "../outside.txt", "text/plain", 4, outsidePath, now.Format(time.RFC3339Nano), now.Add(2*time.Hour).Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert artifact row: %v", err)
+	}
+
+	downloadResp, body := downloadArtifactClient(client, env.server.URL, artifactID.String())
+	if downloadResp.StatusCode != http.StatusGone {
+		t.Fatalf("download traversal artifact: expected 410, got %d — body: %s", downloadResp.StatusCode, string(body))
+	}
+	if strings.Contains(string(body), "outside-secret") {
+		t.Fatal("path traversal response leaked outside file content")
 	}
 }
 
@@ -1118,6 +1219,59 @@ func TestE2E_UploadAndCapabilities(t *testing.T) {
 			t.Fatalf("capabilities: expected ascending presentationOrder, got %d after %d", int(order), lastOrder)
 		}
 		lastOrder = int(order)
+	}
+}
+
+func TestE2E_LegacyDocFixtureResolvesCapabilities(t *testing.T) {
+	if !capabilities.DefaultProber.IsAvailable("libreoffice") {
+		t.Skip("libreoffice not available")
+	}
+
+	env := setupE2E(t)
+	defer env.close()
+
+	client := registerUserClient(t, env, "LegacyDocUser", "legacy-doc@test.com")
+	resp, fileData := uploadFixtureClient(client, env.server.URL, "", fixturePath("doc", "valid-basic.doc"))
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("upload legacy doc fixture: expected 201, got %d — %v", resp.StatusCode, fileData)
+	}
+	format, _ := fileData["detectedFormat"].(map[string]interface{})
+	if format["mimeType"] != "application/msword" {
+		t.Fatalf("expected application/msword detection, got %v", format)
+	}
+
+	fileID := fileData["id"].(string)
+	resp, capsData := doGetClient(client, fmt.Sprintf("%s/api/files/%s/capabilities", env.server.URL, fileID), "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("legacy doc capabilities: expected 200, got %d — %v", resp.StatusCode, capsData)
+	}
+	requireCapabilityID(t, capsData, "doc-to-pdf")
+	requireCapabilityID(t, capsData, "doc-to-docx")
+	requireCapabilityID(t, capsData, "doc-to-txt")
+}
+
+func TestE2E_ControlledZipBombFixtureRejectedOnUpload(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	client := registerUserClient(t, env, "ZipBombUser", "zip-bomb@test.com")
+	resp, fileData := uploadFixtureClient(client, env.server.URL, "", fixturePath("security", "zip-bomb-controlled.docx"))
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("controlled zip bomb upload: expected 422, got %d — %v", resp.StatusCode, fileData)
+	}
+}
+
+func TestE2E_ProtectedODFFixtureRejectedOnUpload(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	client := registerUserClient(t, env, "ProtectedODFUser", "protected-odf@test.com")
+	resp, fileData := uploadFixtureClient(client, env.server.URL, "", fixturePath("protected", "odf-encrypted-manifest.odt"))
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("protected odf upload: expected 422, got %d — %v", resp.StatusCode, fileData)
+	}
+	if fileData["error"] != "protected or encrypted files not supported" {
+		t.Fatalf("expected protected-file error, got %v", fileData)
 	}
 }
 

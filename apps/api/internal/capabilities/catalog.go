@@ -731,6 +731,7 @@ var Catalog = withPresentationOrders([]domain.Capability{
 			"application/vnd.oasis.opendocument.text",
 			"application/rtf",
 			"text/rtf",
+			"application/msword",
 		},
 		OperationType: domain.OpConvert,
 		TargetFormat:  "pdf",
@@ -754,6 +755,7 @@ var Catalog = withPresentationOrders([]domain.Capability{
 			"application/vnd.oasis.opendocument.text",
 			"application/rtf",
 			"text/rtf",
+			"application/msword",
 		},
 		OperationType: domain.OpExtract,
 		TargetFormat:  "txt",
@@ -770,6 +772,7 @@ var Catalog = withPresentationOrders([]domain.Capability{
 		ID:          "doc-to-docx",
 		DisplayName: "Convertir a Word",
 		SourceFormats: []string{
+			"application/msword",
 			"application/vnd.oasis.opendocument.text",
 			"application/rtf",
 			"text/rtf",

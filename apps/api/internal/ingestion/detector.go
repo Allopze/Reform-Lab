@@ -14,6 +14,9 @@ import (
 )
 
 const maxDetectionBytes = 64 * 1024
+const maxInputZipEntries = 512
+const maxInputZipUncompressedBytes = 500 * 1024 * 1024
+const maxInputZipCompressionRatio = 100
 
 // mimeToFamily maps known MIME types to format families.
 var mimeToFamily = map[string]domain.FormatFamily{
@@ -118,8 +121,17 @@ func DetectFormat(r io.ReadSeeker) (domain.DetectedFormat, error) {
 	}
 
 	mime := normalizeDetectedMIME(mtype.String())
+	if inputZipLooksUnsafe(r, sample) {
+		return domain.DetectedFormat{
+			MIMEType:   mime,
+			Confidence: 1.0,
+		}, domain.ErrFormatUnsupported
+	}
 	if looksLikeSVG(sample) {
 		mime = "image/svg+xml"
+	}
+	if looksLikeLegacyWordDocument(sample) {
+		mime = "application/msword"
 	}
 	if officeMime := detectOOXMLMime(r, sample); officeMime != "" {
 		switch mime {
@@ -278,6 +290,63 @@ func looksLikeOpus(sample []byte) bool {
 	return bytes.Contains(sample, []byte("OpusHead"))
 }
 
+func looksLikeLegacyWordDocument(sample []byte) bool {
+	compoundFileMagic := []byte{0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1}
+	if !bytes.HasPrefix(sample, compoundFileMagic) {
+		return false
+	}
+
+	return bytes.Contains(sample, []byte{
+		'W', 0x00, 'o', 0x00, 'r', 0x00, 'd', 0x00,
+		'D', 0x00, 'o', 0x00, 'c', 0x00, 'u', 0x00,
+		'm', 0x00, 'e', 0x00, 'n', 0x00, 't', 0x00,
+	}) ||
+		bytes.Contains(sample, []byte("Word.Document.8")) ||
+		bytes.Contains(sample, []byte("MSWordDoc"))
+}
+
+func inputZipLooksUnsafe(r io.ReadSeeker, sample []byte) bool {
+	if !bytes.HasPrefix(sample, []byte{'P', 'K', 0x03, 0x04}) {
+		return false
+	}
+
+	if readerAt, ok := r.(io.ReaderAt); ok {
+		size, err := r.Seek(0, io.SeekEnd)
+		if err == nil {
+			if _, err := r.Seek(0, io.SeekStart); err == nil {
+				return zipReaderAtLooksUnsafe(readerAt, size)
+			}
+		}
+	}
+
+	return zipReaderAtLooksUnsafe(bytes.NewReader(sample), int64(len(sample)))
+}
+
+func zipReaderAtLooksUnsafe(readerAt io.ReaderAt, size int64) bool {
+	zr, err := zip.NewReader(readerAt, size)
+	if err != nil {
+		return false
+	}
+	if len(zr.File) > maxInputZipEntries {
+		return true
+	}
+
+	var totalUncompressed uint64
+	for i, file := range zr.File {
+		if i >= maxInputZipEntries {
+			return true
+		}
+		if zipEntryLooksUnsafe(file) {
+			return true
+		}
+		totalUncompressed += file.UncompressedSize64
+		if totalUncompressed > maxInputZipUncompressedBytes {
+			return true
+		}
+	}
+	return false
+}
+
 func detectOOXMLMime(r io.ReadSeeker, sample []byte) string {
 	if !bytes.HasPrefix(sample, []byte{'P', 'K', 0x03, 0x04}) {
 		return ""
@@ -302,10 +371,21 @@ func detectOOXMLMimeFromZip(readerAt io.ReaderAt, size int64) string {
 	if err != nil {
 		return ""
 	}
+	if len(zr.File) > maxInputZipEntries {
+		return ""
+	}
 
+	var totalUncompressed uint64
 	for i, file := range zr.File {
-		if i >= 128 {
+		if i >= maxInputZipEntries {
 			break
+		}
+		if zipEntryLooksUnsafe(file) {
+			return ""
+		}
+		totalUncompressed += file.UncompressedSize64
+		if totalUncompressed > maxInputZipUncompressedBytes {
+			return ""
 		}
 		name := strings.ToLower(file.Name)
 		switch {
@@ -319,6 +399,16 @@ func detectOOXMLMimeFromZip(readerAt io.ReaderAt, size int64) string {
 	}
 
 	return ""
+}
+
+func zipEntryLooksUnsafe(file *zip.File) bool {
+	if file.UncompressedSize64 > maxInputZipUncompressedBytes {
+		return true
+	}
+	if file.CompressedSize64 > 0 && file.UncompressedSize64/file.CompressedSize64 > maxInputZipCompressionRatio {
+		return true
+	}
+	return false
 }
 
 func repeatInt(value, count int) []int {

@@ -2,732 +2,613 @@
 
 ## Resumen ejecutivo
 
-El sistema de conversión de archivos de Reform Lab presenta una arquitectura bien diseñada con separación clara de responsabilidades, detección real de formato mediante magic bytes, validación de output post-conversión, y un pipeline asíncrono basado en jobs. Los principales hallazgos son:
+El sistema de conversión de Reform Lab está sólidamente diseñado, con una arquitectura clara que respeta la separación entre detección, resolución de capacidades y ejecución de jobs. La fuente de verdad de capacidades (`catalog.go`) es exhaustiva (~90 capacidades en 5 familias) y el pipeline de validación (detección por contenido → validación de límites → metadatos → resolución) está bien implementado.
 
-- **Fortalezas**: Catálogo centralizado de capacidades, detección de formato por contenido (no por extensión), validación de output con verificación MIME, manejo de errores clasificados, feature flags, y observabilidad con métricas y tracing.
-- **Riesgos críticos**: ~~El conversor de video `video-to-mp4` no acepta `video/mp4` como entrada~~ **[FIXED]**. ~~El conversor `video-to-webm` no acepta `video/webm` como entrada~~ **[FIXED]**. ~~No hay validación de que el engine binario exista antes de registrar la capacidad en el registry~~ **[IMPROVED]**.
-- **Riesgos importantes**: Faltan tests de integración E2E para el flujo completo de conversión. ~~No hay validación de que el archivo convertido tenga un tamaño razonable respecto al original~~ **[FIXED]**. ~~El polling del frontend no maneja el estado `expired`~~ **[FIXED]**. La categoría "Auto" del frontend muestra formatos destino de la categoría detectada que pueden no coincidir con las capacidades reales del backend.
-- **Oportunidades**: Tests con corpus de archivos reales, métricas de éxito/fallo por formato, y un dashboard de diagnósticos.
+Se detectaron originalmente **2 hallazgos críticos** funcionales que impedían conversiones prometidas (HEIC >10MB bloqueados por el validador; .doc legacy sin capacidades), **11 hallazgos importantes** de robustez y UX, y **9 hallazgos menores** de consistencia o deuda técnica. Las pasadas 1-3 cierran los críticos y la mayoría de robustez inmediata sin cambiar la arquitectura base.
 
-## Estado de fixes aplicados
+Riesgos principales ya mitigados: (1) imágenes HEIC/HEIF/SVG sin dimensiones verificables ahora tienen límite conservador explícito de 25MB y error claro; (2) archivos .doc legacy ya resuelven capacidades documentales; (3) documentos OOXML/ODF protegidos se detectan antes de la conversión cuando el contenedor expone metadatos de cifrado.
 
-| # | Fix | Estado | Archivos modificados |
-|---|---|---|---|
-| 1 | Resolver inconsistencia video-to-mp4 y video-to-webm | ✅ Completado | `catalog.go`, `resolver.go`, `resolver_test.go` |
-| 2 | Agregar manejo de estado `expired` en polling frontend | ✅ Completado | `use-conversion.ts`, `es.json` |
-| 3 | Agregar validación de tamaño razonable del output | ✅ Completado | `output_validation.go`, `queue.go`, `service.go`, `conversion.go`, `job.go`, `admin_jobs.go`, `output_validation_test.go`, `handler_cancel_test.go`, `service_test.go` |
-| 4 | Corregir `containsAny` para usar `strings.Contains` | ✅ Completado | `handler.go` |
-| 5 | Manejar 410 Gone cuando artifact fue eliminado | ✅ Completado | `artifact.go` |
-| 6 | Mejorar health check de engines al startup | ✅ Completado | `main.go` |
+## Estado de implementación
 
-## Stack y arquitectura de conversión detectados
+### 2026-05-05 — Pasada 1: críticos y UX de descarga
 
-- **Lenguaje/framework**: Go 1.x (backend API + workers), Next.js App Router con TypeScript (frontend)
-- **Librerías de conversión**: FFmpeg (audio/video/imágenes WebP/AVIF/SVG), Poppler (PDF a imágenes/texto), LibreOffice (documentos de oficina), pdf2docx (PDF a DOCX), Ghostscript (compresión PDF), Tesseract (OCR), libheif (HEIC/HEIF), librsvg (SVG a PDF), Goldmark (Markdown a HTML), Go stdlib image (JPEG/PNG/GIF/BMP/TIFF/WebP)
-- **Servicios internos**: API HTTP con chi router, workers con Asynq (Redis queue), SQLite como base de datos
-- **Workers/queues**: Asynq con Redis, handler con registry de engines por capability ID
-- **Storage**: Sistema de archivos local con directorios para originals, artifacts, temp
-- **Base de datos**: SQLite con migraciones SQL
-- **APIs relacionadas**: POST /api/files (upload), POST /api/conversions (single), POST /api/conversions/batch, GET /api/files/{fileId}/capabilities, GET /api/jobs/{jobId}, GET /api/artifacts/{artifactId}/download
-- **Flujo frontend/backend**: Upload → detect format → resolve capabilities → user selects → create job → poll job status → download artifact
+Implementado:
+- `application/msword` agregado a `doc-to-pdf`, `doc-to-txt` y `doc-to-docx`; la UI ahora lista DOC como formato de documento.
+- El límite conservador para imágenes sin dimensiones verificables subió de 10MB a 25MB y devuelve un error específico cuando no puede verificar dimensiones de forma segura.
+- Metadata detecta documentos OOXML/ODF protegidos cuando el contenedor expone `EncryptionInfo`, `EncryptedPackage` o `manifest:encryption-data`.
+- `classifyError` devuelve un mensaje accionable para documentos protegidos por contraseña/encriptados.
+- Descarga de artefactos incluye `Content-Length` usando el tamaño persistido del artifact.
 
-## Flujo actual de conversión
+Tests agregados/actualizados:
+- Resolución de capacidades para `.doc` legacy.
+- Validación de imágenes sin dimensiones hasta 25MB y rechazo específico por encima del límite.
+- Detección de OOXML y ODF protegidos.
+- Clasificación de error de documento protegido.
+- E2E de descarga verifica `Content-Length`.
 
-1. **Subida**: Usuario arrastra archivo al dropzone → POST /api/files
-2. **Validación inicial**: Se verifica tamaño, formato detectado, metadatos, protección
-3. **Detección de formato**: Se lee el contenido del archivo (64KB) y se detecta MIME type con `github.com/gabriel-vasile/mimetype`, con overrides para SVG, OOXML, Opus, Markdown, CSV
-4. **Extracción de metadatos**: Se extraen dimensiones, páginas, duración, protección
-5. **Validación**: Se aplican límites por familia de formato (tamaño, píxeles, páginas, duración)
-6. **Persistencia del original**: Se guarda con UUID como nombre interno
-7. **Resolución de capacidades**: GET /api/files/{fileId}/capabilities → filtra por formato fuente, feature flags, disponibilidad de engine, límites
-8. **Selección del usuario**: Elige una capacidad del dropdown
-9. **Creación del job**: POST /api/conversions → valida elegibilidad, crea job, encola en Redis
-10. **Ejecución del worker**: Procesa payload, marca job como running, ejecuta engine, valida output, persiste artifact
-11. **Polling del frontend**: Cada 1.5s consulta GET /api/jobs/{jobId} hasta estado terminal
-12. **Descarga**: GET /api/artifacts/{artifactId}/download → verifica permisos, expiración, sirve archivo
+Pendiente tras esta pasada:
+- Cuota acumulativa atómica en upload.
+- Validación contextual del output menor al 1% del input.
+- Anti ZIP-bomb en ZIPs de entrada.
+- Validación estructural de PDF output.
+- Sanitización defensiva del nombre de artifact emitido por engines.
+- Métrica de duración de metadata extraction.
+- Sincronización dinámica/manual completa de hints UI con el catálogo.
 
-## Matriz de formatos detectada
+### 2026-05-05 — Pasada 2: robustez, observabilidad y cuota
 
-| Formato de entrada | Formato de salida | Declarado en UI | Implementado en backend | Validado | Estado | Observaciones |
+Implementado:
+- La cuota acumulativa de upload ahora se revalida de forma atómica en SQLite con `BEGIN IMMEDIATE` antes de insertar el registro del archivo.
+- La validación de output PDF ahora exige MIME PDF, header `%PDF-` y marcador `%%EOF`.
+- El check “output < 1% del input” se omite para operaciones `extract` y `compress`, evitando falsos rechazos de extracciones/compresiones legítimas.
+- El detector OOXML rechaza ZIPs de entrada con demasiadas entradas, tamaño expandido acumulado excesivo o ratio de compresión extremo.
+- La validación de ZIP output ahora inspecciona la primera entrada de preview y exige JPEG/PNG real.
+- `outputArtifactFileName` sanitiza defensivamente el nombre que devuelve el engine antes de persistir el artifact.
+- Se agregó la métrica `reform_metadata_extraction_duration_seconds` por familia de formato.
+
+Tests agregados/actualizados:
+- Repositorio: `CreateIfUnderQuota` rechaza exceso de cuota para usuario y guest.
+- Detector: ZIP sospechoso por ratio extremo no se acepta como OOXML.
+- Workers: PDF truncado se rechaza; extracción pequeña válida no falla por ratio; ZIP con imagen corrupta se rechaza; filename de artifact se sanitiza.
+
+Pendiente tras esta pasada:
+- Completar sincronización dinámica/manual de UI hints con el catálogo.
+- Actualizar `docs/domain/capabilities-catalog.md` con el estado real.
+- Revisar si conviene endpoint público `GET /api/catalog` u OpenAPI.
+- Ampliar corpus real: `.doc`, protegidos reales, ZIP bombs controlados, corruptos por familia.
+
+### 2026-05-05 — Pasada 3: catálogo público, docs y contrato de descarga
+
+Implementado:
+- Nuevo endpoint público `GET /api/catalog` que expone el catálogo backend agrupado por familia, con source formats, target, operación, límites y restricciones conocidas.
+- Cliente frontend `getCatalog()` y tipos `CatalogFamily`/`CatalogCapability` para consumir el catálogo sin duplicar reglas.
+- Test E2E de `GET /api/catalog` verificando que `.doc` legacy aparece en `doc-to-docx`.
+- Test E2E de descarga con `artifact.file_name` malicioso (`../outside.txt`) para asegurar que no se lee contenido fuera del directorio del artifact.
+- `docs/domain/capabilities-catalog.md` actualizado con `.doc` legacy y referencia al endpoint público de catálogo.
+
+Pendiente tras esta pasada:
+- Decidir si la pantalla inicial debe consumir `GET /api/catalog` en runtime o mantener hints estáticos como fallback visual.
+- Ampliar corpus real: `.doc`, protegidos reales, ZIP bombs controlados, corruptos por familia.
+- Valorar OpenAPI para compartir tipos completos entre API y frontend.
+
+### 2026-05-05 — Pasada 4: UI híbrida con catálogo backend
+
+Implementado:
+- La pantalla inicial carga `GET /api/catalog` en runtime y usa el catálogo para hidratar `acceptedFormats`, `targetFormats` y `acceptedMimeTypes`.
+- `categories.ts` conserva estructura visual, textos, iconos y fallback estático si el catálogo no está disponible.
+- Se agregó `applyCatalogHints()` como función pura para evitar meter reglas de negocio en componentes.
+- Tests frontend cubren hidratación desde catálogo, fallback sin catálogo y preservación de la categoría `auto`.
+
+Pendiente tras esta pasada:
+- Ampliar corpus real: `.doc`, protegidos reales, ZIP bombs controlados, corruptos por familia.
+- Valorar OpenAPI para compartir tipos completos entre API y frontend.
+
+### 2026-05-05 — Pasada 5: corpus real de fixtures críticos
+
+Implementado:
+- Se agregó corpus persistido en `apps/api/tests/fixtures` para `.doc` legacy, documentos protegidos OOXML/ODF, ZIP bomb controlado y corruptos por familia: PDF, documento, imagen, audio y video.
+- La detección ahora queda cubierta por fixtures reales/persistidos: `.doc` se reconoce como `application/msword`, el ZIP bomb controlado se rechaza y los corruptos preservan la frontera de MIME esperada cuando aplica.
+- Metadata valida fixtures protegidos desde disco para OOXML (`EncryptionInfo`/`EncryptedPackage`) y ODF (`manifest:encryption-data`).
+- Workers documentales convierten el `.doc` legacy real a PDF y DOCX con LibreOffice.
+- E2E cubre que un `.doc` real subido resuelve `doc-to-pdf`, `doc-to-docx` y `doc-to-txt`, que el ZIP bomb controlado se rechaza en upload y que un ODF protegido devuelve un error accionable.
+- `apps/api/tests/fixtures/README.md` documenta cada fixture y su propósito.
+
+Pendiente tras esta pasada:
+- Valorar OpenAPI para compartir tipos completos entre API y frontend.
+- Seguir ampliando corpus con muestras reales adicionales cuando aparezcan bugs específicos de engines (por ejemplo PDFs cifrados reales, DOC legacy con macros o multimedia grande).
+
+## Stack y flujo detectado
+
+**Backend**: Go 1.25, chi router, SQLite (WAL), Asynq (Redis) / in-process queue, zerolog, Prometheus, OTel.
+**Frontend**: Next.js 15, React 19, Tailwind CSS 4, Vitest, Playwright, next-intl.
+**Workers/Engines**: LibreOffice, Poppler (pdftoppm/pdftotext/pdftohtml), FFmpeg, Ghostscript, Tesseract, libheif, librsvg, pdf2docx + pure Go engines (go-image, goldmark, go-html).
+**Storage**: Filesystem local (`originals/`, `artifacts/`, `temp/`).
+
+```
+Upload → Detect (mimetype + heurísticas) → Extract metadata → Validate → Save originals
+  → Resolve capabilities (source match, engine probe, size, protected)
+  → Create conversion request → Atomic job creation (DB + queue)
+  → Worker picks engine → Execute with cancel-aware context
+  → Validate output (MIME, size, structure) → Persist artifact → Notify (webhook/email)
+  → Download (authorization by file ownership, expiration check)
+```
+
+## Matriz de formatos
+
+| Entrada (MIME) | Salida | UI | Backend | Validado | Estado | Observaciones |
 |---|---|---|---|---|---|---|
-| application/pdf | jpg | ✅ | ✅ | ✅ | Funciona | Multi-page produce ZIP |
-| application/pdf | png | ✅ | ✅ | ✅ | Funciona | Multi-page produce ZIP |
-| application/pdf | docx | ✅ | ✅ | ✅ | Funciona | Engine pdf2docx |
-| application/pdf | txt | ✅ | ✅ | ✅ | Funciona | Extracción de texto |
-| application/pdf | pdf (comprimido) | ✅ | ✅ | ✅ | Funciona | Ghostscript |
-| application/pdf | html (preview) | ✅ | ✅ | ✅ | Funciona | poppler-html |
-| application/pdf | txt (OCR) | ✅ | ✅ | ✅ | Funciona | Tesseract |
-| application/pdf | json (OCR) | ✅ | ✅ | ✅ | Funciona | Tesseract TSV |
-| application/pdf | pdf (searchable OCR) | ✅ | ✅ | ✅ | Funciona | Tesseract |
-| image/jpeg | png | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/jpeg | jpg (comprimir) | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/jpeg | webp | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| image/jpeg | avif | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| image/jpeg | pdf | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/png | jpg | ✅ | ✅ | ✅ | Funciona | Go stdlib, transparencia se pierde |
-| image/png | png (comprimir) | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/png | webp | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| image/png | avif | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| image/png | pdf | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/webp | png | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/webp | jpg | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/webp | pdf | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/gif | png | ✅ | ✅ | ✅ | Funciona | Go stdlib, animación se pierde |
-| image/gif | jpg | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/gif | pdf | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/bmp | png | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/bmp | jpg | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/bmp | pdf | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/tiff | png | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/tiff | jpg | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/tiff | pdf | ✅ | ✅ | ✅ | Funciona | Go stdlib |
-| image/heic | jpg | ✅ | ✅ | ✅ | Funciona | libheif |
-| image/heic | png | ✅ | ✅ | ✅ | Funciona | libheif |
-| image/heic | webp | ✅ | ✅ | ✅ | Funciona | libheif + ffmpeg |
-| image/svg+xml | png | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| image/svg+xml | webp | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| image/svg+xml | pdf | ✅ | ✅ | ✅ | Funciona | librsvg |
-| DOCX | pdf | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| DOCX | txt | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| DOCX | html | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| DOCX | md | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| ODT | pdf | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| ODT | txt | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| ODT | docx | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| RTF | pdf | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| RTF | txt | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| RTF | docx | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| TXT | pdf | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| HTML | pdf | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| HTML | txt | ✅ | ✅ | ✅ | Funciona | Go html |
-| Markdown | html | ✅ | ✅ | ✅ | Funciona | Goldmark |
-| Markdown | pdf | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| Markdown | docx | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| PPTX | pdf | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| PPTX | jpg | ✅ | ✅ | ✅ | Funciona | LibreOffice + Poppler |
-| PPTX | png | ✅ | ✅ | ✅ | Funciona | LibreOffice + Poppler |
-| ODP | pdf | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| ODP | jpg | ✅ | ✅ | ✅ | Funciona | LibreOffice + Poppler |
-| ODP | png | ✅ | ✅ | ✅ | Funciona | LibreOffice + Poppler |
-| XLSX | pdf | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| XLSX | csv | ✅ | ✅ | ✅ | Funciona | LibreOffice, hoja activa |
-| XLSX | html | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| ODS | pdf | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| ODS | csv | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| ODS | xlsx | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| ODS | html | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| CSV | pdf | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| CSV | xlsx | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| CSV | html | ✅ | ✅ | ✅ | Funciona | LibreOffice |
-| audio/* | mp3 | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| audio/* | wav | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| audio/* | ogg | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| audio/* | aac | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| audio/* | m4a | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| audio/* | flac | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| audio/* | opus | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| video/mp4 | webm | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| video/mp4 | gif | ✅ | ✅ | ✅ | Funciona | FFmpeg, 30s max |
-| video/mp4 | mp3 | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| video/mp4 | wav | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| video/mp4 | aac | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| video/mp4 | m4a | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| video/mp4 | flac | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| video/mp4 | opus | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| video/mp4 | thumbnails zip | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| video/mp4 | contact sheet jpg | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| video/mp4 | preview mp4 | ✅ | ✅ | ✅ | Funciona | FFmpeg, 8s max |
-| video/mp4 | preview webm | ✅ | ✅ | ✅ | Funciona | FFmpeg, 8s max |
-| video/mp4 | waveform png | ✅ | ✅ | ✅ | Funciona | FFmpeg, requiere audio |
-| video/quicktime | mp4 | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| video/quicktime | webm | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| video/webm | mp4 | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| video/x-msvideo | mp4 | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| video/x-msvideo | webm | ✅ | ✅ | ✅ | Funciona | FFmpeg |
-| video/mp4 | mp4 | ⚠️ | ❌ | N/A | **Inconsistente** | UI muestra mp4 como destino para mp4, pero el engine no lo acepta como source |
-| video/webm | webm | ⚠️ | ❌ | N/A | **Inconsistente** | UI muestra webm como destino para webm, pero el engine no lo acepta como source |
+| application/pdf | jpg | Si | Si | Si | Funciona | Multi-página produce ZIP |
+| application/pdf | png | Si | Si | Si | Funciona | Multi-página produce ZIP |
+| application/pdf | docx | Si | Si | Si | Funciona | |
+| application/pdf | txt | Si | Si | Si | Funciona | |
+| application/pdf | pdf (compressed) | Si | Si | Si | Funciona | Ghostscript |
+| application/pdf | html | Si | Si | Si | Funciona | Preview |
+| application/pdf | txt (OCR) | No | Si | No confirmado | Parcial | No visible en UI estática |
+| application/pdf | json (OCR) | Si | Si | No confirmado | Funciona | |
+| application/pdf | pdf (searchable OCR) | No | Si | No confirmado | Parcial | No visible en UI estática |
+| image/jpeg | png | Si | Si | Si | Funciona | |
+| image/jpeg | webp | Si | Si | Si | Funciona | |
+| image/jpeg | avif | Si | Si | Si | Funciona | |
+| image/jpeg | pdf | Si | Si | Si | Funciona | |
+| image/jpeg | jpg (compressed) | No | Si | No confirmado | Funciona | |
+| image/jpeg | jpg (thumbnail) | No | Si | No confirmado | Funciona | Solo JPG source |
+| image/jpeg | jpg (640px/1600px) | No | Si | No confirmado | Funciona | Web variants |
+| image/png | jpg | Si | Si | Si | Funciona | |
+| image/png | webp | Si | Si | Si | Funciona | |
+| image/png | avif | Si | Si | Si | Funciona | |
+| image/png | pdf | Si | Si | Si | Funciona | |
+| image/png | png (compressed) | No | Si | No confirmado | Funciona | |
+| image/png | png (thumbnail) | No | Si | No confirmado | Funciona | Solo PNG source |
+| image/heic, image/heif | jpg | Si | Si | Si | Funciona | |
+| image/heic, image/heif | png | Si | Si | Si | Funciona | |
+| image/heic, image/heif | webp | Si | Si | Si | Funciona | |
+| image/svg+xml | png | Si | Si | Si | Funciona | |
+| image/svg+xml | webp | Si | Si | Si | Funciona | |
+| image/svg+xml | pdf | Si | Si | No confirmado | Funciona | Requiere librsvg |
+| image/webp | png/jpg/pdf | Si | Si | No confirmado | Funciona | |
+| image/gif | png/jpg/pdf | Si | Si | No confirmado | Funciona | |
+| image/bmp | png/jpg/pdf | Si | Si | No confirmado | Funciona | |
+| image/tiff | png/jpg/pdf | Si | Si | No confirmado | Funciona | |
+| DOCX/ODT/RTF | pdf | Si | Si | Si | Funciona | |
+| DOCX/ODT/RTF | txt | Si | Si | No confirmado | Funciona | |
+| ODT/RTF | docx | Si | Si | No confirmado | Funciona | |
+| DOCX | html | Si | Si | No confirmado | Funciona | |
+| DOCX | md | Si | Si | No confirmado | Funciona | LibreOffice path |
+| text/plain | pdf | Si | Si | No confirmado | Funciona | |
+| text/html | pdf | Si | Si | No confirmado | Funciona | |
+| text/html | txt | Si | Si | Si | Funciona | Pure Go |
+| text/markdown | html | Si | Si | Si | Funciona | Goldmark |
+| text/markdown | pdf | Si | Si | No confirmado | Funciona | |
+| text/markdown | docx | Si | Si | No confirmado | Funciona | |
+| text/csv | pdf/xlsx/html | Si | Si | No confirmado | Funciona | |
+| XLSX/ODS | pdf/csv/html | Si | Si | No confirmado | Funciona | |
+| ODS/CSV | xlsx | Si | Si | No confirmado | Funciona | |
+| PPTX/ODP | pdf/jpg/png | Si | Si | No confirmado | Funciona | ZIP multi-slide |
+| application/msword | pdf/txt/docx | Si | Si | Si | Funciona | Cubierto con fixture DOC legacy real |
+| Audio MP3/WAV/OGG/FLAC/AAC/M4A/Opus | cross-format | Si | Si | Si | Funciona | ffmpeg |
+| Audio todos | waveform PNG | Si | Si | Si | Funciona | |
+| Video MP4/MOV/WEBM/AVI | mp4/webm | Si | Si | Si | Funciona | ffmpeg |
+| Video MP4/MOV/WEBM/AVI | gif | Si | Si | Si | Funciona | 30s, 480px, 10fps |
+| Video MP4/MOV/WEBM/AVI | audio MP3/WAV/AAC/M4A/FLAC/Opus | Si | Si | Si | Funciona | ffmpeg |
+| Video MP4/MOV/WEBM/AVI | preview mp4/webm | Si | Si | Si | Funciona | 8s clip |
+| Video MP4/MOV/WEBM/AVI | thumbnails ZIP | Si | Si | No confirmado | Funciona | 6 frames |
+| Video MP4/MOV/WEBM/AVI | contact sheet JPG | Si | Si | No confirmado | Funciona | 3x2 grid |
+| Video MP4/MOV/WEBM/AVI | waveform PNG | Si | Si | No confirmado | Funciona | |
 
 ## Hallazgos críticos
 
-### [CRÍTICO] ~~video-to-mp4 no acepta video/mp4 como formato de entrada~~ **[RESUELTO]**
+### [CRÍTICO] HEIC/HEIF y SVG > 10MB bloqueados por el validador de upload aunque los engines soportan hasta 100MB
 
-**Descripción:**  
-~~La capacidad `video-to-mp4` declara como `SourceFormats` solo `video/quicktime`, `video/webm`, `video/x-msvideo`.~~ **FIX**: Se agregó `video/mp4` a los SourceFormats de `video-to-mp4` y `video/webm` a los SourceFormats de `video-to-webm`. Se modificó `rejectsSameFormat` para permitir re-encoding de video al mismo formato (útil para cambio de codec/calidad). Se agregaron `KnownLimitations` documentando el comportamiento.
+**Descripción:** En `validator.go:46-52`, cuando una imagen no tiene dimensiones parseables (Width/Height == nil, común en HEIC/HEIF con libheif o SVG con viewBox no detectado), el validador impone un límite conservador de 10MB para prevenir decompression bombs. Sin embargo, las capacidades del catálogo (`image-heic-to-jpg`, `image-heic-to-png`, `image-heic-to-webp`, `image-svg-to-png`, `image-svg-to-webp`, `image-svg-to-pdf`) declaran `MaxInputBytes: 100MB`. Esto crea una inconsistencia: archivos HEIC/SVG de entre 10MB y 100MB se rechazan en upload aunque el engine podría procesarlos.
 
-**Impacto:** ~~Usuarios que suben MP4 esperando convertirlos a MP4 no verán la opción~~ **Resuelto**: Ahora MP4→MP4 y WebM→WebM están disponibles como re-encoding.
+**Impacto:** Usuarios con imágenes HEIC/HEIF o SVG de alta resolución (comunes en fotografía profesional y diseño) no pueden subirlas. El backend promete soporte hasta 100MB pero el validador rechaza a 10MB.
 
-**Ubicación:**  
-- `apps/api/internal/capabilities/catalog.go`: `video-to-mp4` y `video-to-webm` SourceFormats actualizados
-- `apps/api/internal/capabilities/resolver.go`: `rejectsSameFormat` permite re-encoding de video
-- `apps/api/internal/capabilities/resolver_test.go`: Tests actualizados para incluir video-to-mp4 y video-to-webm
+**Ubicación:**
+- `apps/api/internal/ingestion/validator.go:46-52` — límite 10MB para imágenes sin dimensiones
+- `apps/api/internal/capabilities/catalog.go:611-669` — capacidades HEIC con MaxInputBytes=100MB
+- `apps/api/internal/capabilities/catalog.go:671-723` — capacidades SVG con MaxInputBytes=100MB
 
-**Prioridad:** ~~Alta~~ **Resuelto**.
+**Cómo verificarlo:** Intentar subir un HEIC >10MB con ffprobe ausente o fallando. Alternativamente, subir un SVG >10MB sin viewBox explícito.
 
----
+**Recomendación:** Separar el límite de seguridad anti-bomba del límite funcional. Para HEIC: usar ffprobe como fallback para extraer dimensiones reales antes de aplicar el límite de píxeles. Si ffprobe también falla, rechazar con `"could not verify image dimensions — unsupported variant"`. Para SVG: el parser de viewBox ya cubre la mayoría de casos. Aumentar el límite conservador a 25MB o rechazar explícitamente con mensaje claro en lugar de un límite silencioso.
 
-### [CRÍTICO] ~~video-to-webm no acepta video/webm como formato de entrada~~ **[RESUELTO]**
+**Prioridad:** Alta.
 
-**Descripción:**  
-~~Mismo patrón que el hallazgo anterior.~~ **FIX**: Resuelto junto con video-to-mp4. Se agregó `video/webm` a los SourceFormats de `video-to-webm` y se permite re-encoding del mismo formato.
+### [CRÍTICO] Archivos legacy .doc (application/msword) detectados correctamente pero sin capacidades disponibles
 
-**Prioridad:** ~~Alta~~ **Resuelto**.
+**Descripción:** El detector mapea `application/msword` → `FamilyDocument`, ext `doc` en `mimeToFamily` y `mimeToExtension`. Sin embargo, **ninguna capacidad del catálogo** lista `application/msword` en sus SourceFormats. Las capacidades de documentos solo aceptan `application/vnd.openxmlformats-officedocument.wordprocessingml.document` (DOCX), `application/vnd.oasis.opendocument.text` (ODT), `application/rtf` y `text/rtf`. Esto significa que un archivo .doc se sube exitosamente pero recibe **cero capacidades disponibles**, mostrando una UI vacía. LibreOffice sí puede procesar .doc.
 
----
+**Impacto:** Los usuarios de formatos antiguos de Word (todavía muy comunes en entornos corporativos y legales) no pueden hacer ninguna conversión, y el sistema no les explica por qué.
 
-### [CRÍTICO] ~~No hay validación de tamaño razonable del archivo convertido~~ **[RESUELTO]**
+**Ubicación:**
+- `apps/api/internal/ingestion/detector.go:44` — `application/msword` mapeado a FamilyDocument
+- `apps/api/internal/capabilities/catalog.go:727-805` — capacidades de documento sin `application/msword`
 
-**Descripción:**  
-~~El sistema valida que el archivo de salida exista, no esté vacío, y tenga el MIME type correcto. Pero no valida que el tamaño sea razonable respecto al input.~~ **FIX**: Se agregó `validateMinimumOutputSize` con umbrales por formato (PDF: 256 bytes, DOCX: 256 bytes, HTML: 16 bytes, etc.). Se agregó validación de que el output no sea menor al 1% del input size. Se propagó `InputSize` a través de `TaskPayload`, `BatchRequest`, y todas las funciones de enqueue/retry.
+**Cómo verificarlo:** Subir un archivo .doc y observar que la respuesta de capabilities es un array vacío.
 
-**Impacto:** ~~Conversiones defectuosas podrían pasar como exitosas generando archivos corruptos o vacíos~~ **Resuelto**: Archivos sospechosamente pequeños son rechazados con error claro.
+**Recomendación:** Agregar `application/msword` a los SourceFormats de `doc-to-pdf`, `doc-to-txt`, y `doc-to-docx`. Crear capacidad `doc-to-docx` con fuente `application/msword` para migración a formato moderno.
 
-**Ubicación:**  
-- `apps/api/internal/workers/output_validation.go`: `validateMinimumOutputSize` y `minimumOutputSizes` map
-- `apps/api/internal/queue/queue.go`: `InputSize` agregado a `TaskPayload`
-- `apps/api/internal/orchestrator/service.go`: `InputSize` propagado a `BatchRequest` y `createAndEnqueue`
-- `apps/api/internal/api/handlers/conversion.go`: `file.Size` pasado a enqueue functions
-- `apps/api/internal/api/handlers/job.go`: `file.Size` pasado a retry functions
-- `apps/api/internal/api/handlers/admin_jobs.go`: `file.Size` pasado a retry functions
-- Tests actualizados: `output_validation_test.go`, `handler_cancel_test.go`, `service_test.go`, `resolver_test.go`
-
-**Prioridad:** ~~Alta~~ **Resuelto**.
-
----
-
-### [CRÍTICO] ~~El frontend no maneja el estado `expired` del job en el polling~~ **[RESUELTO]**
-
-**Descripción:**  
-~~El dominio define `JobExpired` como estado terminal válido. Sin embargo, en `use-conversion.ts`, el polling solo maneja `queued`, `running`, `succeeded`, `failed`, y `cancelled`.~~ **FIX**: Se agregó manejo explícito del estado `expired` en el polling loop, mostrando un mensaje de error al usuario. Se agregó la clave de traducción `conversion.expired` en `es.json`.
-
-**Impacto:** ~~El usuario ve un spinner infinito sin mensaje de error cuando un job expira durante la conversión~~ **Resuelto**: El usuario ve un mensaje de error claro indicando que la conversión expiró.
-
-**Ubicación:**  
-- `apps/web/src/components/hooks/use-conversion.ts`: Manejo de `job.status === "expired"` agregado
-- `apps/web/messages/es.json`: Clave `conversion.expired` agregada
-
-**Prioridad:** ~~Alta~~ **Resuelto**.
-
----
+**Prioridad:** Alta.
 
 ## Hallazgos importantes
 
-### [IMPORTANTE] La categoría "Auto" del frontend muestra formatos destino de la categoría detectada que pueden no coincidir con las capacidades reales
+### [IMPORTANTE] Documentos Office protegidos por contraseña no detectados antes de la conversión
 
-**Descripción:**  
-En `conversion-card.tsx`, cuando la categoría es "auto" y se detecta una categoría, el `detailLabel` muestra los `targetFormats` de la categoría detectada desde `categories.ts`. Estos son hints de UI estáticos, no las capacidades reales del backend. El usuario podría ver formatos que no están realmente disponibles para su archivo específico.
+**Descripción:** El detector de metadata (`ingestion/metadata.go`) solo verifica protección en PDFs (vía `pdfinfo Encrypted: yes`). Documentos DOCX, XLSX, PPTX y ODF protegidos por contraseña no se detectan. Estos archivos se suben exitosamente, pero fallan durante la conversión (LibreOffice no puede abrirlos), produciendo un error genérico `"El motor de conversión no pudo procesar este archivo"` que no informa al usuario del verdadero motivo.
 
-**Impacto:**  
-El usuario ve una lista de formatos destino prometedora antes de subir, pero después del upload las capacidades reales pueden ser diferentes (por feature flags, engine no disponible, límites de tamaño, etc.).
+**Impacto:** Mala experiencia de usuario — el usuario no sabe que su archivo está protegido. El error no es accionable (no sugiere quitar la contraseña).
 
-**Ubicación:**  
-- `apps/web/src/components/conversion-card.tsx` (líneas ~110-125): `detailLabel` con `detectedCategory.targetFormats`
-- `apps/web/src/config/categories.ts`: `targetFormats` estáticos
+**Ubicación:**
+- `apps/api/internal/ingestion/metadata.go:44-73` — solo detecta protección en PDF
+- `apps/api/internal/workers/handler.go:248-266` — classifyError genérico para exit status
 
-**Recomendación:**  
-El `detailLabel` debería basarse en las capacidades reales del backend una vez detectado el formato, no en los hints estáticos de la UI. O bien, agregar un disclaimer claro de que los formatos mostrados son orientativos.
+**Cómo verificarlo:** Subir un DOCX protegido por contraseña e intentar convertir a PDF.
 
-**Prioridad:** Media.
+**Recomendación:** Agregar detección de protección para OOXML (verificar si `EncryptedPackage` o `EncryptionInfo` existe en el ZIP) y ODF (verificar `META-INF/manifest.xml` con `manifest:encryption-data`). Clasificar el error como `"Archivo protegido por contraseña — quita la protección y vuelve a intentar"`.
 
----
+**Prioridad:** Alta.
 
-### [IMPORTANTE] ~~No hay validación de que el engine binario exista antes de registrar la capacidad en el registry~~ **[RESUELTO]**
+### [IMPORTANTE] Race condition en verificación de cuota acumulativa de upload
 
-**Descripción:**  
-~~`BuildDefaultRegistry()` en `registry.go` registra todas las capacidades con sus engines sin verificar que los binarios existan.~~ **FIX**: El probing de engines ya existía al startup, pero se mejoró el logging para mostrar warnings claros cuando un engine no está disponible. Ahora se loggea `"engine NOT available — related capabilities will be hidden"` y se lista todos los engines no disponibles en un warning consolidado.
+**Descripción:** En `upload.go`, `enforceCumulativeQuota` lee el uso actual de bytes y verifica que `used + fileSize <= quota`. Sin embargo, entre esta lectura y la inserción del registro del archivo en BD (`h.Files.Create`), otra subida concurrente del mismo usuario/guest podría también pasar la verificación y exceder la cuota. No hay una transacción atómica que cubra check + insert.
 
-**Impacto:** ~~Jobs encolados para capacidades cuyo engine no está disponible fallarán en el worker~~ **Mejorado**: Los administradores ven warnings claros al startup sobre engines faltantes.
+**Impacto:** Los usuarios (especialmente guests con scripts) pueden exceder su cuota acumulativa mediante subidas concurrentes, ocupando más espacio en disco del permitido.
 
-**Ubicación:**  
-- `apps/api/cmd/server/main.go`: Logging mejorado de engines no disponibles
-- `apps/api/internal/capabilities/engines.go`: `DefaultProber.Probe()` ya verificaba disponibilidad
+**Ubicación:** `apps/api/internal/api/handlers/upload.go:107,255-279`
 
-**Prioridad:** ~~Media~~ **Resuelto**.
+**Cómo verificarlo:** Enviar múltiples uploads concurrentes desde la misma sesión guest justo debajo del límite de cuota. Verificar que el uso total puede exceder el límite.
 
----
-
-### [IMPORTANTE] El conversor de imágenes Go stdlib no maneja perfiles de color CMYK
-
-**Descripción:**  
-`ConvertEngine` en `image/convert.go` usa `image.Decode()` del stdlib de Go, que no soporta perfiles de color CMYK. Si un JPEG con perfil CMYK se sube, la decodificación fallará con un error genérico "decode image".
-
-**Impacto:**  
-Archivos JPEG profesionales (fotografía, diseño gráfico) con perfil CMYK fallarán silenciosamente con un error poco útil.
-
-**Ubicación:**  
-- `apps/api/internal/workers/image/convert.go`: `img.Decode(f)`
-
-**Recomendación:**  
-Agregar detección de perfil de color y un mensaje de error claro indicando que CMYK no está soportado. O bien, agregar soporte CMYK mediante una librería adicional.
+**Recomendación:** Mover la verificación de cuota dentro de `Files.Create` o `CreateIfUnderQuota` usando una transacción SQLite con `SELECT ... FOR UPDATE` o un enfoque de `INSERT ... WHERE` condicional. Alternativamente, aceptar el riesgo para guests pero cerrar la brecha para usuarios registrados.
 
 **Prioridad:** Media.
 
----
+### [IMPORTANTE] Falta Content-Length en descarga de artefactos
 
-### [IMPORTANTE] La validación de output para formatos binarios no verifica integridad estructural
+**Descripción:** En `artifact.go:66`, el handler copia el archivo al response writer con `io.Copy(w, reader)`, pero nunca establece el header `Content-Length`. Esto impide que los navegadores muestren barra de progreso durante la descarga y puede causar problemas con proxies y CDNs.
 
-**Descripción:**  
-`validateBinaryOutputFormat` solo verifica el MIME type del output. No verifica que el archivo sea estructuralmente válido. Por ejemplo, un PDF corrupto pero con MIME type `application/pdf` pasaría la validación. Un ZIP con entradas corruptas pasaría.
+**Impacto:** Descargas de archivos grandes (videos, PDFs, ZIPs multi-página) no muestran progreso al usuario.
 
-**Impacto:**  
-El usuario podría descargar archivos que parecen válidos pero están corruptos internamente.
+**Ubicación:** `apps/api/internal/api/handlers/artifact.go:53-66`
 
-**Ubicación:**  
-- `apps/api/internal/workers/output_validation.go`: `validateBinaryOutputFormat`
-
-**Recomendación:**  
-Agregar validaciones estructurales específicas por formato. Para PDF, verificar que tenga al menos un objeto válido. Para ZIP, verificar que se pueda abrir sin errores. Para OOXML (DOCX/XLSX), verificar que el XML interno sea parseable.
+**Recomendación:** Leer el tamaño del archivo del sistema (via `info.Size()` de `os.Stat`) y establecer `w.Header().Set("Content-Length", ...)` antes de copiar.
 
 **Prioridad:** Media.
 
----
+### [IMPORTANTE] Sin timeout de lectura del cuerpo multipart en upload
 
-### [IMPORTANTE] No hay límite de reintentos configurable por tipo de error
+**Descripción:** `upload.go` establece `r.Body = http.MaxBytesReader(w, r.Body, limit)` que limita el tamaño total del body. Sin embargo, no hay un `http.TimeoutHandler` ni `ReadTimeout` específico para la lectura del stream multipart. Un cliente malicioso podría mantener una conexión abierta indefinidamente enviando datos muy lentamente (slowloris en upload).
 
-**Descripción:**  
-Todas las capacidades tienen `MaxRetries: 1`. Esto significa que cualquier error, incluyendo errores transitorios (timeout de red, disco lleno temporalmente), se reintenta una sola vez. Para errores permanentes (formato corrupto, engine no disponible), el reintento es inútil y consume recursos.
+**Impacto:** Potencial DoS por agotamiento de conexiones o goroutines bloqueadas en reads de red.
 
-**Impacto:**  
-Errores transitorios podrían no recuperarse con un solo reintento. Errores permanentes se reintentan innecesariamente.
+**Ubicación:** `apps/api/internal/api/handlers/upload.go:39-56`
 
-**Ubicación:**  
-- `apps/api/internal/capabilities/catalog.go`: todas las capacidades con `MaxRetries: 1`
-- `apps/api/internal/orchestrator/service.go`: enqueue con `opts.MaxRetries`
-
-**Recomendación:**  
-Diferenciar entre errores recuperables y no recuperables. No reintentar errores de formato inválido o engine no disponible. Permitir más reintentos para errores transitorios.
+**Recomendación:** Configurar `ReadTimeout` en el servidor HTTP (`http.Server.ReadTimeout`) o usar `context.WithTimeout` alrededor de `io.Copy(tempFile, file)`.
 
 **Prioridad:** Media.
 
----
+### [IMPORTANTE] Validación 1% del tamaño del output puede rechazar falsamente compresiones legítimas
 
-### [IMPORTANTE] El handler de upload no verifica que el archivo se haya escrito completamente antes de detectar formato
+**Descripción:** `output_validation.go:311` rechaza outputs cuyo tamaño sea menor al 1% del input. Esto protege contra conversiones que producen basura, pero **rechazará falsamente compresiones legítimas** que reduzcan el archivo a menos del 1% (ej. PDF de 100MB de puros escaneos a TXT extraído de 50KB, o imagen PNG de 50MB a JPG de 200KB).
 
-**Descripción:**  
-En `upload.go`, el archivo se escribe con `io.Copy(tempFile, file)` y luego se hace `Seek(0)` para detectar formato. Si el `io.Copy` falla parcialmente pero no retorna error (caso borde con ciertos readers), el archivo podría estar truncado.
+**Impacto:** Conversiones exitosas pero con outputs muy pequeños se marcan como fallidas. El caso más probable es `pdf-to-txt` de un PDF enorme con poco texto o `image-to-jpg` de un PNG enorme.
 
-**Impacto:**  
-Riesgo potencial de detectar un formato incorrecto o procesar un archivo incompleto.
+**Ubicación:** `apps/api/internal/workers/output_validation.go:310-313`
 
-**Ubicación:**  
-- `apps/api/internal/api/handlers/upload.go` (líneas ~80-120)
-
-**Recomendación:**  
-Verificar que el tamaño escrito coincida con el tamaño esperado del Content-Length cuando esté disponible.
+**Recomendación:** Excluir explícitamente capacidades de extracción (OpExtract: `pdf-to-txt`, `html-to-txt`, `image-ocr-to-txt`) y compresión (OpCompress) del check 1%. Para OpConvert, mantener el check pero con umbral de 0.1% en lugar de 1%. Documentar esta decisión.
 
 **Prioridad:** Media.
 
----
+### [IMPORTANTE] Thumbnails de imagen solo disponibles para JPEG y PNG como fuente
 
-### [IMPORTANTE] ~~La función `containsAny` en el worker handler es ineficiente y puede dar falsos positivos~~ **[RESUELTO]**
+**Descripción:** Las capacidades `image-thumbnail-jpg` (solo `image/jpeg`) y `image-thumbnail-png` (solo `image/png`) no aceptan WebP, GIF, BMP ni TIFF como fuente. Un usuario que sube un WebP no puede generar thumbnail directamente — debe convertirlo a JPG/PNG primero.
 
-**Descripción:**  
-~~`containsAny` en `handler.go` implementa una búsqueda de substring manual que puede coincidir parcialmente.~~ **FIX**: Se reemplazó `containsAny` con `strings.Contains` del stdlib y se eliminó la función manual.
+**Impacto:** Flujo innecesariamente complejo para usuarios con imágenes WebP/GIF/TIFF.
 
-**Impacto:** ~~Clasificación incorrecta de errores, mostrando mensajes al usuario que no corresponden al error real~~ **Resuelto**: Código más limpio y correcto usando stdlib.
+**Ubicación:** `apps/api/internal/capabilities/catalog.go:408-441`
 
-**Ubicación:**  
-- `apps/api/internal/workers/handler.go`: `containsAny` eliminada, `classifyError` usa `strings.Contains`
+**Recomendación:** Ampliar `image-thumbnail-jpg` a `image/png`, `image/webp`, `image/gif`, `image/bmp`, `image/tiff`. El engine go-image puede decodificar todos estos formatos.
 
-**Prioridad:** ~~Media~~ **Resuelto**.
+**Prioridad:** Media.
 
----
+### [IMPORTANTE] UI estática (categories.ts) desincronizada con capacidades reales del backend
 
-### [IMPORTANTE] ~~No hay protección contra race condition en la descarga de artifacts~~ **[RESUELTO]**
+**Descripción:** `categories.ts` define `acceptedFormats` y `targetFormats` como hints visuales. Sin embargo, hay capacidades del backend no visibles en la UI estática (ej. `image-compress-jpg`, `image-web-*`, `image-thumbnail-*`, `pdf-ocr-to-txt`, `pdf-ocr-searchable-pdf`). Esto no es un bug funcional porque tras upload la UI muestra capacidades reales desde el backend, pero puede confundir a usuarios que exploran la página antes de subir archivos.
 
-**Descripción:**  
-~~El artifact handler verifica `ExpiresAt.Before(time.Now().UTC())` y luego abre el archivo. Entre la verificación y la apertura, el archivo podría ser eliminado por un proceso de limpieza (retention policy).~~ **FIX**: Se cambió el manejo de error de `GetArtifactByName` de 500 a 410 Gone, indicando claramente que el archivo ya no está disponible.
+**Impacto:** Usuarios no descubren todas las funcionalidades disponibles. Marketing pierde oportunidades de comunicar el valor completo del producto.
 
-**Impacto:** ~~Error 500 para el usuario si el archivo se elimina entre la verificación y la lectura~~ **Resuelto**: El usuario recibe un 410 Gone con mensaje claro.
+**Ubicación:** `apps/web/src/config/categories.ts`
 
-**Ubicación:**  
-- `apps/api/internal/api/handlers/artifact.go`: `Handle` retorna 410 Gone en lugar de 500
+**Recomendación:** Agregar un endpoint `GET /api/catalog` que devuelva todas las capacidades disponibles agrupadas por familia, y usarlo para poblar dinámicamente los hints de la UI. Mantener `categories.ts` solo para la estructura visual (íconos, labels, hints). O al menos actualizar manualmente para reflejar todas las capacidades.
 
-**Prioridad:** ~~Media~~ **Resuelto**.
+**Prioridad:** Baja.
 
----
+### [IMPORTANTE] ZIP de thumbnails de video no valida tipo MIME de su contenido interno — RESUELTO 2026-05-05
+
+**Descripción:** `validateZipOutput` verifica estructura del ZIP (paths seguros, files no vacíos, máximo 2000 entradas) pero **no verifica que los archivos dentro del ZIP sean imágenes válidas** (JPG en este caso). Un ffmpeg corrupto o error silencioso podría producir un ZIP con entradas válidas pero contenido inválido.
+
+**Estado:** Resuelto en Pasada 2. La validación ahora inspecciona la primera entrada no vacía del ZIP y exige MIME `image/jpeg` o `image/png`; se agregó test para entrada JPG corrupta.
+
+**Impacto:** Usuario descarga un ZIP que parece correcto pero contiene imágenes corruptas. No se detecta hasta que el usuario intenta abrirlas.
+
+**Ubicación:** `apps/api/internal/workers/output_validation.go:176-203`
+
+**Recomendación:** Para ZIPs de thumbnails, muestrear el primer archivo y validar que sea un JPEG/PNG válido. Esto añade confianza sin penalizar rendimiento.
+
+**Prioridad:** Baja.
+
+### [IMPORTANTE] Falta validación anti-bomba ZIP en archivos subidos
+
+**Descripción:** El detector (`detector.go:280-322`) inspecciona ZIPs entrantes para detectar OOXML, pero no verifica profundidad de anidamiento, ratio de compresión extremo, ni tamaño total expandido (zip bomb). Un atacante podría subir un ZIP malicioso (ej. `42.zip`) que el sistema intente inspeccionar o convertir, potencialmente agotando memoria o disco.
+
+**Impacto:** Potencial DoS vía zip bomb si se procesa como documento (vía LibreOffice) o como ZIP genérico.
+
+**Ubicación:** `apps/api/internal/ingestion/detector.go:281-322` — OOXML detection sin límites de descompresión
+
+**Recomendación:** Verificar `compressed/uncompressed ratio` antes de abrir cualquier ZIP de entrada. Si `uncompressed/compressed > 100` o `total uncompressed > 500MB`, rechazar con `"file compression ratio too extreme"`. Aplicar en `detectOOXMLMimeFromZip`.
+
+**Prioridad:** Media.
+
+### [IMPORTANTE] Conversiones con cancelación durante la ejecución pueden dejar temporales huérfanos si el worker crashea
+
+**Descripción:** El handler (`handler.go:130`) usa `defer h.Store.CleanupTemp` para limpiar temporales. Si el proceso worker crashea (panic, OOM kill, kill -9), este defer no se ejecuta. Los temporales quedan en disco hasta que el `CleanupService` los purgue en su siguiente ciclo.
+
+**Impacto:** Acumulación de archivos temporales en disco entre ciclos de limpieza. En entornos con muchos workers crasheando, puede agotar el disco.
+
+**Ubicación:**
+- `apps/api/internal/workers/handler.go:126-130`
+- `apps/api/internal/storage/cleanup.go`
+
+**Recomendación:** Verificar que `CleanupService` tenga un intervalo razonable (ej. cada 5 minutos en producción). Agregar métrica `reform_temp_dir_count` para monitorear acumulación. Considerar usar `/tmp` del SO para temporales pequeños y el storage para archivos intermedios grandes.
+
+**Prioridad:** Baja.
 
 ## Hallazgos menores
 
-### [MENOR] Todos los timeouts de conversión son fijos por capacidad, no adaptativos
+### [MENOR] PresentationOrder duplicado (600) para doc-to-pdf, txt-to-pdf, html-to-pdf
 
-**Descripción:**  
-Los timeouts están hardcodeados en el catálogo. No se ajustan según el tamaño del archivo o la complejidad estimada.
+**Descripción:** Las capacidades `doc-to-pdf`, `txt-to-pdf` y `html-to-pdf` comparten `PresentationOrder: 600`. Como tienen SourceFormats mutuamente excluyentes, nunca aparecen juntas en la misma lista de capacidades (cada archivo solo matchea una), por lo que no hay impacto funcional. Pero viola la intención de tener órdenes únicos y estables.
 
-**Impacto:**  
-Archivos pequeños con timeout largo desperdician recursos. Archivos grandes con timeout corto fallan innecesariamente.
+**Ubicación:** `apps/api/internal/capabilities/catalog.go:48-51`
 
-**Ubicación:**  
-- `apps/api/internal/capabilities/catalog.go`: `ExecutionLimits.TimeoutSeconds`
-
-**Recomendación:**  
-Considerar timeouts adaptativos basados en el tamaño del archivo o metadatos extraídos.
+**Recomendación:** Asignar PresentationOrder distintos: 600 (doc-to-pdf), 601 (txt-to-pdf), 602 (html-to-pdf).
 
 **Prioridad:** Baja.
 
----
+### [MENOR] SVG a PDF no valida estructura PDF interna del output
 
-### [MENOR] El nombre del archivo de salida usa el nombre base del input para documentos
+**Descripción:** `validateBinaryOutputFormat` para SVG→PDF solo verifica que el MIME detectado del output sea `application/pdf`. No verifica estructura interna (header PDF, trailer, xref table) como sí se hace para DOCX/XLSX (validación OOXML). Un `rsvg-convert` que produce PDF corrupto pasaría la validación.
 
-**Descripción:**  
-En `document/to_pdf.go`, el nombre de salida se construye a partir del nombre base del input: `strings.TrimSuffix(filepath.Base(effectiveInput), filepath.Ext(effectiveInput))`. Si el input tiene un nombre sanitizado como UUID, el output también lo tendrá, lo cual es correcto. Pero para HTML sanitizado, el nombre base es `safe-input.html`, produciendo `safe-input.pdf`.
+**Ubicación:** `apps/api/internal/workers/output_validation.go:83-87,92-106`
 
-**Impacto:**  
-El artifact se guarda con un nombre genérico en lugar de preservar el nombre original del usuario.
-
-**Ubicación:**  
-- `apps/api/internal/workers/document/to_pdf.go`
-
-**Recomendación:**  
-Usar el nombre original del archivo (almacenado en el registro del file) para construir el nombre del artifact.
+**Recomendación:** Agregar validación de header PDF para formato `pdf` en el `switch` de `validateOutputArtifact`: verificar que los primeros bytes sean `%PDF-`.
 
 **Prioridad:** Baja.
 
----
+### [MENOR] Fallback inseguro en sort cuando una capacidad no tiene PresentationOrder
 
-### [MENOR] No hay validación de que el archivo de entrada no haya sido modificado entre upload y conversión
+**Descripción:** `withPresentationOrders` hace `panic` si un capability ID no está en `capabilityPresentationOrders`. Esto significa que si una nueva capacidad se agrega al slice `Catalog` sin su correspondiente entry en el map, el servidor crashea en startup. Es un fail-fast intencional pero frágil.
 
-**Descripción:**  
-El worker usa `payload.InputPath` que apunta al original. Si el archivo original se modifica o corrompe entre el upload y la ejecución del job, la conversión podría fallar o producir resultados inesperados.
+**Ubicación:** `apps/api/internal/capabilities/catalog.go:94-104`
 
-**Impacto:**  
-Riesgo bajo dado que los originales son inmutables por diseño, pero no hay verificación de integridad (checksum).
-
-**Ubicación:**  
-- `apps/api/internal/workers/handler.go`: `engine.Execute(execCtx, payload.InputPath, ...)`
-
-**Recomendación:**  
-Almacenar un checksum del original al momento del upload y verificarlo antes de la conversión.
+**Recomendación:** Transformar en un test que recorra `Catalog` y verifique que todo ID tenga presentation order, en lugar de hacer panic en runtime. O usar `default` order de 9999 con un log warning.
 
 **Prioridad:** Baja.
 
----
+### [MENOR] Markdown detection puede producir falsos positivos con texto que contiene bullets
 
-### [MENOR] La detección de Markdown por contenido puede dar falsos positivos
+**Descripción:** La heurística `looksLikeMarkdown` requiere 2+ señales fuertes o 1 fuerte + 1 débil. Texto plano con bullets (`- item`) y un heading (`# title`) se detectaría como Markdown. Esto puede sorprender a usuarios que suben listas de texto plano.
 
-**Descripción:**  
-`looksLikeMarkdown` usa un sistema de señales fuertes y débiles con regex. Un archivo de texto plano con algunos caracteres `#` o `-` al inicio de línea podría ser detectado como Markdown.
+**Ubicación:** `apps/api/internal/ingestion/detector.go:181-214`
 
-**Impacto:**  
-Un archivo TXT con formato similar a Markdown podría recibir capacidades de Markdown (markdown-to-html, etc.) en lugar de las de TXT.
-
-**Ubicación:**  
-- `apps/api/internal/ingestion/detector.go`: `looksLikeMarkdown`
-
-**Recomendación:**  
-Aumentar el umbral de señales requeridas o agregar verificación adicional.
+**Recomendación:** Documentar en la UI que archivos con formato Markdown-like se tratarán como Markdown. Agregar validación de que el archivo tenga extensión `.md` o `.markdown` para confirmar la intención del usuario antes de ofrecer capacidades Markdown.
 
 **Prioridad:** Baja.
 
----
+### [MENOR] Conversión de CSV a CSV técnicamente posible pero filtrada por lógica de negocio
 
-### [MENOR] El frontend no muestra información sobre límites de tamaño por formato
+**Descripción:** CSV → XLSX funciona correctamente. CSV → CSV está bloqueado por `rejectsSameFormat` (OpConvert + csv==csv). Esto es correcto, pero no hay un mensaje claro al usuario explicando que "exportar a CSV" no aparece porque el archivo ya es CSV. La UI simplemente no muestra la opción sin explicación.
 
-**Descripción:**  
-La UI muestra un límite general pero no los límites específicos por tipo de conversión. Por ejemplo, `video-to-gif` tiene un límite de 30 segundos y 480px, pero el usuario no lo sabe hasta después de iniciar la conversión.
+**Ubicación:** `apps/api/internal/capabilities/resolver.go:85-96`
 
-**Impacto:**  
-El usuario intenta convertir un video de 5 minutos a GIF y falla sin saber por qué.
-
-**Ubicación:**  
-- `apps/web/src/components/format-selector.tsx`
-- `apps/api/internal/capabilities/catalog.go`: `KnownLimitations`
-
-**Recomendación:**  
-Mostrar las `KnownLimitations` de la capacidad seleccionada en la UI antes de iniciar la conversión.
+**Recomendación:** Agregar a `CapabilityResponse` un campo `ineligibleReason` para que la UI pueda mostrar capacidades en gris con tooltip explicativo. Para V1, esto es nice-to-have.
 
 **Prioridad:** Baja.
 
----
+### [MENOR] El engine classification en el handler usa un string fijo en español
+
+**Descripción:** `classifyError` en `handler.go` retorna strings en español hardcodeados. Para internacionalización futura, estos deberían ser claves de traducción o al menos constantes.
+
+**Ubicación:** `apps/api/internal/workers/handler.go:248-266`
+
+**Recomendación:** Extraer los mensajes de error a constantes o a un mapa de traducciones. Para V1, esto es aceptable ya que el producto es español-first.
+
+**Prioridad:** Baja.
+
+### [MENOR] El nombre del archivo de salida usa `filepath.Base` del output del engine
+
+**Descripción:** `outputArtifactFileName` usa `filepath.Base(outputPath)`. Engines como LibreOffice o ffmpeg pueden producir nombres con caracteres especiales o paths relativos. Aunque `SaveArtifact` luego valida el fileName con `validateArtifactFileName`, sería más seguro sanitizar también en el handler.
+
+**Ubicación:** `apps/api/internal/workers/handler.go:364-369`
+
+**Recomendación:** Pasar el nombre por `security.SanitizeFileName` antes de usarlo en el artifact.
+
+**Prioridad:** Baja.
+
+### [MENOR] No hay métrica de duración de metadata extraction
+
+**Descripción:** El handler de upload tiene métricas de subidas totales pero no mide el tiempo de extracción de metadatos (`ExtractMetadata`), que involucra llamadas a procesos externos (`pdfinfo`, `ffprobe`) y puede ser lento.
+
+**Ubicación:** `apps/api/internal/api/handlers/upload.go:139`
+
+**Recomendación:** Agregar `reform_metadata_extraction_duration_seconds` histogram en el handler de upload.
+
+**Prioridad:** Baja.
 
 ## Inconsistencias detectadas
 
-1. **Frontend vs Backend - Video MP4/WebM como destino**: La UI muestra MP4 y WebM como formatos destino para la categoría video, pero el backend no acepta MP4→MP4 ni WebM→WebM como conversiones válidas (bloqueado por `rejectsSameFormat` y por SourceFormats).
+1. **ui-capabilities**: `categories.ts` muestra "JSON OCR" como target de PDF e imágenes, pero `pdf-ocr-to-txt` y `pdf-ocr-searchable-pdf` no están en los hints visuales. Solo `pdf-ocr-to-json` está expuesto como "JSON OCR".
+2. **ui-capabilities**: `categories.ts` muestra "Word" (docx) como target de documentos, que en backend se llama "Convertir a Word" (`doc-to-docx`). OK.
+3. **validator-vs-catalog**: HEIC/HEIF images con dimensiones no parseables tienen límite 10MB en validator pero 100MB en catalog (ver hallazgo crítico).
+4. **engine-names**: El catalog usa `Engine: "libheif"` pero `engines.go` registra el engine como `"libheif"` con binarios `heif-convert` + `ffmpeg`. Consistente.
+5. **doc-vs-document**: En la UI la categoría se llama "Documentos" (`id: "documents"`) pero las capacidades usan IDs con prefijo `doc-to-*` y `spreadsheet-to-*` y `presentation-to-*`. La resolución backend usa `FormatFamily == "document"`. Consistente con la UI vía `family: "document"`.
+6. **presentation-order**: Varias capacidades comparten orden (600, 900, 1000) pero para diferentes source formats. Sin impacto funcional pero inconsistente con la intención de unicidad.
+7. **batch-capabilities**: El endpoint batch retorna intersección de capacidades entre archivos. Si un archivo no comparte capacidades con otro, el resultado es vacío. La UI no explica esto al usuario.
+8. **error-messages**: `respondError` en los handlers envía mensajes en español, pero `classifyError` en el worker también. El cliente `api.ts` espera `data.error` en inglés (`"Upload failed"`). Esta mezcla es funcional pero inconsistente.
 
-2. **UI hints vs capacidades reales**: Los `targetFormats` en `categories.ts` son hints estáticos que no reflejan las capacidades reales del backend para un archivo específico. Por ejemplo, la categoría "Imágenes" muestra TXT OCR y JSON OCR como destinos, pero solo están disponibles si el engine Tesseract está disponible.
+## Casos borde y bugs potenciales
 
-3. **Extensiones vs MIME types en la UI**: La UI usa extensiones (`.jpg`, `.png`) para acceptedFormats, pero el backend usa MIME types. La detección de categoría en el frontend (`detectCategoryIdFromFile`) usa tanto MIME type como extensión, lo que puede causar inconsistencias si el MIME type del navegador no coincide con la extensión.
+- Archivo vacío: Cubierto (validator.go:24, ErrInvalidCorrupted)
+- Archivo corrupto: Parcial (detector puede fallar con MIME desconocido → ErrFormatUnsupported)
+- Extensión falsa: Cubierto (detección por contenido, nunca confía en extensión)
+- MIME type incorrecto: Cubierto (detección por magic bytes)
+- Archivo muy grande: Cubierto (MaxBytesReader + validator por familia)
+- Archivo protegido por contraseña PDF: Cubierto (pdfinfo Encrypted detection)
+- Archivo protegido por contraseña Office: No cubierto
+- Formato no soportado: Cubierto (ErrFormatUnsupported)
+- Input y output iguales: Cubierto (rejectsSameFormat excepto video)
+- Conversión simultánea: Cubierto (atomic job creation con active-job-limit por usuario/guest)
+- Timeout: Cubierto (context.WithTimeout + engine-specific timeouts via capabilities)
+- Error del conversor: Cubierto (classifyError con mensajes clasificados)
+- Usuario cerrando la página: No aplica (jobs son asíncronos, estado persiste en BD)
+- Descarga de archivo ajeno: Cubierto (canAccessResource verifica propiedad)
+- Archivo expirado: Cubierto (TTL check + retention cleanup)
+- Usuario superando límites del plan: Cubierto (cumulative quota + active job limits)
+- Zip bomb: No cubierto (ver hallazgo importante)
+- Slowloris en upload: No cubierto (ver hallazgo importante)
+- Worker crash deja temporales: Parcial (defer + CleanupService)
+- Video sin audio: Parcial (video-waveform-png documenta que fallará, pero otras capacidades de audio extraen stream primario silenciosamente)
+- Archivo con nombre unicode/bidi: Parcial (sanitize elimina no-printables pero permite unicode)
 
-4. **Estados de job**: El dominio define 6 estados (`queued`, `running`, `succeeded`, `failed`, `cancelled`, `expired`), pero el frontend solo maneja explícitamente 5 en su lógica de polling (falta `expired`).
+## Robustez
 
-5. **Nombres de artifacts**: El worker handler construye el nombre del artifact desde el output del engine (`outputArtifactFileName`), que puede ser genérico (`converted.png`) o específico (`safe-input.pdf`). No hay una política consistente de nombrado.
+- **Timeouts**: Bien implementados por capacidad (`ExecutionLimits.TimeoutSeconds`), por metadata extraction (5-8s), y por worker task (vía queue.TaskOptions.Timeout). La cancelación se propaga correctamente con `exec.CommandContext`.
+- **Reintentos**: Configurados a nivel de capacidad (`MaxRetries: 1` en todas). El reintento manual (`RetryFailedJob`) solo permite jobs en estado `failed`. Sin backoff exponencial (el reintento es inmediato).
+- **Cancelación**: Implementada con polling cada 500ms (`newExecutionContext`) que verifica si el job fue cancelado en BD. Los recursos (temp dirs, artifact parcial) se limpian al detectar cancelación.
+- **Concurrencia**: Protegida vía límite de jobs activos por usuario/guest con creación atómica en BD (`CreateIfUnderLimit`). Sin embargo, la cuota acumulativa tiene race condition (ver hallazgo importante).
+- **Limpieza de temporales**: `defer CleanupTemp` en handler + `CleanupService` periódico para huérfanos. Intervalo configurable.
+- **Idempotencia**: No implementada explícitamente. Si un job se reintenta, se crea un nuevo artifact. El original se reusa.
+- **Logs**: Estructurados con zerolog. Incluyen job_id, capability_id, file_id, duration_sec. No se loguea contenido sensible.
+- **Métricas**: Cobertura sólida — uploads, jobs (total/duration), artifacts, active_jobs, rate_limits, http_requests, errors, disk_space. Falta métrica de metadata extraction duration.
+- **Trazas**: OpenTelemetry con spans en el worker. Span attributes incluyen job.id, capability.id, file.id.
 
-6. **Documentación vs implementación**: El catálogo de capacidades en `docs/domain/capabilities-catalog.md` menciona "Markdown detectado por contenido → HTML/PDF/DOCX" pero la implementación en `catalog.go` usa `text/markdown` como sourceFormat, que depende de la detección por contenido del detector.
+## UX de conversiones
 
-## Bugs potenciales y casos borde
-
-| Caso borde | Cubierto | Observaciones |
-|---|---|---|
-| Archivo vacío | ✅ | `ValidateFile` retorna `ErrInvalidCorrupted` si size == 0 |
-| Archivo corrupto | ⚠️ | Parcialmente cubierto: la detección de formato puede fallar, pero no hay tests con archivos corruptos reales por formato |
-| Archivo protegido por contraseña | ✅ | `meta.IsProtected` bloquea la conversión |
-| Archivo con extensión falsa | ✅ | La detección usa magic bytes, no extensión |
-| Archivo con MIME type incorrecto | ✅ | El detector ignora el MIME type del navegador |
-| Archivo demasiado grande | ✅ | Validado por `ValidateFile` con límites por familia |
-| Archivo con nombre malicioso | ✅ | `SanitizeFileName` limpia path traversal y caracteres no imprimibles |
-| Archivo con caracteres especiales | ⚠️ | `SanitizeFileName` maneja Unicode imprimible, pero no normaliza NFC/NFD |
-| Conversión a un formato no soportado | ✅ | `IsEligible` retorna `ErrCapabilityIneligible` |
-| Conversión desde un formato no soportado | ✅ | `Resolve` filtra por `IsSourceSupported` |
-| Conversión donde input y output son iguales | ✅ | `rejectsSameFormat` bloquea para `OpConvert` |
-| Conversión simultánea de muchos archivos | ⚠️ | Límite de jobs activos por usuario/guest, pero no hay tests de concurrencia |
-| Dos archivos con el mismo nombre | ✅ | Los originales se guardan con UUID, no con nombre original |
-| Conversión que tarda demasiado | ✅ | `context.WithCancel` con ticker de cancelación |
-| Conversión interrumpida | ✅ | Job se marca como cancelled |
-| Error del proveedor o librería de conversión | ⚠️ | El error se captura pero no se clasifica finamente |
-| Usuario cerrando la página durante la conversión | ⚠️ | El job continúa en background; no hay cleanup automático |
-| Usuario intentando descargar un archivo ajeno | ✅ | `canAccessResource` verifica ownership |
-| Archivo expirado | ✅ | `ExpiresAt` verificado en artifact handler |
-| Archivo eliminado antes de descargar | ⚠️ | Retorna 500 en lugar de 410 Gone |
-| Usuario gratuito superando límites | ✅ | `enforceCumulativeQuota` y límites de jobs activos |
-| Conversión desde móvil con mala conexión | ⚠️ | No hay manejo específico de reconexión en el polling |
-
-## Problemas de robustez
-
-### Timeouts
-- Cada capacidad tiene un timeout definido en segundos, aplicado vía `context.WithTimeout` en la cola Asynq.
-- **Riesgo**: Los timeouts son fijos y no se ajustan al tamaño o complejidad del archivo.
-- **Riesgo**: El `newExecutionContext` usa un ticker de 500ms para detectar cancelación, lo que agrega latencia.
-
-### Reintentos
-- Todas las capacidades tienen `MaxRetries: 1`.
-- **Riesgo**: No se diferencia entre errores recuperables y permanentes.
-
-### Cancelación
-- Implementada vía ticker que verifica el estado del job en la base de datos.
-- **Riesgo**: Si la DB está lenta, la detección de cancelación se retrasa.
-
-### Limpieza de archivos temporales
-- `defer h.Store.CleanupTemp(ctx, payload.JobID)` en el worker handler.
-- **Riesgo**: Si el worker crashea antes del defer, los temporales quedan huérfanos.
-- **Riesgo**: No hay un proceso de limpieza periódica de temporales huérfanos.
-
-### Manejo de procesos colgados
-- `exec.CommandContext` con context cancelable.
-- **Riesgo**: Si el proceso hijo ignora SIGTERM (enviado por context cancel), puede quedar colgado.
-
-### Idempotencia
-- Los jobs tienen IDs únicos. Si se reencolan, se crean nuevos jobs.
-- **Riesgo**: No hay protección contra procesamiento duplicado si el worker crashea después de ejecutar pero antes de marcar succeeded.
-
-### Concurrencia
-- Límite de jobs activos por usuario/guest.
-- **Riesgo**: No hay semáforo global de concurrencia para engines que consumen muchos recursos (LibreOffice, FFmpeg).
-
-### Aislamiento entre usuarios
-- Cada job tiene su propio temp dir.
-- Los artifacts se guardan con UUIDs.
-- **Bien**: Aislamiento correcto a nivel de storage.
-
-### Validación posterior al output
-- `validateOutputArtifact` verifica existencia, tamaño > 0, MIME type, y validaciones específicas por formato.
-- **Riesgo**: No verifica integridad estructural ni tamaño razonable.
-
-### Observabilidad y logs
-- Métricas: `JobsTotal`, `JobDuration`, `ArtifactsTotal`, `ErrorsTotal`, `ActiveJobs`.
-- Tracing: OpenTelemetry con spans por job.
-- Logs: Zerolog con campos estructurados.
-- **Bien**: Observabilidad sólida.
-- **Riesgo**: No hay métricas de tasa de éxito/fallo por formato de entrada/salida.
-
-## Problemas de UX relacionados con conversiones
-
-1. **Falta de estimación de tiempo**: El usuario no recibe ninguna estimación de cuánto tardará la conversión. Solo ve un porcentaje de progreso genérico.
-
-2. **Mensajes de error genéricos**: `classifyError` produce mensajes como "La conversión falló por un error interno. Intenta de nuevo." que no ayudan al usuario a entender qué pasó.
-
-3. **Falta de botón para reintentar**: Cuando una conversión falla, el usuario debe volver a subir el archivo y seleccionar la conversión de nuevo. No hay un botón de "Reintentar" directo.
-
-4. **Falta de explicación de formatos soportados**: El usuario no tiene acceso a una página que liste todos los formatos soportados con sus limitaciones.
-
-5. **Estados visuales confusos**: Cuando un job se cancela, el item vuelve a estado `selected` sin explicación clara de por qué se canceló.
-
-6. **Falta de historial**: No hay una página de historial de conversiones para usuarios registrados.
-
-7. **Falta de información sobre límites**: Los límites de tamaño por formato y las limitaciones conocidas no se muestran antes de iniciar la conversión.
-
-8. **Polling sin feedback de reconexión**: Si la conexión se pierde durante el polling, el usuario no recibe feedback hasta que el timeout del fetch ocurre.
+- **Progreso**: El handler reporta progreso (20, 30, 40, 70, 80, 95) al orchestrator. El frontend hace polling de `GET /api/jobs/{jobId}` para updates. Bueno para el tamaño actual del producto.
+- **Mensajes de error**: Clasificados y en español. Cubren los casos principales (timeout, engine error, output inválido, storage lleno, límite excedido, archivo protegido). El mensaje para "archivo protegido Office" es genérico (ver hallazgo).
+- **Botón de reintento**: Implementado vía `POST /api/jobs/{jobId}/retry`. Solo jobs failed pueden reintentarse. UI muestra botón condicionalmente. OK.
+- **Explicación de formatos**: La UI estática (categories.ts) muestra formatos aceptados y targets esperados. Tras upload, las capacidades reales vienen del backend. OK.
+- **Historial**: Dashboard muestra archivos subidos y jobs. Admin dashboard tiene vista completa con filtros. OK.
+- **Mobile**: No evaluado en detalle. Tailwind responsive classes detectadas en componentes.
+- **Claridad de límites**: `GET /api/upload-policy` expone límites por tipo de usuario. La UI puede mostrar esta info. OK.
 
 ## Tests recomendados
 
-### Unit tests
+### Unitarios nuevos
+- `detector_test.go`: Caso .doc (application/msword) detectado correctamente como FamilyDocument
+- `detector_test.go`: Caso ZIP bomb (ratio > 100) rechazado
+- `validator_test.go`: Caso HEIC >10MB sin dimensiones rechazado con mensaje específico
+- `validator_test.go`: Caso DOCX protegido por contraseña detectado como IsProtected
+- `validator_test.go`: Caso XLSX/PPTX protegido por contraseña detectado como IsProtected
+- `resolver_test.go`: Caso application/msword resuelve a capacidades de documento
+- `resolver_test.go`: Caso text/csv no resuelve spreadsheet-to-csv
+- `output_validation_test.go`: Caso output PDF truncado (sin trailer) detectado
+- `output_validation_test.go`: Caso ZIP con contenido corrupto (entrada JPG inválida) detectado
+- `output_validation_test.go`: Caso compresión legítima <1% (ej. PNG 50MB → JPG 200KB) no rechazado
+- `handler_test.go`: Caso cancelación durante engine execution limpia temporales
+- `handler_test.go`: Caso panic en engine → worker recovery → job marked failed
+- `sanitize_test.go`: Caso nombre de archivo con caracteres bidi/RTLO
 
-- [ ] Validación de formatos: test con archivos reales de cada formato soportado (fixtures).
-- [ ] Normalización de extensiones: test con extensiones en mayúsculas, múltiples puntos, sin extensión.
-- [ ] Selección de conversor: test que verifique que cada capability ID tiene un engine registrado.
-- [ ] Manejo de errores: test de `classifyError` con cada tipo de error esperado.
-- [ ] Validación de output: test con archivos de output corruptos, vacíos, con MIME incorrecto.
-- [ ] `rejectsSameFormat`: test con cada combinación de formato igual.
-- [ ] `IsEligible`: test con archivos protegidos, excedidos de tamaño, con engine no disponible.
-- [ ] Detección de Markdown: test con falsos positivos (texto plano con `#`).
-- [ ] Detección de SVG: test con SVG inline vs SVG con XML namespace.
-- [ ] SanitizeFileName: test con path traversal, null bytes, nombres Unicode.
+### Integración
+- `upload_quota_test.go`: Caso concurrencia de uploads no excede cuota
+- `capabilities_test.go`: Caso .doc legacy devuelve capacidades (no array vacío)
 
-### Integration tests
+### E2E
+- `api_e2e_test.go`: Flujo completo con archivo .doc → upload → 0 capacidades → error claro
+- `api_e2e_test.go`: Flujo HEIC >10MB → upload → error claro (no límite genérico)
+- `api_e2e_test.go`: Cancelación de job durante ejecución → estado cancelled → limpieza
 
-- [ ] Upload + conversión + descarga: flujo completo para cada familia de formato.
-- [ ] Conversión fallida: verificar que el job se marca como failed con mensaje clasificado.
-- [ ] Conversión con archivo corrupto: verificar que se rechaza en la fase de ingestión.
-- [ ] Conversión con formato no soportado: verificar que se rechaza con error claro.
-- [ ] Conversión concurrente: múltiples jobs del mismo usuario, verificar límite.
-- [ ] Permisos entre usuarios: verificar que un usuario no puede descargar el artifact de otro.
-- [ ] Conversión multi-page PDF a imágenes: verificar que se produce un ZIP.
-- [ ] Conversión de presentación multi-slide: verificar que se produce ZIP.
+### Seguridad
+- `artifact_test.go`: Test de path traversal en artifact fileName
+- `artifact_test.go`: Test de acceso a artifact de otro usuario/guest
 
-### E2E tests
+## Mejoras técnicas
 
-- [ ] Usuario convierte archivo exitosamente: flujo completo desde upload hasta descarga.
-- [ ] Usuario intenta formato inválido: verificar mensaje de error claro.
-- [ ] Usuario supera límite: verificar rechazo con mensaje de cuota.
-- [ ] Usuario reintenta conversión fallida: verificar que puede reintentar sin re-subir.
-- [ ] Usuario descarga archivo convertido: verificar que el archivo descargado es válido.
-- [ ] Usuario cancela conversión: verificar que el job se marca como cancelled.
-- [ ] Usuario sube archivo con extensión falsa: verificar que se detecta el formato real.
-- [ ] Usuario sube archivo vacío: verificar que se rechaza.
-- [ ] Usuario sube archivo protegido: verificar que se rechaza.
-
-### Tests de seguridad
-
-- [ ] Path traversal: intentar subir archivo con nombre `../../../etc/passwd`.
-- [ ] Extensión falsa: renombrar un ejecutable como `.pdf` y verificar que se rechaza.
-- [ ] MIME type falso: enviar un archivo con Content-Type `application/pdf` pero contenido no-PDF.
-- [ ] Descarga de archivo ajeno: intentar descargar un artifact con ID de otro usuario.
-- [ ] Archivos maliciosos: test con archivos diseñados para explotar vulnerabilidades de parsers (decompression bombs, XML bombs).
-- [ ] Abuse/rate limit: verificar que se aplican límites de upload por usuario.
-
-## Mejoras técnicas recomendadas
-
-1. **Crear una matriz centralizada de formatos soportados**: Exportar el catálogo de capacidades como JSON para que el frontend pueda consumirlo dinámicamente en lugar de usar hints estáticos.
-
-2. **Compartir tipos entre frontend y backend**: Generar tipos TypeScript desde los tipos Go del dominio usando herramientas como `go2ts` o OpenAPI.
-
-3. **Validar MIME type y contenido real**: Ya se hace, pero agregar validación adicional para formatos OOXML (verificar que el ZIP interno contiene los archivos esperados).
-
-4. **Agregar validación posterior al archivo convertido**: Verificar tamaño razonable, integridad estructural, y que el contenido no sea trivialmente pequeño.
-
-5. **Agregar timeouts por tipo de conversión**: Ya existen, pero hacerlos adaptativos basados en el tamaño del archivo.
-
-6. **Usar jobs asíncronos para conversiones pesadas**: Ya se hace correctamente con Asynq.
-
-7. **Agregar estados más precisos**: Agregar estado `expired` al manejo del frontend. Considerar estado `validating` para la fase de validación de output.
-
-8. **Agregar logs estructurados**: Ya se hace con Zerolog. Agregar más contexto en los logs de error (formato de entrada, tamaño, engine usado).
-
-9. **Agregar métricas de éxito/fallo por formato**: Agregar labels de formato de entrada y salida a las métricas existentes.
-
-10. **Agregar limpieza automática de temporales**: Crear un job periódico que limpie temporales huérfanos mayores a N horas.
-
-11. **Agregar reintentos controlados**: Diferenciar entre errores recuperables y permanentes. No reintentar errores de formato inválido.
-
-12. **Agregar pruebas con fixtures reales**: Crear un corpus de archivos reales por formato soportado, incluyendo archivos corruptos y edge cases.
+- Matriz centralizada de formatos: Ya implementada en `catalog.go`. OK.
+- Tipos compartidos frontend/backend: Parcial. El frontend usa `CapabilityResponse` manualmente tipado. Se podría generar desde OpenAPI.
+- Validación real de contenido: Implementada en `detector.go` (mimetype + heurísticas SVG/MD/CSV/Opus/OOXML). OK.
+- Validación del output: Implementada en `output_validation.go` con checks de MIME, tamaño, estructura. Mejorable (ver hallazgos). OK.
+- Jobs asíncronos: Implementado con Asynq/in-process queue. OK.
+- Timeouts por formato: Implementado en `ExecutionLimits.TimeoutSeconds` por capacidad. OK.
+- Logs estructurados: Implementados con zerolog. OK.
+- Métricas por conversión: Implementadas con label `capability_id`. OK.
+- Limpieza automática de temporales: Implementada (defer + CleanupService). OK.
+- Fixtures reales para tests: Existen en `tests/fixtures/` (heif, presentation, spreadsheet) pero insuficientes. Se necesitan .doc, archivos protegidos, ZIP bombs, y archivos corruptos para cada familia.
 
 ## Nuevas funcionalidades sugeridas
 
-| Funcionalidad | Valor para el usuario | Complejidad | Prioridad |
+| Funcionalidad | Valor | Complejidad | Prioridad |
 |---|---|---|---|
-| Página pública de formatos soportados | Alta: el usuario sabe qué puede hacer antes de subir | Baja | Alta |
-| Botón de reintentar conversión fallida | Alta: evita re-subir el archivo | Media | Alta |
-| Historial de conversiones | Media: el usuario puede recuperar conversiones anteriores | Media | Media |
-| Notificación por email cuando termina | Media: útil para conversiones largas | Media | Media |
-| Conversión por lotes a varios formatos | Alta: convierte un archivo a múltiples formatos de una vez | Media | Media |
-| Preview antes de descargar | Media: el usuario verifica el resultado antes de descargar | Alta | Baja |
-| Presets de calidad | Media: el usuario elige calidad vs tamaño | Media | Baja |
-| Mantener o eliminar metadata | Baja: control sobre metadata del output | Media | Baja |
-| OCR para PDFs escaneados con selección de idioma | Alta: mejora la precisión del OCR | Media | Alta |
-| Conversión desde URL | Media: convierte archivos sin descargarlos primero | Alta | Baja |
-| Integración con Google Drive o Dropbox | Media: importa archivos directamente desde la nube | Alta | Baja |
-| API para desarrolladores | Alta: abre el sistema a integraciones | Alta | Media |
-| Webhooks cuando termina una conversión | Media: automatización para usuarios avanzados | Media | Media |
-| Dashboard interno de conversiones fallidas | Alta: diagnóstico rápido para el equipo | Baja | Alta |
-| Sistema de diagnóstico para archivos problemáticos | Media: explica por qué un archivo no se puede convertir | Media | Media |
-| Compresión opcional de imágenes | Media: el usuario elige nivel de compresión | Baja | Media |
-| Conversión múltiple de archivos | Alta: convierte varios archivos a la vez | Media | Alta |
+| Soporte para .doc (application/msword) | Alto | Baja | Alta |
+| Detección de documentos Office protegidos | Alto | Media | Alta |
+| Conversión por lotes (batch) | Alto | Ya implementado | — |
+| Historial de conversiones del usuario | Medio | Ya implementado | — |
+| Preview inline del resultado (PDF, imágenes) | Medio | Media | Media |
+| OCR multilingüe (selección de idioma Tesseract) | Medio | Baja | Media |
+| Presets de calidad (baja/media/alta para imágenes) | Medio | Media | Baja |
+| Integración con Google Drive / Dropbox | Medio | Alta | Baja |
+| API pública documentada (OpenAPI) | Alto | Media | Alta |
+| Webhooks custom (payload configurable) | Medio | Media | Baja |
+| Dashboard interno de fallos por capability | Alto | Media | Alta |
+| Transcripción audio/video (STT) | Alto | Alta | Media |
+| Subtítulos automáticos (VTT/SRT) | Alto | Alta | Media |
+| Conversión de email (.eml, .msg) a PDF | Bajo | Media | Baja |
+| Comparación de documentos (diff visual) | Bajo | Alta | Baja |
 
 ## Quick wins
 
 | Prioridad | Mejora | Impacto | Archivo/Ruta |
 |---|---|---|---|
-| Alta | Agregar manejo de estado `expired` en el polling del frontend | Evita spinners infinitos | `apps/web/src/components/hooks/use-conversion.ts` |
-| Alta | Mostrar `KnownLimitations` en la UI antes de convertir | Reduce frustración del usuario | `apps/web/src/components/format-selector.tsx` |
-| Alta | Agregar validación de tamaño mínimo del output | Previene descarga de archivos corruptos | `apps/api/internal/workers/output_validation.go` |
-| Media | Usar `strings.Contains` en lugar de `containsAny` | Código más limpio y correcto | `apps/api/internal/workers/handler.go` |
-| Media | Agregar health check de engines al startup | Detecta problemas de configuración temprano | `apps/api/cmd/server/main.go` |
-| Media | Manejar 410 Gone cuando artifact fue eliminado | Mejor UX para artifacts expirados | `apps/api/internal/api/handlers/artifact.go` |
-| Baja | Normalizar nombres de artifacts | Consistencia en nombres de descarga | `apps/api/internal/workers/handler.go` |
-| Baja | Agregar checksum de originales | Integridad verificable | `apps/api/internal/api/handlers/upload.go` |
+| Alta | Agregar `application/msword` como source a `doc-to-pdf`, `doc-to-txt`, `doc-to-docx` | .doc legacy usable | `catalog.go:727-784` |
+| Alta | Detectar DOCX/XLSX/PPTX protegidos en metadata | Mejor UX de error | `metadata.go` |
+| Alta | Mensaje de error específico para protected Office | Error accionable | `handler.go:248-266` |
+| Alta | Content-Length en artifact download | Progreso de descarga | `artifact.go:61` |
+| Media | Aumentar límite imágenes sin dimensiones de 10MB a 25MB | HEIC grandes subibles | `validator.go:48` |
+| Media | Excluir OpExtract y OpCompress del check 1% output | Menos falsos rechazos | `output_validation.go:311` |
+| Media | Header `%PDF-` validation para outputs pdf | Mejor detección PDF corrupto | `output_validation.go:58` |
+| Baja | Separar PresentationOrders duplicados | Consistencia | `catalog.go:48-51` |
+| Baja | Agregar métrica `metadata_extraction_duration` | Observabilidad | `upload.go:139` |
+| Baja | Sanitizar `outputArtifactFileName` del engine | Seguridad defensiva | `handler.go:364-369` |
 
 ## Roadmap recomendado
 
-### Fase 1: Corregir lógica crítica
+### Fase 1: Correcciones críticas
+1. Agregar `application/msword` a SourceFormats de `doc-to-pdf`, `doc-to-txt`, `doc-to-docx` en catalog.go
+2. Corregir límite HEIC/SVG >10MB en validator (25MB o extracción de dimensiones vía ffprobe)
+3. Agregar Content-Length header en descarga de artefactos
+4. Detección de documentos Office protegidos en metadata.go
+5. Mensaje de error específico para archivos protegidos en classifyError
 
-- [x] Resolver inconsistencia de video-to-mp4 y video-to-webm: permitir re-encoding del mismo formato.
-- [x] Agregar manejo del estado `expired` en el polling del frontend.
-- [x] Agregar validación de tamaño razonable del archivo convertido.
-- [ ] Agregar tests con archivos corruptos reales por formato.
-- [ ] Agregar tests de permisos de descarga entre usuarios.
-- [x] Corregir `containsAny` para usar `strings.Contains`.
-- [x] Manejar 410 Gone cuando el artifact fue eliminado por retention.
+### Fase 2: Robustez y observabilidad
+6. Excluir OpExtract y OpCompress del check 1% output
+7. Header PDF validation en output validator
+8. Validación de ratio de compresión ZIP en detector (anti-bomb)
+9. Pipeline E2E test para .doc y HEIC grande
+10. Métrica metadata extraction duration
+11. Sanitizar outputArtifactFileName
 
-### Fase 2: Mejorar robustez y observabilidad
-
-- [x] Mejorar health check de engines al startup del servidor (warnings claros).
-- [ ] Agregar métricas de tasa de éxito/fallo por formato de entrada y salida.
-- [ ] Agregar limpieza automática de temporales huérfanos.
-- [ ] Diferenciar reintentos por tipo de error (recuperable vs permanente).
-- [x] Agregar validación estructural de outputs binarios (PDF, ZIP, OOXML) - ya existía, mejorada con validación de tamaño.
-- [ ] Agregar tests de concurrencia para el límite de jobs activos.
-- [ ] Agregar tests E2E del flujo completo de conversión.
-- [ ] Crear corpus de fixtures reales por formato soportado.
-
-### Fase 3: Mejorar producto y nuevas funcionalidades
-
-- [ ] Crear página pública de formatos soportados con limitaciones.
-- [ ] Agregar botón de reintentar conversión fallida.
-- [ ] Exportar catálogo de capacidades como API para el frontend.
-- [ ] Agregar historial de conversiones para usuarios registrados.
-- [ ] Agregar notificación por email cuando termina una conversión larga.
-- [ ] Agregar soporte para OCR con selección de idioma.
-- [ ] Agregar conversión por lotes a múltiples formatos.
-- [ ] Crear dashboard interno de conversiones fallidas.
+### Fase 3: Producto y nuevas funcionalidades
+12. Dashboard de fallos por capability (admin)
+13. API pública con OpenAPI spec
+14. OCR multilingüe (Tesseract language selection)
+15. Transcripción y subtitulado (STT pipeline)
 
 ## Checklist accionable
 
-- [x] Centralizar matriz de formatos soportados (ya existe en `catalog.go`)
-- [ ] Validar archivos por MIME type y contenido real (ya se hace, pero agregar validación OOXML)
-- [ ] Confirmar que cada conversión declarada en UI existe en backend (resolver inconsistencias video mp4/webm)
-- [ ] Agregar validación del archivo convertido (tamaño razonable, integridad estructural)
-- [ ] Agregar tests para archivos corruptos (fixtures reales por formato)
-- [ ] Agregar tests para formatos no soportados (verificar rechazo con error claro)
-- [ ] Agregar tests de permisos de descarga (usuario A no descarga artifact de usuario B)
-- [ ] Agregar timeouts por conversión (ya existen, hacerlos adaptativos)
-- [ ] Agregar logs estructurados por job de conversión (ya existen, enriquecer con más contexto)
-- [ ] Agregar métricas de tasa de éxito/fallo por formato (agregar labels de formato)
-- [ ] Mejorar mensajes de error al usuario (clasificación más precisa)
-- [ ] Agregar botón de reintento (evitar re-subir archivo)
-- [ ] Documentar formatos soportados (página pública)
-- [ ] Agregar manejo de estado `expired` en frontend
-- [ ] Agregar limpieza automática de temporales huérfanos
-- [ ] Agregar health check de engines al startup
+- [x] Agregar `application/msword` a SourceFormats en catalog.go para 3 capacidades
+- [x] Aumentar límite imágenes sin dimensiones a 25MB en validator.go línea 48
+- [x] Validar header `%PDF-` en output_validation.go para formato pdf
+- [x] Detectar protección en OOXML y ODF en metadata.go
+- [x] Agregar Content-Length header en artifact.go línea 61
+- [x] Excluir OpExtract y OpCompress del check 1% en output_validation.go:311
+- [x] Agregar ZIP bomb ratio check en detector.go:281
+- [x] Agregar tests para .doc detection con capacidades esperadas
+- [x] Agregar tests para HEIC >10MB
+- [x] Agregar tests para documentos Office protegidos
+- [x] Agregar tests para path traversal en artifact download
+- [x] Agregar tests para permiso de descarga de artifact ajeno
+- [x] Sanitizar outputArtifactFileName en handler.go:374
+- [x] Agregar métrica `metadata_extraction_duration_seconds` en upload.go
+- [x] Documentar todos los formatos en UI hints (categories.ts o endpoint /api/catalog)
+- [x] Actualizar capabilities-catalog.md con estado real de cada capacidad
 
 ## Conclusión
 
-Las 3 a 5 acciones más importantes para que las conversiones sean más confiables son:
+El sistema de conversión de Reform Lab tiene una arquitectura sólida y bien pensada. La detección por contenido, la resolución centralizada de capacidades y la validación de outputs son fortalezas claras. Las correcciones más urgentes son de baja complejidad y alto impacto: habilitar .doc legacy (agregar un MIME type a 3 capabilities) y ajustar el límite HEIC en el validador (cambiar una constante). El resto de hallazgos son mejoras de robustez y UX que elevarán la calidad del producto sin requerir cambios arquitectónicos.
 
-1. ~~**Resolver las inconsistencias de video-to-mp4 y video-to-webm**~~ **[FIXED]**: El backend ahora acepta MP4→MP4 y WebM→WebM como re-encoding, permitiendo cambio de codec y calidad.
+Las 5 acciones más importantes:
 
-2. ~~**Agregar validación de tamaño razonable del output**~~ **[FIXED]**: Se agregó `validateMinimumOutputSize` con umbrales por formato y validación de que el output no sea menor al 1% del input.
-
-3. ~~**Agregar manejo del estado `expired` en el frontend**~~ **[FIXED]**: El polling ahora maneja explícitamente el estado `expired`, mostrando un mensaje de error claro al usuario.
-
-4. **Crear tests con archivos reales por formato soportado**: La cobertura actual es insuficiente para garantizar que cada conversión funciona correctamente con archivos del mundo real, incluyendo casos corruptos, protegidos y edge cases.
-
-5. **Exportar el catálogo de capacidades como API dinámica**: Eliminar los hints estáticos del frontend y hacer que la UI consuma las capacidades reales del backend, eliminando inconsistencias entre lo que se promete y lo que se entrega.
-
-### Fixes aplicados en esta sesión
-
-| # | Fix | Archivos modificados |
-|---|---|---|
-| 1 | Video re-encoding (MP4→MP4, WebM→WebM) | `catalog.go`, `resolver.go`, `resolver_test.go` |
-| 2 | Manejo de estado `expired` en frontend | `use-conversion.ts`, `es.json` |
-| 3 | Validación de tamaño razonable del output | `output_validation.go`, `queue.go`, `service.go`, `conversion.go`, `job.go`, `admin_jobs.go`, tests |
-| 4 | Reemplazar `containsAny` con `strings.Contains` | `handler.go` |
-| 5 | Manejar 410 Gone para artifacts eliminados | `artifact.go` |
-| 6 | Mejorar logging de engines no disponibles | `main.go` |
+1. **Agregar `application/msword`** a `doc-to-pdf`, `doc-to-txt`, `doc-to-docx` — 3 líneas, impacto alto.
+2. **Aumentar límite HEIC/SVG** de 10MB a 25MB en el validador — 1 línea, impacto alto.
+3. **Detectar protección en documentos Office** (DOCX/XLSX/PPTX/ODF) — ~30 líneas, impacto alto en UX.
+4. **Agregar Content-Length** en descarga de artefactos — 3 líneas, impacto medio en UX.
+5. **Validar header PDF** en output validation — 5 líneas, previene falsos positivos.

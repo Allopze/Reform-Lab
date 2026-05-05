@@ -36,6 +36,13 @@ func TestOutputArtifactFormatUsesActualExtension(t *testing.T) {
 	}
 }
 
+func TestOutputArtifactFileNameSanitizesEngineOutput(t *testing.T) {
+	got := outputArtifactFileName("/tmp/../../unsafe\x00name", "pdf")
+	if got != "unsafename.pdf" {
+		t.Fatalf("expected sanitized fallback name, got %q", got)
+	}
+}
+
 func TestFormatHelpersCoverNewFormats(t *testing.T) {
 	if got := familyForOutputFormat("xlsx"); got != domain.FamilyDocument {
 		t.Fatalf("expected xlsx to map to document family, got %s", got)

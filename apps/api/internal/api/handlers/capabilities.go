@@ -25,8 +25,38 @@ type capabilityResponse struct {
 	TimeoutSeconds    int    `json:"timeoutSeconds"`
 }
 
+type catalogCapabilityResponse struct {
+	ID                string   `json:"id"`
+	DisplayName       string   `json:"displayName"`
+	PresentationOrder int      `json:"presentationOrder"`
+	SourceFormats     []string `json:"sourceFormats"`
+	TargetFormat      string   `json:"targetFormat"`
+	OperationType     string   `json:"operationType"`
+	Family            string   `json:"family"`
+	MaxInputBytes     int64    `json:"maxInputBytes"`
+	TimeoutSeconds    int      `json:"timeoutSeconds"`
+	MaxRetries        int      `json:"maxRetries"`
+	ExpectedQuality   string   `json:"expectedQuality,omitempty"`
+	KnownLimitations  []string `json:"knownLimitations,omitempty"`
+}
+
+type catalogFamilyResponse struct {
+	Family       string                      `json:"family"`
+	Capabilities []catalogCapabilityResponse `json:"capabilities"`
+}
+
 type batchCapabilitiesRequest struct {
 	FileIDs []string `json:"fileIds"`
+}
+
+// CatalogHandler handles GET /api/catalog.
+type CatalogHandler struct{}
+
+func (h *CatalogHandler) Handle(w http.ResponseWriter, r *http.Request) {
+	grouped := catalogByFamily(capabilities.Catalog)
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"families": grouped,
+	})
 }
 
 func (h *CapabilitiesHandler) Handle(w http.ResponseWriter, r *http.Request) {
@@ -147,4 +177,37 @@ func intersectCapabilities(files []*domain.OriginalFile) []capabilityResponse {
 		}
 	}
 	return result
+}
+
+func catalogByFamily(catalog []domain.Capability) []catalogFamilyResponse {
+	families := make([]catalogFamilyResponse, 0)
+	indexByFamily := make(map[domain.FormatFamily]int)
+
+	for _, cap := range catalog {
+		index, ok := indexByFamily[cap.Family]
+		if !ok {
+			index = len(families)
+			indexByFamily[cap.Family] = index
+			families = append(families, catalogFamilyResponse{
+				Family:       string(cap.Family),
+				Capabilities: []catalogCapabilityResponse{},
+			})
+		}
+		families[index].Capabilities = append(families[index].Capabilities, catalogCapabilityResponse{
+			ID:                cap.ID,
+			DisplayName:       cap.DisplayName,
+			PresentationOrder: cap.PresentationOrder,
+			SourceFormats:     cap.SourceFormats,
+			TargetFormat:      cap.TargetFormat,
+			OperationType:     string(cap.OperationType),
+			Family:            string(cap.Family),
+			MaxInputBytes:     cap.SizeLimits.MaxInputBytes,
+			TimeoutSeconds:    cap.ExecutionLimits.TimeoutSeconds,
+			MaxRetries:        cap.ExecutionLimits.MaxRetries,
+			ExpectedQuality:   cap.ExpectedQuality,
+			KnownLimitations:  cap.KnownLimitations,
+		})
+	}
+
+	return families
 }

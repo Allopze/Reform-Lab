@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/allopze/reform-lab/apps/api/internal/domain"
 )
 
 func TestValidateOutputArtifactRejectsInvalidJSON(t *testing.T) {
@@ -49,8 +51,8 @@ func TestValidateOutputArtifactAcceptsHTMLWithCharsetMIME(t *testing.T) {
 }
 
 func TestValidateOutputArtifactValidatesZipOutputs(t *testing.T) {
-	validZip := writeZipValidationFile(t, "preview.zip", map[string]string{
-		"frame-001.jpg": "fake-image-data",
+	validZip := writeZipBytesValidationFile(t, "preview.zip", map[string][]byte{
+		"frame-001.jpg": minimalJPEG(),
 	})
 	if _, err := validateOutputArtifact(validZip, "zip", 1024); err != nil {
 		t.Fatalf("expected non-empty zip output to be accepted: %v", err)
@@ -73,6 +75,13 @@ func TestValidateOutputArtifactValidatesZipOutputs(t *testing.T) {
 	})
 	if _, err := validateOutputArtifact(emptyFileZip, "zip", 1024); err == nil {
 		t.Fatal("expected zip with empty file to be rejected")
+	}
+
+	corruptImageZip := writeZipValidationFile(t, "corrupt-image.zip", map[string]string{
+		"frame-001.jpg": "fake-image-data",
+	})
+	if _, err := validateOutputArtifact(corruptImageZip, "zip", 1024); err == nil {
+		t.Fatal("expected zip with corrupt image entry to be rejected")
 	}
 }
 
@@ -101,6 +110,22 @@ func TestValidateOutputArtifactValidatesOOXMLOutputs(t *testing.T) {
 	}
 }
 
+func TestValidateOutputArtifactRejectsTruncatedPDF(t *testing.T) {
+	path := writeValidationFile(t, "truncated.pdf", []byte("%PDF-1.7\n1 0 obj<<>>endobj\n"))
+
+	if _, err := validateOutputArtifact(path, "pdf", 1024); err == nil {
+		t.Fatal("expected truncated PDF output to be rejected")
+	}
+}
+
+func TestValidateOutputArtifactAllowsSmallExtractOutputs(t *testing.T) {
+	path := writeValidationFile(t, "small.txt", []byte("ok text\n"))
+
+	if _, err := validateOutputArtifact(path, "txt", 10*1024*1024, domain.OpExtract); err != nil {
+		t.Fatalf("expected small extraction output to be accepted: %v", err)
+	}
+}
+
 func writeValidationFile(t *testing.T, name string, data []byte) string {
 	t.Helper()
 
@@ -112,6 +137,16 @@ func writeValidationFile(t *testing.T, name string, data []byte) string {
 }
 
 func writeZipValidationFile(t *testing.T, name string, entries map[string]string) string {
+	t.Helper()
+
+	byteEntries := make(map[string][]byte, len(entries))
+	for entryName, content := range entries {
+		byteEntries[entryName] = []byte(content)
+	}
+	return writeZipBytesValidationFile(t, name, byteEntries)
+}
+
+func writeZipBytesValidationFile(t *testing.T, name string, entries map[string][]byte) string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), name)
@@ -126,7 +161,7 @@ func writeZipValidationFile(t *testing.T, name string, entries map[string]string
 		if err != nil {
 			t.Fatalf("create zip entry %s: %v", entryName, err)
 		}
-		if _, err := entry.Write([]byte(content)); err != nil {
+		if _, err := entry.Write(content); err != nil {
 			t.Fatalf("write zip entry %s: %v", entryName, err)
 		}
 	}
@@ -151,6 +186,16 @@ func minimalPNG() []byte {
 		0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00,
 		0x18, 0xdd, 0x8d, 0xb1,
 		0x00, 0x00, 0x00, 0x00, 'I', 'E', 'N', 'D', 0xae, 'B', 0x60, 0x82,
+	}
+}
+
+func minimalJPEG() []byte {
+	return []byte{
+		0xff, 0xd8,
+		0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0x01, 0x01, 0x00, 0x48, 0x00, 0x48, 0x00, 0x00,
+		0xff, 0xdb, 0x00, 0x43, 0x00,
+		0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01,
+		0xff, 0xd9,
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/allopze/reform-lab/apps/api/internal/domain"
 	"github.com/gabriel-vasile/mimetype"
 )
 
@@ -38,7 +39,7 @@ var allowedOutputMIMEs = map[string][]string{
 	"webm": {"video/webm"},
 }
 
-func validateOutputArtifact(path, expectedFormat string, inputSize int64) (os.FileInfo, error) {
+func validateOutputArtifact(path, expectedFormat string, inputSize int64, operationTypes ...domain.OperationType) (os.FileInfo, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("output file missing: %w", err)
@@ -51,7 +52,7 @@ func validateOutputArtifact(path, expectedFormat string, inputSize int64) (os.Fi
 	}
 
 	// Validate minimum reasonable size based on format
-	if err := validateMinimumOutputSize(info.Size(), expectedFormat, inputSize); err != nil {
+	if err := validateMinimumOutputSize(info.Size(), expectedFormat, inputSize, operationTypes...); err != nil {
 		return nil, err
 	}
 
@@ -78,6 +79,10 @@ func validateOutputArtifact(path, expectedFormat string, inputSize int64) (os.Fi
 		}
 	case "zip":
 		if err := validateZipOutput(path); err != nil {
+			return nil, err
+		}
+	case "pdf":
+		if err := validatePDFOutput(path); err != nil {
 			return nil, err
 		}
 	default:
@@ -181,6 +186,7 @@ func validateZipOutput(path string) error {
 	defer reader.Close()
 
 	files := 0
+	validatedImage := false
 	for _, file := range reader.File {
 		if err := validateZipEntryName(file.Name); err != nil {
 			return err
@@ -192,6 +198,12 @@ func validateZipOutput(path string) error {
 			return fmt.Errorf("zip output contains empty file %q", file.Name)
 		}
 		files++
+		if !validatedImage {
+			if err := validateZipImageEntry(file); err != nil {
+				return err
+			}
+			validatedImage = true
+		}
 		if files > maxZipOutputEntries {
 			return fmt.Errorf("zip output contains too many files")
 		}
@@ -202,6 +214,27 @@ func validateZipOutput(path string) error {
 	return nil
 }
 
+func validateZipImageEntry(file *zip.File) error {
+	rc, err := file.Open()
+	if err != nil {
+		return fmt.Errorf("open zip image entry %q: %w", file.Name, err)
+	}
+	defer rc.Close()
+
+	sample, err := io.ReadAll(io.LimitReader(rc, outputValidationSampleLimit))
+	if err != nil {
+		return fmt.Errorf("read zip image entry %q: %w", file.Name, err)
+	}
+	detected := mimetype.Detect(sample)
+	mime := normalizeOutputMIME(detected.String())
+	switch mime {
+	case "image/jpeg", "image/png":
+		return nil
+	default:
+		return fmt.Errorf("zip output contains non-image preview entry %q with MIME %s", file.Name, mime)
+	}
+}
+
 func validateZipEntryName(name string) error {
 	cleaned := path.Clean(name)
 	if name == "" || cleaned == "." || strings.HasPrefix(cleaned, "../") || cleaned == ".." || path.IsAbs(name) {
@@ -209,6 +242,23 @@ func validateZipEntryName(name string) error {
 	}
 	if strings.Contains(name, "\\") || strings.Contains(name, "\x00") {
 		return fmt.Errorf("zip output contains unsafe path %q", name)
+	}
+	return nil
+}
+
+func validatePDFOutput(path string) error {
+	if err := validateBinaryOutputFormat(path, "pdf"); err != nil {
+		return err
+	}
+	sample, err := readOutputValidationSample(path)
+	if err != nil {
+		return fmt.Errorf("read pdf output: %w", err)
+	}
+	if !bytes.HasPrefix(sample, []byte("%PDF-")) {
+		return fmt.Errorf("pdf output is missing PDF header")
+	}
+	if !bytes.Contains(sample, []byte("%%EOF")) {
+		return fmt.Errorf("pdf output is missing EOF marker")
 	}
 	return nil
 }
@@ -296,7 +346,7 @@ var minimumOutputSizes = map[string]int64{
 	"json": 5,   // JSON needs at least {} or []
 }
 
-func validateMinimumOutputSize(outputSize int64, expectedFormat string, inputSize int64) error {
+func validateMinimumOutputSize(outputSize int64, expectedFormat string, inputSize int64, operationTypes ...domain.OperationType) error {
 	minSize, ok := minimumOutputSizes[expectedFormat]
 	if !ok {
 		minSize = 10 // Generic minimum for unknown formats
@@ -304,6 +354,13 @@ func validateMinimumOutputSize(outputSize int64, expectedFormat string, inputSiz
 
 	if outputSize < minSize {
 		return fmt.Errorf("output file is suspiciously small: %d bytes for format %s (minimum expected: %d bytes)", outputSize, expectedFormat, minSize)
+	}
+
+	if len(operationTypes) > 0 {
+		switch operationTypes[0] {
+		case domain.OpExtract, domain.OpCompress:
+			return nil
+		}
 	}
 
 	// For lossless conversions, output should not be smaller than 1% of input

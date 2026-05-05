@@ -146,6 +146,7 @@ Notas relevantes del comportamiento actual:
 - el OCR base actual usa Tesseract y, para PDF, rasteriza páginas antes de reconstruir texto, JSON o PDF searchable
 - cuando una salida multi-página o multi-slide termina en ZIP real, el artefacto se persiste con la extensión y MIME reales del archivo generado
 - `GET /api/jobs/{jobId}` expone el nombre, MIME y tamaño reales del artefacto cuando la conversión termina, para que frontend y dashboard no tengan que inferir ZIPs ni nombres finales
+- `GET /api/catalog` expone el catálogo declarativo agrupado por familia para que la UI y documentación no dupliquen manualmente la fuente de verdad
 
 ### PDF
 
@@ -161,9 +162,9 @@ Notas relevantes del comportamiento actual:
 
 ### Documentos y texto
 
-- DOCX/ODT/RTF -> PDF
-- DOCX/ODT/RTF -> TXT
-- ODT/RTF -> DOCX
+- DOC/DOCX/ODT/RTF -> PDF
+- DOC/DOCX/ODT/RTF -> TXT
+- DOC/ODT/RTF -> DOCX
 - DOCX -> HTML simple
 - DOCX -> Markdown
 - TXT -> PDF simple
@@ -236,7 +237,7 @@ Notas relevantes del comportamiento actual:
 
 ## Capacidades candidatas para siguientes iteraciones
 En esta pasada ya existen perfiles web de imagen, salidas HEIC/HEIF y SVG, audio/video a M4A/Opus y conversión base de presentaciones y hojas de cálculo.
-El corpus real ya cubre variantes complejas y corruptas para HEIF, presentaciones y hojas de cálculo, con validación local de `heif-convert` y `rsvg-convert`, smoke Docker reproducible y tests frontend para la UX crítica de ZIP/multipágina.
+El corpus real ya cubre variantes complejas y corruptas para HEIF, presentaciones, hojas de cálculo, DOC legacy, documentos protegidos OOXML/ODF, ZIP bombs controlados y corruptos por familia base (PDF, documento, imagen, audio y video).
 El backlog inmediato queda concentrado en transcripción y subtitulado.
 
 ### Audio y video

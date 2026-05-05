@@ -4,6 +4,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
@@ -59,6 +60,9 @@ func (h *ArtifactHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	defer reader.Close()
 
 	w.Header().Set("Content-Type", artifact.MIMEType)
+	if artifact.Size > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(artifact.Size, 10))
+	}
 	disposition := mime.FormatMediaType("attachment", map[string]string{
 		"filename": artifact.FileName,
 	})

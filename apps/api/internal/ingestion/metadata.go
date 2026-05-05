@@ -1,8 +1,10 @@
 package ingestion
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"image"
 	_ "image/gif"
@@ -34,6 +36,8 @@ func ExtractMetadata(ctx context.Context, path string, format domain.DetectedFor
 		return extractPDFMetadata(ctx, path)
 	case domain.FamilyImage:
 		return extractImageMetadata(path), nil
+	case domain.FamilyDocument:
+		return extractDocumentMetadata(path, format), nil
 	case domain.FamilyAudio, domain.FamilyVideo:
 		return extractAVMetadata(ctx, path)
 	default:
@@ -173,6 +177,71 @@ func extractDimensionsViaFFProbe(path string) (w, h int, ok bool) {
 		return s.Width, s.Height, true
 	}
 	return 0, 0, false
+}
+
+func extractDocumentMetadata(path string, format domain.DetectedFormat) domain.FileMetadata {
+	m := domain.FileMetadata{}
+	switch format.MIMEType {
+	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		"application/vnd.openxmlformats-officedocument.presentationml.presentation":
+		m.IsProtected = isEncryptedOOXML(path)
+	case "application/vnd.oasis.opendocument.text",
+		"application/vnd.oasis.opendocument.spreadsheet",
+		"application/vnd.oasis.opendocument.presentation":
+		m.IsProtected = isEncryptedODF(path)
+	}
+	return m
+}
+
+func isEncryptedOOXML(path string) bool {
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		return false
+	}
+	defer reader.Close()
+
+	for _, file := range reader.File {
+		name := strings.TrimPrefix(strings.ToLower(file.Name), "/")
+		if name == "encryptioninfo" || name == "encryptedpackage" {
+			return true
+		}
+	}
+	return false
+}
+
+func isEncryptedODF(path string) bool {
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		return false
+	}
+	defer reader.Close()
+
+	for _, file := range reader.File {
+		if strings.EqualFold(file.Name, "META-INF/manifest.xml") {
+			return odfManifestHasEncryptionData(file)
+		}
+	}
+	return false
+}
+
+func odfManifestHasEncryptionData(file *zip.File) bool {
+	rc, err := file.Open()
+	if err != nil {
+		return false
+	}
+	defer rc.Close()
+
+	decoder := xml.NewDecoder(io.LimitReader(rc, 256*1024))
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return false
+		}
+		if start, ok := token.(xml.StartElement); ok && start.Name.Local == "encryption-data" {
+			return true
+		}
+	}
 }
 
 // ffprobeResult is the minimal structure we parse from ffprobe JSON output.

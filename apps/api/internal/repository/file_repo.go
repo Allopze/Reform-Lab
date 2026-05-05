@@ -46,6 +46,71 @@ func (r *sqliteFileRepo) Create(ctx context.Context, f *domain.OriginalFile) err
 	return err
 }
 
+// CreateIfUnderQuota serializes quota check + insert for one owner. A quota <= 0
+// disables the check and behaves like Create.
+func (r *sqliteFileRepo) CreateIfUnderQuota(ctx context.Context, f *domain.OriginalFile, quotaBytes int64) error {
+	if quotaBytes <= 0 || (f.UserID == nil && f.GuestSessionID == nil) {
+		return r.Create(ctx, f)
+	}
+
+	meta, err := json.Marshal(f.Metadata)
+	if err != nil {
+		return fmt.Errorf("marshal metadata: %w", err)
+	}
+
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("conn: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return fmt.Errorf("begin quota tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, "ROLLBACK")
+		}
+	}()
+
+	var used int64
+	switch {
+	case f.UserID != nil:
+		err = conn.QueryRowContext(ctx,
+			`SELECT COALESCE(SUM(size), 0) FROM files WHERE user_id = ? AND expired_at IS NULL`,
+			f.UserID.String(),
+		).Scan(&used)
+	case f.GuestSessionID != nil:
+		err = conn.QueryRowContext(ctx,
+			`SELECT COALESCE(SUM(size), 0) FROM files WHERE guest_session_id = ? AND expired_at IS NULL`,
+			f.GuestSessionID.String(),
+		).Scan(&used)
+	}
+	if err != nil {
+		return fmt.Errorf("cumulative bytes under quota: %w", err)
+	}
+	if used+f.Size > quotaBytes {
+		return domain.ErrQuotaExceeded
+	}
+
+	if _, err = conn.ExecContext(ctx,
+		`INSERT INTO files (id, user_id, guest_session_id, internal_name, original_name, size, mime_type, format_family, detected_extension, metadata, uploaded_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		f.ID.String(), nullableUUIDString(f.UserID), nullableUUIDString(f.GuestSessionID), f.InternalName, f.OriginalName, f.Size,
+		f.DetectedFormat.MIMEType, string(f.DetectedFormat.Family),
+		f.DetectedFormat.Extension, string(meta), f.UploadedAt.Format(timeLayout),
+	); err != nil {
+		return fmt.Errorf("insert file under quota: %w", err)
+	}
+
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("commit quota tx: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 func (r *sqliteFileRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.OriginalFile, error) {
 	var f domain.OriginalFile
 	var family, idStr, metaStr, uploadedAt string

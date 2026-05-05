@@ -7,6 +7,7 @@ type Metrics struct {
 	UploadsTotal        *prometheus.CounterVec
 	JobsTotal           *prometheus.CounterVec
 	JobDuration         *prometheus.HistogramVec
+	MetadataDuration    *prometheus.HistogramVec
 	ArtifactsTotal      prometheus.Counter
 	ActiveJobs          *prometheus.GaugeVec
 	RateLimitHits       *prometheus.CounterVec
@@ -40,6 +41,14 @@ func NewMetrics() *Metrics {
 				Buckets: prometheus.ExponentialBuckets(1, 2, 10),
 			},
 			[]string{"capability"},
+		),
+		MetadataDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "reform_metadata_extraction_duration_seconds",
+				Help:    "Metadata extraction duration in seconds by detected format family",
+				Buckets: prometheus.DefBuckets,
+			},
+			[]string{"family"},
 		),
 		ArtifactsTotal: prometheus.NewCounter(
 			prometheus.CounterOpts{
@@ -91,7 +100,7 @@ func NewMetrics() *Metrics {
 	}
 
 	prometheus.MustRegister(
-		m.UploadsTotal, m.JobsTotal, m.JobDuration, m.ArtifactsTotal,
+		m.UploadsTotal, m.JobsTotal, m.JobDuration, m.MetadataDuration, m.ArtifactsTotal,
 		m.ActiveJobs, m.RateLimitHits, m.HTTPRequestDuration, m.ErrorsTotal,
 		m.DiskFreeBytes, m.DiskTotalBytes,
 	)

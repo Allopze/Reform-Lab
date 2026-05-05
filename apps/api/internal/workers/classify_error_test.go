@@ -79,6 +79,14 @@ func TestClassifyError_ExitStatus(t *testing.T) {
 	}
 }
 
+func TestClassifyError_ProtectedDocument(t *testing.T) {
+	msg := classifyError("execute", errors.New("source document is encrypted or requires a password"))
+	expected := "Archivo protegido por contraseña. Quita la protección y vuelve a intentar."
+	if msg != expected {
+		t.Fatalf("expected %q, got %q", expected, msg)
+	}
+}
+
 func TestClassifyError_GenericFallback(t *testing.T) {
 	msg := classifyError("execute", errors.New("something weird happened"))
 	expected := "La conversión falló por un error interno. Intenta de nuevo."

@@ -1,8 +1,13 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CategoryId } from "@/types";
-import { getCategoryById, DEFAULT_CATEGORY } from "@/config/categories";
+import {
+  applyCatalogHints,
+  getCategoryById,
+  DEFAULT_CATEGORY,
+} from "@/config/categories";
+import { getCatalog, type CatalogFamily } from "@/lib/api";
 import Header from "./header";
 import CategoryNav from "./category-nav";
 import ConversionCard from "./conversion-card";
@@ -10,12 +15,32 @@ import ConversionCard from "./conversion-card";
 export default function ConverterApp() {
   const [activeCategory, setActiveCategory] =
     useState<CategoryId>(DEFAULT_CATEGORY);
+  const [catalogFamilies, setCatalogFamilies] = useState<CatalogFamily[] | null>(
+    null,
+  );
+
+  useEffect(() => {
+    let mounted = true;
+    getCatalog()
+      .then((families) => {
+        if (mounted) setCatalogFamilies(families);
+      })
+      .catch(() => {
+        if (mounted) setCatalogFamilies(null);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleCategoryChange = useCallback((id: CategoryId) => {
     setActiveCategory(id);
   }, []);
 
-  const category = getCategoryById(activeCategory);
+  const category = useMemo(
+    () => applyCatalogHints(getCategoryById(activeCategory), catalogFamilies),
+    [activeCategory, catalogFamilies],
+  );
 
   return (
     <>

@@ -38,3 +38,17 @@ func TestValidateFileAllowsReasonableAudioDuration(t *testing.T) {
 		t.Fatalf("expected audio file to pass validation, got %v", err)
 	}
 }
+
+func TestValidateFileAllowsUnknownDimensionImagesUpToConservativeLimit(t *testing.T) {
+	err := ValidateFile(25*1024*1024, domain.DetectedFormat{Family: domain.FamilyImage}, domain.FileMetadata{})
+	if err != nil {
+		t.Fatalf("expected unknown-dimension image at conservative limit to pass, got %v", err)
+	}
+}
+
+func TestValidateFileRejectsUnknownDimensionImagesWithSpecificError(t *testing.T) {
+	err := ValidateFile(25*1024*1024+1, domain.DetectedFormat{Family: domain.FamilyImage}, domain.FileMetadata{})
+	if err != domain.ErrImageDimensionsUnknown {
+		t.Fatalf("expected ErrImageDimensionsUnknown, got %v", err)
+	}
+}

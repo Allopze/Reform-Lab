@@ -120,6 +120,11 @@ func TestResolveOrdersDocumentCapabilities(t *testing.T) {
 		"doc-to-html",
 		"docx-to-markdown",
 	})
+	assertCapabilityIDs(t, Resolve(fakeDocumentFile("application/msword", "doc")), []string{
+		"doc-to-pdf",
+		"doc-to-docx",
+		"doc-to-txt",
+	})
 	assertCapabilityIDs(t, Resolve(fakeDocumentFile("text/html", "html")), []string{
 		"html-to-pdf",
 		"html-to-txt",

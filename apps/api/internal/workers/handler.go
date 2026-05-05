@@ -16,6 +16,7 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/orchestrator"
 	"github.com/allopze/reform-lab/apps/api/internal/queue"
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
+	"github.com/allopze/reform-lab/apps/api/internal/security"
 	"github.com/allopze/reform-lab/apps/api/internal/storage"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -153,7 +154,7 @@ func (h *Handler) ProcessPayload(ctx context.Context, taskType string, data []by
 
 	// Validate output exists, has content, and matches the expected artifact format.
 	_ = h.Orch.UpdateProgress(ctx, jobID, 70) // validating output
-	info, err := validateOutputArtifact(outputPath, artifactFormat, payload.InputSize)
+	info, err := validateOutputArtifact(outputPath, artifactFormat, payload.InputSize, capability.OperationType)
 	if err != nil {
 		return h.fail(ctx, payload.CapabilityID, jobID, logger, "validate output", err)
 	}
@@ -258,6 +259,8 @@ func classifyError(step string, err error) string {
 		return "Error de almacenamiento interno. Intenta más tarde."
 	case strings.Contains(errText, "signal: killed") || strings.Contains(errText, "context deadline exceeded") || strings.Contains(errText, "timeout"):
 		return "La conversión excedió el tiempo máximo permitido."
+	case strings.Contains(strings.ToLower(errText), "password") || strings.Contains(strings.ToLower(errText), "encrypted"):
+		return "Archivo protegido por contraseña. Quita la protección y vuelve a intentar."
 	case strings.Contains(errText, "exit status"):
 		return "El motor de conversión no pudo procesar este archivo."
 	default:
@@ -362,9 +365,12 @@ func outputArtifactFormat(outputPath, fallback string) string {
 }
 
 func outputArtifactFileName(outputPath, fallbackFormat string) string {
-	name := strings.TrimSpace(filepath.Base(outputPath))
+	name := security.SanitizeFileName(strings.TrimSpace(filepath.Base(outputPath)))
 	if name == "" || name == "." || name == string(filepath.Separator) {
 		return fmt.Sprintf("converted.%s", fallbackFormat)
+	}
+	if filepath.Ext(name) == "" && fallbackFormat != "" {
+		name = fmt.Sprintf("%s.%s", name, fallbackFormat)
 	}
 	return name
 }

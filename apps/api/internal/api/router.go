@@ -103,6 +103,7 @@ func NewRouter(d Deps) *chi.Mux {
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/health", handlers.PublicHealth())
 		footer := &handlers.FooterHandler{Settings: d.SiteSettings, Audit: d.Audit}
+		catalog := &handlers.CatalogHandler{}
 		uploadPolicy := &handlers.UploadPolicyHandler{
 			Settings:                       d.SiteSettings,
 			Files:                          d.Files,
@@ -111,6 +112,7 @@ func NewRouter(d Deps) *chi.Mux {
 			RegisteredCumulativeQuotaBytes: d.RegisteredCumulativeQuotaBytes,
 		}
 		r.Get("/footer-message", footer.Get)
+		r.Get("/catalog", catalog.Handle)
 
 		// Auth routes (public)
 		authH := &handlers.AuthHandler{

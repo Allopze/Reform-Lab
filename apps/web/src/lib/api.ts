@@ -102,12 +102,41 @@ export async function getBatchCapabilities(
 // ── Capabilities ──
 
 export interface Capability {
-  id: string;
-  displayName: string;
-  presentationOrder: number;
-  targetFormat: string;
-  operationType: string;
-  timeoutSeconds: number;
+	id: string;
+	displayName: string;
+	presentationOrder: number;
+	targetFormat: string;
+	operationType: string;
+	timeoutSeconds: number;
+}
+
+export interface CatalogCapability extends Capability {
+	sourceFormats: string[];
+	family: string;
+	maxInputBytes: number;
+	maxRetries: number;
+	expectedQuality?: string;
+	knownLimitations?: string[];
+}
+
+export interface CatalogFamily {
+	family: string;
+	capabilities: CatalogCapability[];
+}
+
+export async function getCatalog(): Promise<CatalogFamily[]> {
+	const res = await fetchWithTimeout(`${API_URL}/api/catalog`, {
+		headers: headers(),
+		credentials: "include",
+	});
+
+	const data = await res.json().catch(() => ({}));
+	if (!res.ok) {
+		throw new Error(
+			(data as { error?: string }).error || "Failed to load catalog",
+		);
+	}
+	return (data as { families: CatalogFamily[] }).families;
 }
 
 export async function getCapabilities(fileId: string): Promise<Capability[]> {
