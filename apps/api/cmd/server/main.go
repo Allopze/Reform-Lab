@@ -52,8 +52,17 @@ func main() {
 
 	// Probe runtime engine availability once at startup.
 	capabilities.DefaultProber.Probe()
+	unavailableEngines := []string{}
 	for engine, ok := range capabilities.DefaultProber.AvailableEngines() {
-		logger.Info().Str("engine", engine).Bool("available", ok).Msg("engine probe")
+		if ok {
+			logger.Info().Str("engine", engine).Msg("engine available")
+		} else {
+			logger.Warn().Str("engine", engine).Msg("engine NOT available — related capabilities will be hidden")
+			unavailableEngines = append(unavailableEngines, engine)
+		}
+	}
+	if len(unavailableEngines) > 0 {
+		logger.Warn().Strs("unavailable", unavailableEngines).Msg("some engines are not installed; capabilities depending on them will not be offered to users")
 	}
 
 	// SQLite database

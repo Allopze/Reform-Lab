@@ -75,7 +75,7 @@ func TestProcessPayloadCancelsRunningJob(t *testing.T) {
 		t.Fatal("expected image-to-png capability")
 	}
 
-	job, err := orch.CreateAndEnqueue(context.Background(), nil, uuid.New(), *capability, filepath.Join(tmpDir, "input.png"))
+	job, err := orch.CreateAndEnqueue(context.Background(), nil, uuid.New(), *capability, filepath.Join(tmpDir, "input.png"), 1024)
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
@@ -105,6 +105,7 @@ func TestProcessPayloadCancelsRunningJob(t *testing.T) {
 		CapabilityID: "image-to-png",
 		InputPath:    filepath.Join(tmpDir, "input.png"),
 		OutputFormat: "png",
+		InputSize:    1024,
 	})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)

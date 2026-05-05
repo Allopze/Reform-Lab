@@ -200,6 +200,14 @@ export function useConversion(
                 };
               }
 
+              if (job.status === "expired") {
+                return {
+                  ...item,
+                  status: "error",
+                  message: t("expired"),
+                };
+              }
+
               return {
                 ...item,
                 status: "converting",

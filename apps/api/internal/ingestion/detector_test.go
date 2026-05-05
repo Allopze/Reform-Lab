@@ -116,3 +116,188 @@ func TestDetectFormatRecognizesComplexOfficeFixtures(t *testing.T) {
 		})
 	}
 }
+
+func TestDetectFormatMarkdownFalsePositives(t *testing.T) {
+	// Plain text with a single # should NOT be detected as markdown
+	// (needs at least 2 strong signals or 1 strong + 1 weak)
+	falsePositives := []struct {
+		name  string
+		input []byte
+	}{
+		{
+			name:  "single hash in text",
+			input: []byte("# This is just a comment in a config file\n"),
+		},
+		{
+			name:  "hash in code comment",
+			input: []byte("# This is a comment\n# Another comment\nSome text\n"),
+		},
+		{
+			name:  "plain text with numbers",
+			input: []byte("1. First item\n2. Second item\n3. Third item\n"),
+		},
+		{
+			name:  "text with dashes but no markdown structure",
+			input: []byte("item-one\nitem-two\nitem-three\n"),
+		},
+		{
+			name:  "text with pipe characters but no table",
+			input: []byte("name|age|city\n"),
+		},
+		{
+			name:  "text with blockquote-like line",
+			input: []byte("> This is a quote\n"),
+		},
+		{
+			name:  "text with horizontal rule-like line",
+			input: []byte("---\n"),
+		},
+		{
+			name:  "empty file",
+			input: []byte(""),
+		},
+		{
+			name:  "whitespace only",
+			input: []byte("   \n\n   \n"),
+		},
+	}
+
+	for _, tc := range falsePositives {
+		t.Run(tc.name, func(t *testing.T) {
+			format, err := DetectFormat(bytes.NewReader(tc.input))
+			if err != nil {
+				t.Fatalf("DetectFormat returned error: %v", err)
+			}
+			if format.MIMEType == "text/markdown" {
+				t.Fatalf("should NOT detect as markdown, got %s for input: %q", format.MIMEType, string(tc.input))
+			}
+		})
+	}
+}
+
+func TestDetectFormatMarkdownTruePositives(t *testing.T) {
+	// These should be detected as markdown
+	truePositives := []struct {
+		name  string
+		input []byte
+	}{
+		{
+			name:  "heading and list",
+			input: []byte("# Title\n\n- item one\n- item two\n"),
+		},
+		{
+			name:  "heading and link",
+			input: []byte("# Title\n\n[link](https://example.com)\n"),
+		},
+		{
+			name:  "code fence and heading",
+			input: []byte("# Title\n\n```python\nprint('hello')\n```\n"),
+		},
+		{
+			name:  "heading and table",
+			input: []byte("# Title\n\n| col1 | col2 |\n|------|------|\n"),
+		},
+		{
+			name:  "heading and blockquote",
+			input: []byte("# Title\n\n> This is a quote\n"),
+		},
+		{
+			name:  "heading and horizontal rule",
+			input: []byte("# Title\n\n---\n"),
+		},
+		{
+			name:  "multiple headings and list",
+			input: []byte("# Title\n\n## Section\n\n- item one\n"),
+		},
+	}
+
+	for _, tc := range truePositives {
+		t.Run(tc.name, func(t *testing.T) {
+			format, err := DetectFormat(bytes.NewReader(tc.input))
+			if err != nil {
+				t.Fatalf("DetectFormat returned error: %v", err)
+			}
+			if format.MIMEType != "text/markdown" {
+				t.Fatalf("expected text/markdown, got %s for input: %q", format.MIMEType, string(tc.input))
+			}
+		})
+	}
+}
+
+func TestDetectFormatSVGVariants(t *testing.T) {
+	// SVG with XML namespace should be detected as image/svg+xml
+	svgWithNamespace := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <circle cx="50" cy="50" r="40"/>
+</svg>`)
+	format, err := DetectFormat(bytes.NewReader(svgWithNamespace))
+	if err != nil {
+		t.Fatalf("DetectFormat returned error: %v", err)
+	}
+	if format.MIMEType != "image/svg+xml" {
+		t.Fatalf("expected image/svg+xml, got %s", format.MIMEType)
+	}
+
+	// SVG without XML declaration but with namespace
+	svgNoXMLDecl := []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect width="100" height="100" fill="red"/>
+</svg>`)
+	format, err = DetectFormat(bytes.NewReader(svgNoXMLDecl))
+	if err != nil {
+		t.Fatalf("DetectFormat returned error: %v", err)
+	}
+	if format.MIMEType != "image/svg+xml" {
+		t.Fatalf("expected image/svg+xml, got %s", format.MIMEType)
+	}
+
+	// Small inline SVG should still be detected
+	smallSVG := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>`)
+	format, err = DetectFormat(bytes.NewReader(smallSVG))
+	if err != nil {
+		t.Fatalf("DetectFormat returned error: %v", err)
+	}
+	if format.MIMEType != "image/svg+xml" {
+		t.Fatalf("expected image/svg+xml, got %s", format.MIMEType)
+	}
+}
+
+func TestDetectFormatSVGFalsePositives(t *testing.T) {
+	// Text that contains "svg" but is not SVG should not be detected as SVG
+	falsePositives := []struct {
+		name        string
+		input       []byte
+		expectError bool
+	}{
+		{
+			name:  "text mentioning svg",
+			input: []byte("This file contains an SVG image.\n"),
+		},
+		{
+			name:  "html with svg-like content",
+			input: []byte(`<div class="svg-container">Some content</div>`),
+		},
+		{
+			name:        "xml that is not svg",
+			input:       []byte(`<?xml version="1.0"?><root><item>test</item></root>`),
+			expectError: true,
+		},
+	}
+
+	for _, tc := range falsePositives {
+		t.Run(tc.name, func(t *testing.T) {
+			format, err := DetectFormat(bytes.NewReader(tc.input))
+			if tc.expectError {
+				if err == nil {
+					t.Fatalf("expected error for non-SVG XML, got format %s", format.MIMEType)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DetectFormat returned error: %v", err)
+			}
+			if format.MIMEType == "image/svg+xml" {
+				t.Fatalf("should NOT detect as SVG, got %s for input: %q", format.MIMEType, string(tc.input))
+			}
+		})
+	}
+}

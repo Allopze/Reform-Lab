@@ -38,7 +38,7 @@ var allowedOutputMIMEs = map[string][]string{
 	"webm": {"video/webm"},
 }
 
-func validateOutputArtifact(path, expectedFormat string) (os.FileInfo, error) {
+func validateOutputArtifact(path, expectedFormat string, inputSize int64) (os.FileInfo, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("output file missing: %w", err)
@@ -48,6 +48,11 @@ func validateOutputArtifact(path, expectedFormat string) (os.FileInfo, error) {
 	}
 	if info.Size() == 0 {
 		return nil, fmt.Errorf("output file missing or empty")
+	}
+
+	// Validate minimum reasonable size based on format
+	if err := validateMinimumOutputSize(info.Size(), expectedFormat, inputSize); err != nil {
+		return nil, err
 	}
 
 	switch expectedFormat {
@@ -260,4 +265,52 @@ func normalizeOutputMIME(mime string) string {
 	default:
 		return mime
 	}
+}
+
+// minimumOutputSizes defines the minimum expected output size in bytes per format.
+// Formats not listed use a generic 10-byte minimum.
+var minimumOutputSizes = map[string]int64{
+	"pdf":  256, // PDFs have headers and object definitions
+	"docx": 256, // OOXML requires multiple internal files
+	"xlsx": 256, // OOXML requires multiple internal files
+	"pptx": 256, // OOXML requires multiple internal files
+	"html": 16,  // HTML requires at least basic structure
+	"jpg":  50,  // JPEG has headers and quantization tables
+	"png":  50,  // PNG has headers and IHDR chunks
+	"webp": 50,  // WebP has RIFF headers
+	"avif": 50,  // AVIF has ftyp and meta boxes
+	"gif":  50,  // GIF has header and image descriptor
+	"mp4":  256, // MP4 has ftyp, moov boxes
+	"webm": 256, // WebM has EBML headers
+	"mp3":  64,  // MP3 has ID3 or frame headers
+	"wav":  44,  // WAV minimum is header size
+	"ogg":  64,  // OGG has page headers
+	"aac":  64,  // AAC has ADTS headers
+	"m4a":  256, // M4A is MP4 container
+	"flac": 64,  // FLAC has streaminfo block
+	"opus": 64,  // Opus has OGG container
+	"zip":  22,  // ZIP minimum is end of central directory
+	"csv":  5,   // CSV needs at least one field
+	"txt":  5,   // Text needs at least some content
+	"md":   5,   // Markdown needs at least some content
+	"json": 5,   // JSON needs at least {} or []
+}
+
+func validateMinimumOutputSize(outputSize int64, expectedFormat string, inputSize int64) error {
+	minSize, ok := minimumOutputSizes[expectedFormat]
+	if !ok {
+		minSize = 10 // Generic minimum for unknown formats
+	}
+
+	if outputSize < minSize {
+		return fmt.Errorf("output file is suspiciously small: %d bytes for format %s (minimum expected: %d bytes)", outputSize, expectedFormat, minSize)
+	}
+
+	// For lossless conversions, output should not be smaller than 1% of input
+	// This catches cases where conversion silently produced garbage
+	if inputSize > 0 && outputSize < inputSize/100 {
+		return fmt.Errorf("output file is less than 1%% of input size: %d bytes output vs %d bytes input", outputSize, inputSize)
+	}
+
+	return nil
 }

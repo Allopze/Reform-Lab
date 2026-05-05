@@ -141,9 +141,9 @@ func (h *JobHandler) Retry(w http.ResponseWriter, r *http.Request) {
 
 	var retryJob *domain.Job
 	if file.UserID == nil && file.GuestSessionID != nil {
-		retryJob, err = h.Orchestrator.RetryFailedJobForGuest(r.Context(), *file.GuestSessionID, job, *capability, inputPath)
+		retryJob, err = h.Orchestrator.RetryFailedJobForGuest(r.Context(), *file.GuestSessionID, job, *capability, inputPath, file.Size)
 	} else {
-		retryJob, err = h.Orchestrator.RetryFailedJob(r.Context(), job, *capability, inputPath)
+		retryJob, err = h.Orchestrator.RetryFailedJob(r.Context(), job, *capability, inputPath, file.Size)
 	}
 	if err != nil {
 		if errors.Is(err, domain.ErrJobIntakePaused) {

@@ -153,7 +153,7 @@ func (h *Handler) ProcessPayload(ctx context.Context, taskType string, data []by
 
 	// Validate output exists, has content, and matches the expected artifact format.
 	_ = h.Orch.UpdateProgress(ctx, jobID, 70) // validating output
-	info, err := validateOutputArtifact(outputPath, artifactFormat)
+	info, err := validateOutputArtifact(outputPath, artifactFormat, payload.InputSize)
 	if err != nil {
 		return h.fail(ctx, payload.CapabilityID, jobID, logger, "validate output", err)
 	}
@@ -256,9 +256,9 @@ func classifyError(step string, err error) string {
 		return "La conversión no produjo un resultado válido."
 	case step == "create temp dir" || step == "save artifact":
 		return "Error de almacenamiento interno. Intenta más tarde."
-	case containsAny(errText, "signal: killed", "context deadline exceeded", "timeout"):
+	case strings.Contains(errText, "signal: killed") || strings.Contains(errText, "context deadline exceeded") || strings.Contains(errText, "timeout"):
 		return "La conversión excedió el tiempo máximo permitido."
-	case containsAny(errText, "exit status"):
+	case strings.Contains(errText, "exit status"):
 		return "El motor de conversión no pudo procesar este archivo."
 	default:
 		return "La conversión falló por un error interno. Intenta de nuevo."
@@ -292,19 +292,6 @@ func (h *Handler) newExecutionContext(parent context.Context, jobID uuid.UUID, l
 		}
 	}()
 	return execCtx, cancel
-}
-
-func containsAny(s string, substrs ...string) bool {
-	for _, sub := range substrs {
-		if len(s) >= len(sub) {
-			for i := 0; i <= len(s)-len(sub); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
 
 func (h *Handler) artifactTTL(outputFormat string) time.Duration {

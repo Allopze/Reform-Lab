@@ -13,6 +13,7 @@ type TaskPayload struct {
 	CapabilityID string `json:"capabilityId"`
 	InputPath    string `json:"inputPath"`
 	OutputFormat string `json:"outputFormat"`
+	InputSize    int64  `json:"inputSize,omitempty"`
 }
 
 // EmailTaskPayload is the data sent for email delivery tasks.

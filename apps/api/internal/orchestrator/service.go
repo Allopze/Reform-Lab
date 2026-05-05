@@ -23,6 +23,7 @@ type BatchRequest struct {
 	FileID     uuid.UUID
 	Capability domain.Capability
 	InputPath  string
+	InputSize  int64
 }
 
 // Service manages job lifecycle: creation, status updates, and queuing.
@@ -107,15 +108,15 @@ func (m multiNotifier) NotifyJobFailed(ctx context.Context, job *domain.Job) err
 
 // CreateAndEnqueue persists a new job and enqueues it for processing.
 // userID may be nil for system-owned work outside the public API.
-func (s *Service) CreateAndEnqueue(ctx context.Context, userID *uuid.UUID, fileID uuid.UUID, cap domain.Capability, inputPath string) (*domain.Job, error) {
-	return s.createAndEnqueue(ctx, userID, nil, fileID, cap, inputPath)
+func (s *Service) CreateAndEnqueue(ctx context.Context, userID *uuid.UUID, fileID uuid.UUID, cap domain.Capability, inputPath string, inputSize int64) (*domain.Job, error) {
+	return s.createAndEnqueue(ctx, userID, nil, fileID, cap, inputPath, inputSize)
 }
 
-func (s *Service) CreateAndEnqueueForGuest(ctx context.Context, guestSessionID uuid.UUID, fileID uuid.UUID, cap domain.Capability, inputPath string) (*domain.Job, error) {
-	return s.createAndEnqueue(ctx, nil, &guestSessionID, fileID, cap, inputPath)
+func (s *Service) CreateAndEnqueueForGuest(ctx context.Context, guestSessionID uuid.UUID, fileID uuid.UUID, cap domain.Capability, inputPath string, inputSize int64) (*domain.Job, error) {
+	return s.createAndEnqueue(ctx, nil, &guestSessionID, fileID, cap, inputPath, inputSize)
 }
 
-func (s *Service) createAndEnqueue(ctx context.Context, userID *uuid.UUID, guestSessionID *uuid.UUID, fileID uuid.UUID, cap domain.Capability, inputPath string) (*domain.Job, error) {
+func (s *Service) createAndEnqueue(ctx context.Context, userID *uuid.UUID, guestSessionID *uuid.UUID, fileID uuid.UUID, cap domain.Capability, inputPath string, inputSize int64) (*domain.Job, error) {
 	if s.runtimeControls != nil {
 		state, err := s.runtimeControls.Get(ctx)
 		if err != nil {
@@ -164,6 +165,7 @@ func (s *Service) createAndEnqueue(ctx context.Context, userID *uuid.UUID, guest
 		CapabilityID: cap.ID,
 		InputPath:    inputPath,
 		OutputFormat: cap.TargetFormat,
+		InputSize:    inputSize,
 	}
 	opts := queue.TaskOptions{
 		MaxRetries: cap.ExecutionLimits.MaxRetries,
@@ -261,6 +263,7 @@ func (s *Service) createAndEnqueueBatch(ctx context.Context, userID *uuid.UUID, 
 			CapabilityID: request.Capability.ID,
 			InputPath:    request.InputPath,
 			OutputFormat: request.Capability.TargetFormat,
+			InputSize:    request.InputSize,
 		}
 		opts := queue.TaskOptions{
 			MaxRetries: request.Capability.ExecutionLimits.MaxRetries,
@@ -333,15 +336,15 @@ func (s *Service) CancelJob(ctx context.Context, id uuid.UUID) error {
 }
 
 // RetryFailedJob creates a new queued job from a previously failed job.
-func (s *Service) RetryFailedJob(ctx context.Context, sourceJob *domain.Job, cap domain.Capability, inputPath string) (*domain.Job, error) {
-	return s.retryFailedJob(ctx, sourceJob, nil, cap, inputPath)
+func (s *Service) RetryFailedJob(ctx context.Context, sourceJob *domain.Job, cap domain.Capability, inputPath string, inputSize int64) (*domain.Job, error) {
+	return s.retryFailedJob(ctx, sourceJob, nil, cap, inputPath, inputSize)
 }
 
-func (s *Service) RetryFailedJobForGuest(ctx context.Context, guestSessionID uuid.UUID, sourceJob *domain.Job, cap domain.Capability, inputPath string) (*domain.Job, error) {
-	return s.retryFailedJob(ctx, sourceJob, &guestSessionID, cap, inputPath)
+func (s *Service) RetryFailedJobForGuest(ctx context.Context, guestSessionID uuid.UUID, sourceJob *domain.Job, cap domain.Capability, inputPath string, inputSize int64) (*domain.Job, error) {
+	return s.retryFailedJob(ctx, sourceJob, &guestSessionID, cap, inputPath, inputSize)
 }
 
-func (s *Service) retryFailedJob(ctx context.Context, sourceJob *domain.Job, guestSessionID *uuid.UUID, cap domain.Capability, inputPath string) (*domain.Job, error) {
+func (s *Service) retryFailedJob(ctx context.Context, sourceJob *domain.Job, guestSessionID *uuid.UUID, cap domain.Capability, inputPath string, inputSize int64) (*domain.Job, error) {
 	if sourceJob == nil {
 		return nil, fmt.Errorf("source job is required")
 	}
@@ -352,9 +355,9 @@ func (s *Service) retryFailedJob(ctx context.Context, sourceJob *domain.Job, gue
 	var retryJob *domain.Job
 	var err error
 	if guestSessionID != nil {
-		retryJob, err = s.CreateAndEnqueueForGuest(ctx, *guestSessionID, sourceJob.FileID, cap, inputPath)
+		retryJob, err = s.CreateAndEnqueueForGuest(ctx, *guestSessionID, sourceJob.FileID, cap, inputPath, inputSize)
 	} else {
-		retryJob, err = s.CreateAndEnqueue(ctx, sourceJob.UserID, sourceJob.FileID, cap, inputPath)
+		retryJob, err = s.CreateAndEnqueue(ctx, sourceJob.UserID, sourceJob.FileID, cap, inputPath, inputSize)
 	}
 	if err != nil {
 		return nil, err

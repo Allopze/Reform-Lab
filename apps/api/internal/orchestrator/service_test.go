@@ -48,7 +48,7 @@ func TestCreateAndEnqueue(t *testing.T) {
 
 	userID := uuid.New()
 	fileID := uuid.New()
-	job, err := svc.CreateAndEnqueue(ctx, &userID, fileID, cap, "/tmp/fake.pdf")
+	job, err := svc.CreateAndEnqueue(ctx, &userID, fileID, cap, "/tmp/fake.pdf", 1024)
 	if err != nil {
 		t.Fatalf("CreateAndEnqueue: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestJobLifecycleTransitions(t *testing.T) {
 	}
 
 	tmpUID := uuid.New()
-	job, err := svc.CreateAndEnqueue(ctx, &tmpUID, uuid.New(), cap, "/tmp/fake.pdf")
+	job, err := svc.CreateAndEnqueue(ctx, &tmpUID, uuid.New(), cap, "/tmp/fake.pdf", 1024)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestJobLifecycleFailure(t *testing.T) {
 	}
 
 	tmpUID := uuid.New()
-	job, err := svc.CreateAndEnqueue(ctx, &tmpUID, uuid.New(), cap, "/tmp/fake.pdf")
+	job, err := svc.CreateAndEnqueue(ctx, &tmpUID, uuid.New(), cap, "/tmp/fake.pdf", 1024)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestInvalidTransitionRejected(t *testing.T) {
 	}
 
 	tmpUID := uuid.New()
-	job, _ := svc.CreateAndEnqueue(ctx, &tmpUID, uuid.New(), cap, "/tmp/fake.pdf")
+	job, _ := svc.CreateAndEnqueue(ctx, &tmpUID, uuid.New(), cap, "/tmp/fake.pdf", 1024)
 
 	// queued → succeeded — should be rejected
 	artifactID := uuid.New()
@@ -197,10 +197,10 @@ func TestCreateAndEnqueueRejectsWhenUserReachedActiveJobLimit(t *testing.T) {
 	}
 
 	userID := uuid.New()
-	if _, err := svc.CreateAndEnqueue(ctx, &userID, uuid.New(), cap, "/tmp/first.pdf"); err != nil {
+	if _, err := svc.CreateAndEnqueue(ctx, &userID, uuid.New(), cap, "/tmp/first.pdf", 1024); err != nil {
 		t.Fatalf("first job should be accepted: %v", err)
 	}
-	if _, err := svc.CreateAndEnqueue(ctx, &userID, uuid.New(), cap, "/tmp/second.pdf"); err != domain.ErrTooManyActiveJobs {
+	if _, err := svc.CreateAndEnqueue(ctx, &userID, uuid.New(), cap, "/tmp/second.pdf", 1024); err != domain.ErrTooManyActiveJobs {
 		t.Fatalf("expected ErrTooManyActiveJobs, got %v", err)
 	}
 }
@@ -238,7 +238,7 @@ func TestNotifierCalledOnSuccess(t *testing.T) {
 	}
 
 	uid := uuid.New()
-	job, err := svc.CreateAndEnqueue(ctx, &uid, uuid.New(), cap, "/tmp/fake.pdf")
+	job, err := svc.CreateAndEnqueue(ctx, &uid, uuid.New(), cap, "/tmp/fake.pdf", 1024)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestNotifierCalledOnFailure(t *testing.T) {
 	}
 
 	uid := uuid.New()
-	job, err := svc.CreateAndEnqueue(ctx, &uid, uuid.New(), cap, "/tmp/fake.pdf")
+	job, err := svc.CreateAndEnqueue(ctx, &uid, uuid.New(), cap, "/tmp/fake.pdf", 1024)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

@@ -442,10 +442,6 @@ func decode(resp *http.Response) map[string]interface{} {
 	return m
 }
 
-func uploadPNG(baseURL, token string) (*http.Response, map[string]interface{}) {
-	return uploadPNGClient(nil, baseURL, token)
-}
-
 func uploadRawFileClient(
 	client *http.Client,
 	baseURL, token, fileName string,
@@ -2756,7 +2752,7 @@ func TestE2E_AdminUserSuspensionAndSessionRevocation(t *testing.T) {
 		t.Fatalf("unsuspend user: expected 200, got %d", resp.StatusCode)
 	}
 
-	resp, _ = doPostClient(targetClient, env.server.URL+"/api/auth/login", map[string]interface{}{
+	resp, data = doPostClient(targetClient, env.server.URL+"/api/auth/login", map[string]interface{}{
 		"email":    "security-user@test.com",
 		"password": "password123",
 	}, "")
@@ -3031,5 +3027,134 @@ func TestE2E_AdminAuditListAndExport(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "admin_footer_updated") {
 		t.Fatalf("expected exported event type admin_footer_updated, got %q", string(body))
+	}
+}
+
+func TestE2E_UserCannotDownloadAnotherUsersArtifact(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	// Create two users
+	clientA := registerUserClient(t, env, "UserA", "userA@test.com")
+	clientB := registerUserClient(t, env, "UserB", "userB@test.com")
+
+	// Get UserA's ID
+	respA, meA := doGetClient(clientA, env.server.URL+"/api/auth/me", "")
+	if respA.StatusCode != http.StatusOK {
+		t.Fatalf("auth me A: expected 200, got %d", respA.StatusCode)
+	}
+	userAID, _ := meA["id"].(string)
+	if userAID == "" {
+		t.Fatal("expected user A id")
+	}
+
+	// Create a file, job, and artifact owned by UserA
+	now := time.Now().UTC()
+	fileID := uuid.New()
+	jobID := uuid.New()
+	artifactID := uuid.New()
+	artifactDir := filepath.Join(env.tmpDir, "storage", "artifacts", artifactID.String())
+	if err := os.MkdirAll(artifactDir, 0o750); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	artifactPath := filepath.Join(artifactDir, "secret.txt")
+	if err := os.WriteFile(artifactPath, []byte("user-a-secret"), 0o600); err != nil {
+		t.Fatalf("write artifact file: %v", err)
+	}
+
+	if _, err := env.db.Exec(
+		`INSERT INTO files (id, user_id, guest_session_id, internal_name, original_name, size, mime_type, format_family, detected_extension, metadata, uploaded_at)
+		 VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fileID.String(), userAID, "fixture", "fixture.txt", 13, "text/plain", "document", "txt", `{}`, now.Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert file row: %v", err)
+	}
+	if _, err := env.db.Exec(
+		`INSERT INTO jobs (id, user_id, file_id, capability_id, output_format, status, progress, created_at, started_at, completed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		jobID.String(), userAID, fileID.String(), "doc-to-txt", "txt", string(domain.JobSucceeded), 100, now.Add(-2*time.Minute).Format(time.RFC3339Nano), now.Add(-90*time.Second).Format(time.RFC3339Nano), now.Add(-time.Minute).Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert job row: %v", err)
+	}
+	if _, err := env.db.Exec(
+		`INSERT INTO artifacts (id, user_id, job_id, file_id, file_name, mime_type, size, storage_path, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		artifactID.String(), userAID, jobID.String(), fileID.String(), "secret.txt", "text/plain", 13, artifactPath, now.Format(time.RFC3339Nano), now.Add(2*time.Hour).Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert artifact row: %v", err)
+	}
+
+	// UserA can download their own artifact
+	respA, bodyA := downloadArtifactClient(clientA, env.server.URL, artifactID.String())
+	if respA.StatusCode != http.StatusOK {
+		t.Fatalf("user A download own artifact: expected 200, got %d", respA.StatusCode)
+	}
+	if string(bodyA) != "user-a-secret" {
+		t.Fatalf("user A download: unexpected body %q", string(bodyA))
+	}
+
+	// UserB CANNOT download UserA's artifact
+	respB, bodyB := downloadArtifactClient(clientB, env.server.URL, artifactID.String())
+	if respB.StatusCode != http.StatusForbidden {
+		t.Fatalf("user B download other's artifact: expected 403, got %d — body: %s", respB.StatusCode, string(bodyB))
+	}
+}
+
+func TestE2E_GuestCannotDownloadAuthenticatedUsersArtifact(t *testing.T) {
+	env := setupE2E(t)
+	defer env.close()
+
+	// Create an authenticated user
+	clientUser := registerUserClient(t, env, "AuthUser", "auth@test.com")
+	resp, me := doGetClient(clientUser, env.server.URL+"/api/auth/me", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("auth me: expected 200, got %d", resp.StatusCode)
+	}
+	userID, _ := me["id"].(string)
+	if userID == "" {
+		t.Fatal("expected user id")
+	}
+
+	// Create a file, job, and artifact owned by the authenticated user
+	now := time.Now().UTC()
+	fileID := uuid.New()
+	jobID := uuid.New()
+	artifactID := uuid.New()
+	artifactDir := filepath.Join(env.tmpDir, "storage", "artifacts", artifactID.String())
+	if err := os.MkdirAll(artifactDir, 0o750); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	artifactPath := filepath.Join(artifactDir, "auth-only.txt")
+	if err := os.WriteFile(artifactPath, []byte("auth-only-content"), 0o600); err != nil {
+		t.Fatalf("write artifact file: %v", err)
+	}
+
+	if _, err := env.db.Exec(
+		`INSERT INTO files (id, user_id, guest_session_id, internal_name, original_name, size, mime_type, format_family, detected_extension, metadata, uploaded_at)
+		 VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fileID.String(), userID, "fixture", "fixture.txt", 15, "text/plain", "document", "txt", `{}`, now.Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert file row: %v", err)
+	}
+	if _, err := env.db.Exec(
+		`INSERT INTO jobs (id, user_id, file_id, capability_id, output_format, status, progress, created_at, started_at, completed_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		jobID.String(), userID, fileID.String(), "doc-to-txt", "txt", string(domain.JobSucceeded), 100, now.Add(-2*time.Minute).Format(time.RFC3339Nano), now.Add(-90*time.Second).Format(time.RFC3339Nano), now.Add(-time.Minute).Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert job row: %v", err)
+	}
+	if _, err := env.db.Exec(
+		`INSERT INTO artifacts (id, user_id, job_id, file_id, file_name, mime_type, size, storage_path, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		artifactID.String(), userID, jobID.String(), fileID.String(), "auth-only.txt", "text/plain", 15, artifactPath, now.Format(time.RFC3339Nano), now.Add(2*time.Hour).Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("insert artifact row: %v", err)
+	}
+
+	// Guest (no auth) cannot download the authenticated user's artifact
+	guestClient := newCookieClient(t)
+	respGuest, bodyGuest := downloadArtifactClient(guestClient, env.server.URL, artifactID.String())
+	if respGuest.StatusCode != http.StatusForbidden {
+		t.Fatalf("guest download auth user artifact: expected 403, got %d — body: %s", respGuest.StatusCode, string(bodyGuest))
 	}
 }

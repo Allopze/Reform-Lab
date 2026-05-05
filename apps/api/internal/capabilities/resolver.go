@@ -86,6 +86,12 @@ func rejectsSameFormat(file domain.OriginalFile, cap domain.Capability) bool {
 	if cap.OperationType != domain.OpConvert {
 		return false
 	}
+
+	// Allow video re-encoding (e.g., MP4→MP4 with different codec/quality)
+	if cap.Family == domain.FamilyVideo {
+		return false
+	}
+
 	return cap.TargetFormat == file.DetectedFormat.Extension
 }
 

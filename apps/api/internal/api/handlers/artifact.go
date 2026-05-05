@@ -52,7 +52,8 @@ func (h *ArtifactHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	reader, err := h.Store.GetArtifactByName(artID.String(), artifact.FileName)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to retrieve artifact file")
+		// File may have been purged by retention policy between expiry check and read
+		respondError(w, http.StatusGone, "artifact file no longer available")
 		return
 	}
 	defer reader.Close()

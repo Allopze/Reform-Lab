@@ -85,9 +85,9 @@ func (h *ConversionHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	var job *domain.Job
 	if u == nil && guestSessionID != nil {
-		job, err = h.Orchestrator.CreateAndEnqueueForGuest(r.Context(), *guestSessionID, fileID, *cap, inputPath)
+		job, err = h.Orchestrator.CreateAndEnqueueForGuest(r.Context(), *guestSessionID, fileID, *cap, inputPath, file.Size)
 	} else {
-		job, err = h.Orchestrator.CreateAndEnqueue(r.Context(), userIDPtr(u), fileID, *cap, inputPath)
+		job, err = h.Orchestrator.CreateAndEnqueue(r.Context(), userIDPtr(u), fileID, *cap, inputPath, file.Size)
 	}
 	if err != nil {
 		if errors.Is(err, domain.ErrJobIntakePaused) {
@@ -171,6 +171,7 @@ func (h *ConversionHandler) HandleBatch(w http.ResponseWriter, r *http.Request) 
 			FileID:     fileID,
 			Capability: *cap,
 			InputPath:  inputPath,
+			InputSize:  file.Size,
 		})
 	}
 

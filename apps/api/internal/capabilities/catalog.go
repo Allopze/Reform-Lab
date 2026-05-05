@@ -1250,7 +1250,7 @@ var Catalog = withPresentationOrders([]domain.Capability{
 		ID:          "video-to-mp4",
 		DisplayName: "Convertir a MP4",
 		SourceFormats: []string{
-			"video/quicktime", "video/webm", "video/x-msvideo",
+			"video/mp4", "video/quicktime", "video/webm", "video/x-msvideo",
 		},
 		OperationType: domain.OpConvert,
 		TargetFormat:  "mp4",
@@ -1261,13 +1261,16 @@ var Catalog = withPresentationOrders([]domain.Capability{
 		},
 		Engine:          "ffmpeg",
 		ExpectedQuality: "high",
-		Family:          domain.FamilyVideo,
+		KnownLimitations: []string{
+			"Re-encoding de MP4 a MP4 puede ajustar codec y calidad",
+		},
+		Family: domain.FamilyVideo,
 	},
 	{
 		ID:          "video-to-webm",
 		DisplayName: "Convertir a WebM",
 		SourceFormats: []string{
-			"video/mp4", "video/quicktime", "video/x-msvideo",
+			"video/mp4", "video/quicktime", "video/webm", "video/x-msvideo",
 		},
 		OperationType: domain.OpConvert,
 		TargetFormat:  "webm",
@@ -1278,7 +1281,10 @@ var Catalog = withPresentationOrders([]domain.Capability{
 		},
 		Engine:          "ffmpeg",
 		ExpectedQuality: "high",
-		Family:          domain.FamilyVideo,
+		KnownLimitations: []string{
+			"Re-encoding de WebM a WebM puede ajustar codec y calidad",
+		},
+		Family: domain.FamilyVideo,
 	},
 	{
 		ID:          "video-to-gif",

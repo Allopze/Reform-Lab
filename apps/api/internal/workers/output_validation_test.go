@@ -11,7 +11,7 @@ import (
 func TestValidateOutputArtifactRejectsInvalidJSON(t *testing.T) {
 	path := writeValidationFile(t, "broken.json", []byte(`{"ok":true`))
 
-	if _, err := validateOutputArtifact(path, "json"); err == nil {
+	if _, err := validateOutputArtifact(path, "json", 1024); err == nil {
 		t.Fatal("expected invalid JSON output to be rejected")
 	}
 }
@@ -19,7 +19,7 @@ func TestValidateOutputArtifactRejectsInvalidJSON(t *testing.T) {
 func TestValidateOutputArtifactAcceptsSingleRowCSV(t *testing.T) {
 	path := writeValidationFile(t, "single-row.csv", []byte("only-one-cell\n"))
 
-	if _, err := validateOutputArtifact(path, "csv"); err != nil {
+	if _, err := validateOutputArtifact(path, "csv", 1024); err != nil {
 		t.Fatalf("expected single-row CSV output to be accepted: %v", err)
 	}
 }
@@ -27,7 +27,7 @@ func TestValidateOutputArtifactAcceptsSingleRowCSV(t *testing.T) {
 func TestValidateOutputArtifactRejectsBinaryTextOutput(t *testing.T) {
 	path := writeValidationFile(t, "bad.txt", []byte{0x41, 0x00, 0x42})
 
-	if _, err := validateOutputArtifact(path, "txt"); err == nil {
+	if _, err := validateOutputArtifact(path, "txt", 1024); err == nil {
 		t.Fatal("expected binary text output to be rejected")
 	}
 }
@@ -35,7 +35,7 @@ func TestValidateOutputArtifactRejectsBinaryTextOutput(t *testing.T) {
 func TestValidateOutputArtifactRejectsMismatchedBinaryFormat(t *testing.T) {
 	path := writeValidationFile(t, "image.png", minimalPNG())
 
-	if _, err := validateOutputArtifact(path, "jpg"); err == nil {
+	if _, err := validateOutputArtifact(path, "jpg", 1024); err == nil {
 		t.Fatal("expected mismatched image output to be rejected")
 	}
 }
@@ -43,7 +43,7 @@ func TestValidateOutputArtifactRejectsMismatchedBinaryFormat(t *testing.T) {
 func TestValidateOutputArtifactAcceptsHTMLWithCharsetMIME(t *testing.T) {
 	path := writeValidationFile(t, "page.html", []byte("<html><body>ok</body></html>"))
 
-	if _, err := validateOutputArtifact(path, "html"); err != nil {
+	if _, err := validateOutputArtifact(path, "html", 1024); err != nil {
 		t.Fatalf("expected html output to be accepted: %v", err)
 	}
 }
@@ -52,26 +52,26 @@ func TestValidateOutputArtifactValidatesZipOutputs(t *testing.T) {
 	validZip := writeZipValidationFile(t, "preview.zip", map[string]string{
 		"frame-001.jpg": "fake-image-data",
 	})
-	if _, err := validateOutputArtifact(validZip, "zip"); err != nil {
+	if _, err := validateOutputArtifact(validZip, "zip", 1024); err != nil {
 		t.Fatalf("expected non-empty zip output to be accepted: %v", err)
 	}
 
 	emptyZip := writeZipValidationFile(t, "empty.zip", nil)
-	if _, err := validateOutputArtifact(emptyZip, "zip"); err == nil {
+	if _, err := validateOutputArtifact(emptyZip, "zip", 1024); err == nil {
 		t.Fatal("expected empty zip output to be rejected")
 	}
 
 	traversalZip := writeZipValidationFile(t, "traversal.zip", map[string]string{
 		"../outside.txt": "nope",
 	})
-	if _, err := validateOutputArtifact(traversalZip, "zip"); err == nil {
+	if _, err := validateOutputArtifact(traversalZip, "zip", 1024); err == nil {
 		t.Fatal("expected zip path traversal to be rejected")
 	}
 
 	emptyFileZip := writeZipValidationFile(t, "empty-file.zip", map[string]string{
 		"frame-001.jpg": "",
 	})
-	if _, err := validateOutputArtifact(emptyFileZip, "zip"); err == nil {
+	if _, err := validateOutputArtifact(emptyFileZip, "zip", 1024); err == nil {
 		t.Fatal("expected zip with empty file to be rejected")
 	}
 }
@@ -81,7 +81,7 @@ func TestValidateOutputArtifactValidatesOOXMLOutputs(t *testing.T) {
 		"[Content_Types].xml": "<Types/>",
 		"word/document.xml":   "<document/>",
 	})
-	if _, err := validateOutputArtifact(docxPath, "docx"); err != nil {
+	if _, err := validateOutputArtifact(docxPath, "docx", 1024); err != nil {
 		t.Fatalf("expected docx output to be accepted: %v", err)
 	}
 
@@ -89,14 +89,14 @@ func TestValidateOutputArtifactValidatesOOXMLOutputs(t *testing.T) {
 		"[Content_Types].xml": "<Types/>",
 		"xl/workbook.xml":     "<workbook/>",
 	})
-	if _, err := validateOutputArtifact(xlsxPath, "xlsx"); err != nil {
+	if _, err := validateOutputArtifact(xlsxPath, "xlsx", 1024); err != nil {
 		t.Fatalf("expected xlsx output to be accepted: %v", err)
 	}
 
 	brokenDocxPath := writeZipValidationFile(t, "broken.docx", map[string]string{
 		"[Content_Types].xml": "<Types/>",
 	})
-	if _, err := validateOutputArtifact(brokenDocxPath, "docx"); err == nil {
+	if _, err := validateOutputArtifact(brokenDocxPath, "docx", 1024); err == nil {
 		t.Fatal("expected broken docx output to be rejected")
 	}
 }
@@ -172,9 +172,12 @@ func TestNormalizeOutputMIME(t *testing.T) {
 }
 
 func TestValidateOutputArtifactRejectsUnknownBinaryFormat(t *testing.T) {
-	path := writeValidationFile(t, "note.html", []byte("<html><body>ok</body></html>"))
+	// Create a file large enough to pass size validation but with wrong MIME type
+	data := make([]byte, 300)
+	copy(data, []byte("<html><body>ok</body></html>"))
+	path := writeValidationFile(t, "note.html", data)
 
-	_, err := validateOutputArtifact(path, "mp4")
+	_, err := validateOutputArtifact(path, "mp4", 1024)
 	if err == nil || !strings.Contains(err.Error(), "mismatch") {
 		t.Fatalf("expected mismatch error for wrong binary format, got %v", err)
 	}

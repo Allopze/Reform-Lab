@@ -214,6 +214,7 @@
     "noCapability": "No hay capacidad disponible para este formato de salida.",
     "timeout": "La conversión tardó demasiado. Intenta de nuevo.",
     "failed": "La conversión falló.",
+    "expired": "La conversión expiró antes de completarse. Intenta de nuevo.",
     "pollingError": "Error al consultar el estado de la conversión.",
     "startError": "Error al iniciar la conversión.",
     "downloadError": "No se pudo descargar el artefacto."

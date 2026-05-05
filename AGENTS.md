@@ -98,6 +98,32 @@ El almacenamiento no es política de producto.
 
 ---
 
+## Modelo de jobs y estados
+
+Los jobs tienen un ciclo de vida con estados cerrados:
+
+```
+queued → running → succeeded
+                 → failed → (retry) → queued
+                 → cancelled
+                 → expired
+```
+
+- **queued**: encolado, esperando ejecución
+- **running**: siendo procesado por un worker
+- **succeeded**: completado exitosamente, artifact disponible
+- **failed**: error durante la ejecución, con mensaje de error clasificado
+- **cancelled**: cancelado por el usuario o admin
+- **expired**: el artifact fue eliminado por política de retención
+
+Reglas importantes:
+- Las transiciones inválidas son rechazadas (`ErrInvalidTransition`)
+- Solo jobs en estado `failed` pueden ser reintentados
+- Los jobs tienen un límite de reintentos configurado por capacidad
+- El polling del frontend debe manejar todos los estados terminales
+
+---
+
 ## Instrucciones antes de tocar código
 
 Antes de implementar, el agente debe revisar, en este orden:
@@ -145,19 +171,111 @@ Si la tarea afecta testing o CI:
 
 La estructura exacta puede variar, pero el agente debe respetar estas fronteras:
 
-- `apps/web`: interfaz del usuario
-- `apps/api`: API pública o backend-for-frontend
-- `services/domain`: entidades, reglas y contratos del dominio
-- `services/capabilities`: catálogo y resolución de capacidades
-- `services/ingestion`: validación, detección y metadatos
-- `services/orchestrator`: gestión de jobs
-- `services/workers`: ejecución de conversiones
-- `services/storage`: acceso a blobs y artefactos
-- `services/security`: políticas y controles de archivo
-- `services/observability`: logging, métricas, tracing
-- `docs/`: documentación viva del sistema
+- `apps/web`: interfaz del usuario (Next.js 15, React 19, Tailwind CSS 4, Vitest)
+- `apps/api`: API pública, auth, repositorios, orquestación, workers embebidos (Go 1.25, Chi, SQLite, Asynq)
+- `apps/api/internal/`: todos los módulos internos del backend:
+  - `api/` — handlers HTTP y middleware
+  - `auth/` — autenticación JWT
+  - `capabilities/` — catálogo y resolución de capacidades
+  - `database/` — conexión y migraciones SQLite
+  - `domain/` — entidades, value objects, estados, reglas de negocio
+  - `email/` — envío de emails
+  - `ingestion/` — validación, detección de formato, metadatos
+  - `observability/` — logging (zerolog), métricas (Prometheus), tracing (OTel)
+  - `orchestrator/` — gestión de jobs, cola, transiciones de estado
+  - `queue/` — interfaz de cola (Asynq/Redis o in-process)
+  - `repository/` — acceso a datos (SQLite)
+  - `security/` — políticas de archivo, secret keeper
+  - `storage/` — filesystem para originales, temporales y artefactos
+  - `webhook/` — notificaciones webhook
+  - `workers/` — ejecución de conversiones (document, image, video, audio, pdf, ocr)
+- `docs/`: documentación viva del sistema (ADR, arquitectura, dominio, seguridad, testing, operación, producto)
+- `.github/instructions/`: reglas específicas por capa para agentes
 
 Si el repo real usa otra estructura, el agente debe apoyarse en `docs/architecture/repo-map.md`.
+
+---
+
+## Comandos operativos
+
+### Desarrollo
+
+```bash
+# Levantar todo el stack (web + api)
+npm run dev
+
+# Solo frontend
+npm run dev:web
+
+# Solo backend
+npm run dev:api
+```
+
+### Backend (Go)
+
+```bash
+cd apps/api
+
+# Build
+go build ./...
+
+# Tests unitarios
+go test ./internal/... -count=1 -timeout=180s
+
+# Tests de un paquete específico
+go test ./internal/capabilities/... -v -count=1
+
+# Tests E2E
+go test ./internal/api/... -run TestE2E -v -count=1 -timeout=300s
+
+# Lint
+go vet ./...
+```
+
+### Frontend (Next.js)
+
+```bash
+cd apps/web
+
+# Tests unitarios
+npm run test
+
+# Tests E2E (Playwright)
+npm run test:e2e
+
+# Lint
+npm run lint
+```
+
+---
+
+## Cómo agregar una nueva capacidad de conversión
+
+1. **Definir la capacidad** en `apps/api/internal/capabilities/catalog.go`:
+   - ID único
+   - SourceFormats (MIME types de entrada)
+   - TargetFormat (formato de salida)
+   - Engine (nombre del motor)
+   - ExecutionLimits (timeout, max retries)
+   - KnownLimitations (documentar restricciones)
+
+2. **Registrar el engine** en `apps/api/internal/workers/registry.go`:
+   - Mapear capability ID → engine implementation
+   - El engine debe implementar la interfaz `Engine`
+
+3. **Implementar el engine** en el subdirectorio correspondiente de `workers/`:
+   - `document/`, `image/`, `video/`, `audio/`, `pdf/`, `ocr/`
+   - Usar `exec.CommandContext` con timeout
+   - Validar output con `validateOutputArtifact`
+
+4. **Agregar tests**:
+   - Unit test del engine con archivo de prueba
+   - Test de resolución de capacidades
+   - Test E2E si el flujo cambia
+
+5. **Verificar**:
+   - `go test ./internal/... -count=1`
+   - El engine binario está disponible en el entorno (ver `engines.go`)
 
 ---
 

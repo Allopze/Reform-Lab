@@ -102,9 +102,9 @@ func (h *AdminJobsHandler) RetryBatch(w http.ResponseWriter, r *http.Request) {
 		var retried *domain.Job
 		var retryErr error
 		if file.UserID == nil && file.GuestSessionID != nil {
-			retried, retryErr = h.Orchestrator.RetryFailedJobForGuest(r.Context(), *file.GuestSessionID, job, *capability, inputPath)
+			retried, retryErr = h.Orchestrator.RetryFailedJobForGuest(r.Context(), *file.GuestSessionID, job, *capability, inputPath, file.Size)
 		} else {
-			retried, retryErr = h.Orchestrator.RetryFailedJob(r.Context(), job, *capability, inputPath)
+			retried, retryErr = h.Orchestrator.RetryFailedJob(r.Context(), job, *capability, inputPath, file.Size)
 		}
 		if retryErr != nil {
 			if errors.Is(retryErr, domain.ErrJobIntakePaused) {

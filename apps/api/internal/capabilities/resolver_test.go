@@ -159,6 +159,23 @@ func TestResolveOrdersAudioAndVideoCapabilities(t *testing.T) {
 		"audio-waveform-png",
 	})
 	assertCapabilityIDs(t, Resolve(fakeVideoFile("video/mp4", "mp4")), []string{
+		"video-to-mp4",
+		"video-to-webm",
+		"video-to-gif",
+		"video-to-mp3",
+		"video-to-m4a",
+		"video-to-wav",
+		"video-to-flac",
+		"video-to-aac",
+		"video-to-opus",
+		"video-preview-mp4",
+		"video-preview-webm",
+		"video-to-thumbnails",
+		"video-contact-sheet",
+		"video-waveform-png",
+	})
+	assertCapabilityIDs(t, Resolve(fakeVideoFile("video/webm", "webm")), []string{
+		"video-to-mp4",
 		"video-to-webm",
 		"video-to-gif",
 		"video-to-mp3",
@@ -589,5 +606,221 @@ func TestByIDMissing(t *testing.T) {
 	cap := ByID("does-not-exist")
 	if cap != nil {
 		t.Fatal("expected nil for nonexistent capability")
+	}
+}
+
+func TestRejectsSameFormat_PDF(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakePDFFile()
+	caps := Resolve(file)
+	for _, c := range caps {
+		if c.TargetFormat == "pdf" && c.OperationType == domain.OpConvert {
+			t.Fatalf("should not offer pdf→pdf conversion, got %s", c.ID)
+		}
+	}
+}
+
+func TestRejectsSameFormat_Image(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	extensions := []string{"png", "jpg", "jpeg", "webp", "avif", "gif", "bmp", "tiff"}
+	for _, ext := range extensions {
+		mime := "image/" + ext
+		if ext == "jpg" || ext == "jpeg" {
+			mime = "image/jpeg"
+		}
+		file := fakeImageFile(mime, ext)
+		caps := Resolve(file)
+		for _, c := range caps {
+			if c.TargetFormat == ext && c.OperationType == domain.OpConvert {
+				t.Fatalf("should not offer %s→%s conversion, got %s", ext, ext, c.ID)
+			}
+		}
+	}
+}
+
+func TestRejectsSameFormat_Document(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	tests := []struct {
+		mime string
+		ext  string
+	}{
+		{"application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"},
+		{"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"},
+		{"application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx"},
+	}
+	for _, tc := range tests {
+		file := fakeDocumentFile(tc.mime, tc.ext)
+		caps := Resolve(file)
+		for _, c := range caps {
+			if c.TargetFormat == tc.ext && c.OperationType == domain.OpConvert {
+				t.Fatalf("should not offer %s→%s conversion, got %s", tc.ext, tc.ext, c.ID)
+			}
+		}
+	}
+}
+
+func TestRejectsSameFormat_VideoAllowsReEncoding(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	// Video should allow same-format re-encoding (e.g., MP4→MP4 with different codec)
+	tests := []struct {
+		mime string
+		ext  string
+	}{
+		{"video/mp4", "mp4"},
+		{"video/webm", "webm"},
+	}
+	for _, tc := range tests {
+		file := fakeVideoFile(tc.mime, tc.ext)
+		caps := Resolve(file)
+		foundSameFormat := false
+		for _, c := range caps {
+			if c.TargetFormat == tc.ext && c.OperationType == domain.OpConvert {
+				foundSameFormat = true
+				break
+			}
+		}
+		if !foundSameFormat {
+			t.Fatalf("video should offer %s→%s re-encoding, but it was not found", tc.ext, tc.ext)
+		}
+	}
+}
+
+func TestRejectsSameFormat_Audio(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	tests := []struct {
+		mime string
+		ext  string
+	}{
+		{"audio/mp3", "mp3"},
+		{"audio/wav", "wav"},
+		{"audio/flac", "flac"},
+		{"audio/aac", "aac"},
+		{"audio/ogg", "ogg"},
+		{"audio/opus", "opus"},
+	}
+	for _, tc := range tests {
+		file := fakeAudioFile(tc.mime, tc.ext)
+		caps := Resolve(file)
+		for _, c := range caps {
+			if c.TargetFormat == tc.ext && c.OperationType == domain.OpConvert {
+				t.Fatalf("should not offer %s→%s conversion, got %s", tc.ext, tc.ext, c.ID)
+			}
+		}
+	}
+}
+
+func TestRejectsSameFormat_NonConvertOperations(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	// Non-convert operations (like compress, preview, thumbnail) should not be rejected
+	// even if they produce the same format
+	file := fakePDFFile()
+	caps := Resolve(file)
+	// pdf-compress should be available even though it produces PDF
+	foundCompress := false
+	for _, c := range caps {
+		if c.ID == "pdf-compress" {
+			foundCompress = true
+			break
+		}
+	}
+	if !foundCompress {
+		t.Fatal("expected pdf-compress capability to be available (non-convert operation)")
+	}
+}
+
+func TestIsEligible_ProtectedFile(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakePDFFile()
+	file.Metadata.IsProtected = true
+
+	_, err := IsEligible(file, "pdf-to-docx")
+	if err != domain.ErrProtectedUnsupported {
+		t.Fatalf("expected ErrProtectedUnsupported for protected file, got %v", err)
+	}
+}
+
+func TestIsEligible_ExceedsSizeLimit(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakePDFFile()
+	file.Size = 500 * 1024 * 1024 // 500 MB, exceeds typical limit
+
+	_, err := IsEligible(file, "pdf-to-docx")
+	if err != domain.ErrLimitExceeded {
+		t.Fatalf("expected ErrLimitExceeded for oversized file, got %v", err)
+	}
+}
+
+func TestIsEligible_EngineNotAvailable(t *testing.T) {
+	// Set up a prober where the required engine is NOT available
+	p := &EngineProber{}
+	p.available = map[string]bool{
+		"go-image":    true,
+		"libreoffice": false, // pdf2docx needs libreoffice or pdf2docx engine
+	}
+	p.once.Do(func() {})
+	old := DefaultProber
+	DefaultProber = p
+	defer func() { DefaultProber = old }()
+
+	file := fakePDFFile()
+	_, err := IsEligible(file, "pdf-to-docx")
+	if err != domain.ErrCapabilityIneligible {
+		t.Fatalf("expected ErrCapabilityIneligible when engine not available, got %v", err)
+	}
+}
+
+func TestIsEligible_CapabilityNotFound(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakePDFFile()
+	_, err := IsEligible(file, "nonexistent-capability")
+	if err != domain.ErrCapabilityNotFound {
+		t.Fatalf("expected ErrCapabilityNotFound, got %v", err)
+	}
+}
+
+func TestIsEligible_UnsupportedSourceFormat(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	// Try to convert an image with a PDF-only capability
+	file := fakeImageFile("image/png", "png")
+	_, err := IsEligible(file, "pdf-to-docx")
+	if err != domain.ErrCapabilityIneligible {
+		t.Fatalf("expected ErrCapabilityIneligible for unsupported source format, got %v", err)
+	}
+}
+
+func TestIsEligible_CapabilityDisabled(t *testing.T) {
+	defer allEnginesAvailable(t)()
+	defer withFeatureFlags(t, []string{"pdf-to-docx"}, nil)()
+
+	file := fakePDFFile()
+	_, err := IsEligible(file, "pdf-to-docx")
+	if err != domain.ErrCapabilityIneligible {
+		t.Fatalf("expected ErrCapabilityIneligible for disabled capability, got %v", err)
+	}
+}
+
+func TestIsEligible_ValidFile(t *testing.T) {
+	defer allEnginesAvailable(t)()
+
+	file := fakePDFFile()
+	cap, err := IsEligible(file, "pdf-to-docx")
+	if err != nil {
+		t.Fatalf("expected no error for valid file, got %v", err)
+	}
+	if cap == nil {
+		t.Fatal("expected capability to be returned")
+	}
+	if cap.ID != "pdf-to-docx" {
+		t.Fatalf("expected pdf-to-docx capability, got %s", cap.ID)
 	}
 }
