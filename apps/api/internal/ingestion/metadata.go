@@ -58,7 +58,11 @@ func extractPDFMetadata(ctx context.Context, path string) (domain.FileMetadata, 
 		if errors.Is(err, context.Canceled) || errors.Is(cmdCtx.Err(), context.Canceled) {
 			return m, context.Canceled
 		}
-		return m, nil
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return m, domain.ErrInvalidCorrupted
+		}
+		return m, err
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(line, "Pages:") {
@@ -270,11 +274,15 @@ func extractAVMetadata(ctx context.Context, path string) (domain.FileMetadata, e
 		if errors.Is(err, context.Canceled) || errors.Is(cmdCtx.Err(), context.Canceled) {
 			return m, context.Canceled
 		}
-		return m, nil
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return m, domain.ErrInvalidCorrupted
+		}
+		return m, err
 	}
 	var result ffprobeResult
 	if err := json.Unmarshal(out, &result); err != nil {
-		return m, nil
+		return m, domain.ErrInvalidCorrupted
 	}
 	if result.Format.Duration != "" {
 		d, err := strconv.ParseFloat(result.Format.Duration, 64)

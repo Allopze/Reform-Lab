@@ -148,7 +148,7 @@ cp .env.production.example .env
 - `CORS_ORIGIN`
 - `NEXT_PUBLIC_API_URL`
 - `APP_URL`
-- `BOOTSTRAP_ADMIN_EMAILS` si quieres restringir el primer admin
+- `BOOTSTRAP_ADMIN_EMAILS` si quieres restringir el primer admin; si lo dejas vacio, crea la primera cuenta admin antes de exponer la app publicamente
 
 Modelo recomendado de produccion:
 
@@ -205,7 +205,7 @@ Notas operativas:
 
 | Variable | Obligatoria | Default de código | Qué hace |
 | --- | --- | --- | --- |
-| `APP_ENV` | no | `development` | controla el modo general; `production` exige `REDIS_URL` y bloquea el auto-admin del primer registro |
+| `APP_ENV` | no | `development` | controla el modo general; `production` exige `REDIS_URL`. El primer registro puede crear el admin inicial salvo que restrinjas el bootstrap con `BOOTSTRAP_ADMIN_EMAILS` |
 | `PORT` | no | `8080` | puerto HTTP del API |
 | `DATABASE_PATH` | no | `./data/reform.db` | ruta de la base SQLite |
 | `MIGRATIONS_PATH` | no | `./migrations` | ruta de migraciones SQL |
@@ -215,7 +215,7 @@ Notas operativas:
 | `JWT_SECRET` | sí | sin fallback válido | secreto para firmar sesión JWT; mínimo 32 caracteres y sin placeholders banales |
 | `SECRET_ENCRYPTION_KEY` | no, pero muy recomendable si usas SMTP/webhooks configurados desde admin | vacío | clave para cifrar en reposo secretos persistidos por panel admin; acepta 32 bytes raw o base64 de 32 bytes |
 | `REDIS_URL` | no en local, sí en producción | vacío | activa cola Redis; vacío usa cola en proceso |
-| `BOOTSTRAP_ADMIN_EMAILS` | no | vacío | lista separada por comas con los emails autorizados a reclamar el primer admin en `production` |
+| `BOOTSTRAP_ADMIN_EMAILS` | no | vacío | lista separada por comas con los emails autorizados a reclamar el primer admin. Si queda vacío, el primer registro disponible reclama el admin inicial |
 | `REQUIRE_VERIFIED_EMAIL_FOR_SENSITIVE_ACTIONS` | no | `false` | si está activo, exige email verificado para mutaciones sensibles autenticadas como cambios admin, webhooks, usuarios y soporte |
 | `APP_URL` | no | hereda `CORS_ORIGIN` | URL pública base usada por emails y links generados por backend; en producción debería ser la URL HTTPS pública del proxy |
 | `MAX_ACTIVE_JOBS_PER_GUEST_SESSION` | no | `1` | limita cuántas conversiones activas puede mantener una sesión anónima simultáneamente |

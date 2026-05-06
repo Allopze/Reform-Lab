@@ -83,11 +83,10 @@ func (h *UploadPolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UTC()
-	if err := h.Settings.UpsertValue(r.Context(), guestUploadMaxBytesSettingKey, strconv.FormatInt(guestMaxBytes, 10), now); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to update upload policy")
-		return
-	}
-	if err := h.Settings.UpsertValue(r.Context(), registeredUploadMaxBytesSettingKey, strconv.FormatInt(registeredMaxBytes, 10), now); err != nil {
+	if err := h.Settings.UpsertValues(r.Context(), map[string]string{
+		guestUploadMaxBytesSettingKey:      strconv.FormatInt(guestMaxBytes, 10),
+		registeredUploadMaxBytesSettingKey: strconv.FormatInt(registeredMaxBytes, 10),
+	}, now); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to update upload policy")
 		return
 	}

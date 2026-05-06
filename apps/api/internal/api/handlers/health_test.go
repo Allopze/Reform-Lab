@@ -1,6 +1,11 @@
 package handlers
 
-import "testing"
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestBuildHealthAlerts_CriticalDependencies(t *testing.T) {
 	alerts := buildHealthAlerts(
@@ -78,6 +83,36 @@ func TestBuildHealthAlerts_StalledJobsDetected(t *testing.T) {
 
 	if !alertCodesContain(alerts, "stalled_jobs_detected") {
 		t.Fatal("expected stalled_jobs_detected alert")
+	}
+}
+
+func TestRespondErrorIncludesStableEnvelope(t *testing.T) {
+	rr := httptest.NewRecorder()
+	rr.Header().Set("X-Request-ID", "req-123")
+
+	respondError(rr, http.StatusTooManyRequests, "too many active jobs for this user")
+
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected status 429, got %d", rr.Code)
+	}
+	var body errorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if body.Error != "too many active jobs for this user" {
+		t.Fatalf("expected legacy error string, got %q", body.Error)
+	}
+	if body.Message != body.Error {
+		t.Fatalf("expected message to match legacy error, got %q", body.Message)
+	}
+	if body.Code != "too_many_active_jobs_for_this_user" {
+		t.Fatalf("unexpected code %q", body.Code)
+	}
+	if body.RequestID != "req-123" {
+		t.Fatalf("expected request id, got %q", body.RequestID)
+	}
+	if !body.Retryable {
+		t.Fatal("expected 429 to be retryable")
 	}
 }
 

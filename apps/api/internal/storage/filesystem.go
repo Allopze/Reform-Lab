@@ -36,7 +36,7 @@ func (fs *Filesystem) BasePath() string {
 }
 
 func (fs *Filesystem) SaveOriginal(_ context.Context, fileID string, r io.Reader) (string, error) {
-	if err := checkDiskSpace(fs.basePath, minFreeDiskBytes); err != nil {
+	if err := checkDiskSpace(fs.basePath, MinFreeDiskBytes); err != nil {
 		return "", err
 	}
 	dir := filepath.Join(fs.basePath, "originals", fileID)
@@ -57,7 +57,7 @@ func (fs *Filesystem) OriginalPath(fileID string) string {
 }
 
 func (fs *Filesystem) SaveArtifact(_ context.Context, artifactID string, fileName string, r io.Reader) (string, error) {
-	if err := checkDiskSpace(fs.basePath, minFreeDiskBytes); err != nil {
+	if err := checkDiskSpace(fs.basePath, MinFreeDiskBytes); err != nil {
 		return "", err
 	}
 	cleanFileName, err := validateArtifactFileName(fileName)
@@ -141,9 +141,9 @@ func validateArtifactFileName(fileName string) (string, error) {
 	return clean, nil
 }
 
-// minFreeDiskBytes is the minimum free disk space (500 MB) required before
+// MinFreeDiskBytes is the minimum free disk space (500 MB) required before
 // accepting new files. This prevents the storage partition from filling up.
-const minFreeDiskBytes uint64 = 500 * 1024 * 1024
+const MinFreeDiskBytes uint64 = 500 * 1024 * 1024
 
 // ErrInsufficientDisk is returned when available disk space is too low.
 var ErrInsufficientDisk = fmt.Errorf("insufficient disk space")

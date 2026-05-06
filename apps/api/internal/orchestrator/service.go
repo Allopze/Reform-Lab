@@ -168,7 +168,7 @@ func (s *Service) createAndEnqueue(ctx context.Context, userID *uuid.UUID, guest
 		InputSize:    inputSize,
 	}
 	opts := queue.TaskOptions{
-		MaxRetries: cap.ExecutionLimits.MaxRetries,
+		MaxRetries: 0,
 		Timeout:    time.Duration(cap.ExecutionLimits.TimeoutSeconds) * time.Second,
 	}
 
@@ -266,7 +266,7 @@ func (s *Service) createAndEnqueueBatch(ctx context.Context, userID *uuid.UUID, 
 			InputSize:    request.InputSize,
 		}
 		opts := queue.TaskOptions{
-			MaxRetries: request.Capability.ExecutionLimits.MaxRetries,
+			MaxRetries: 0,
 			Timeout:    time.Duration(request.Capability.ExecutionLimits.TimeoutSeconds) * time.Second,
 		}
 

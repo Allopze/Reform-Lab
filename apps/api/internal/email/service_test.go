@@ -26,6 +26,13 @@ func (m *mockSiteSettings) UpsertValue(_ context.Context, key, value string, _ t
 	return nil
 }
 
+func (m *mockSiteSettings) UpsertValues(_ context.Context, values map[string]string, _ time.Time) error {
+	for key, value := range values {
+		m.values[key] = value
+	}
+	return nil
+}
+
 type mockEmailTemplateRepo struct {
 	templates map[string]*domain.EmailTemplate
 }

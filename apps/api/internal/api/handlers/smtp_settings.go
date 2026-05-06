@@ -94,44 +94,40 @@ func (h *SMTPSettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UTC()
 	ctx := r.Context()
-
-	if err := h.Settings.UpsertValue(ctx, emailpkg.SettingSMTPHost, req.Host, now); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to save SMTP host")
-		return
-	}
-	if err := h.Settings.UpsertValue(ctx, emailpkg.SettingSMTPPort, strconv.Itoa(req.Port), now); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to save SMTP port")
-		return
-	}
-	if err := h.Settings.UpsertValue(ctx, emailpkg.SettingSMTPUser, req.User, now); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to save SMTP user")
-		return
-	}
-	// Only update password if not the mask placeholder.
+	encryptedPassword := ""
 	if req.Password != "" && req.Password != "****" {
-		encryptedPassword, err := h.Secrets.Encrypt(req.Password)
+		if h.Secrets == nil {
+			respondError(w, http.StatusServiceUnavailable, "secret storage is not configured")
+			return
+		}
+		var err error
+		encryptedPassword, err = h.Secrets.Encrypt(req.Password)
 		if err != nil {
 			respondError(w, http.StatusServiceUnavailable, "secret storage is not configured")
 			return
 		}
-		if err := h.Settings.UpsertValue(ctx, emailpkg.SettingSMTPPassword, encryptedPassword, now); err != nil {
-			respondError(w, http.StatusInternalServerError, "failed to save SMTP password")
-			return
-		}
 	}
-	if err := h.Settings.UpsertValue(ctx, emailpkg.SettingSMTPFrom, req.From, now); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to save SMTP from")
-		return
+
+	values := map[string]string{
+		emailpkg.SettingSMTPHost: req.Host,
+		emailpkg.SettingSMTPPort: strconv.Itoa(req.Port),
+		emailpkg.SettingSMTPUser: req.User,
+		emailpkg.SettingSMTPFrom: req.From,
+	}
+	// Only update password if not the mask placeholder.
+	if req.Password != "" && req.Password != "****" {
+		values[emailpkg.SettingSMTPPassword] = encryptedPassword
 	}
 	if req.UseTLS != nil {
 		tlsVal := "false"
 		if *req.UseTLS {
 			tlsVal = "true"
 		}
-		if err := h.Settings.UpsertValue(ctx, emailpkg.SettingSMTPUseTLS, tlsVal, now); err != nil {
-			respondError(w, http.StatusInternalServerError, "failed to save SMTP TLS setting")
-			return
-		}
+		values[emailpkg.SettingSMTPUseTLS] = tlsVal
+	}
+	if err := h.Settings.UpsertValues(ctx, values, now); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to save SMTP settings")
+		return
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "saved"})

@@ -492,6 +492,31 @@ func uploadPNGClient(client *http.Client, baseURL, token string) (*http.Response
 	return resp, data
 }
 
+func firstCapabilityForFile(t *testing.T, client *http.Client, baseURL, fileID string) (string, bool) {
+	t.Helper()
+
+	resp, capsData := doGetClient(client, fmt.Sprintf("%s/api/files/%s/capabilities", baseURL, fileID), "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("capabilities: expected 200, got %d — %v", resp.StatusCode, capsData)
+	}
+	caps, ok := capsData["capabilities"].([]interface{})
+	if !ok {
+		t.Fatalf("capabilities: expected array, got %T", capsData["capabilities"])
+	}
+	if len(caps) == 0 {
+		return "", false
+	}
+	firstCap, ok := caps[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("capabilities: expected capability object, got %T", caps[0])
+	}
+	capID, _ := firstCap["id"].(string)
+	if capID == "" {
+		t.Fatalf("capabilities: expected non-empty id in first capability: %v", firstCap)
+	}
+	return capID, true
+}
+
 func uploadNoisyPNGClient(client *http.Client, baseURL, token string, side int) (*http.Response, map[string]interface{}) {
 	img := image.NewRGBA(image.Rect(0, 0, side, side))
 	state := uint32(0x12345678)
@@ -2605,21 +2630,18 @@ func TestE2E_AdminJobsList(t *testing.T) {
 		t.Fatalf("upload: expected 201, got %d — %v", resp.StatusCode, fileData)
 	}
 	fileID, _ := fileData["id"].(string)
-	caps, _ := fileData["capabilities"].([]interface{})
-	if len(caps) == 0 {
+	capID, ok := firstCapabilityForFile(t, adminClient, env.server.URL, fileID)
+	if !ok {
 		t.Skip("no capabilities for PNG, skipping job creation")
 	}
-	firstCap := caps[0].(map[string]interface{})
-	capID, _ := firstCap["id"].(string)
-	outputFormat, _ := firstCap["outputFormat"].(string)
 
 	// Create a conversion job.
-	resp, createdJob := doPostClient(adminClient, env.server.URL+"/api/files/"+fileID+"/convert", map[string]interface{}{
+	resp, createdJob := doPostClient(adminClient, env.server.URL+"/api/conversions", map[string]interface{}{
+		"fileId":       fileID,
 		"capabilityId": capID,
-		"outputFormat": outputFormat,
 	}, "")
 	if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusCreated {
-		t.Fatalf("convert: expected 201 or 202, got %d", resp.StatusCode)
+		t.Fatalf("convert: expected 201 or 202, got %d — %v", resp.StatusCode, createdJob)
 	}
 	jobID, _ := createdJob["id"].(string)
 	if jobID == "" {
@@ -2705,21 +2727,18 @@ func TestE2E_AdminJobsBatchActions(t *testing.T) {
 		t.Fatalf("upload: expected 201, got %d", resp.StatusCode)
 	}
 	fileID, _ := fileData["id"].(string)
-	caps, _ := fileData["capabilities"].([]interface{})
-	if len(caps) == 0 {
+	capID, ok := firstCapabilityForFile(t, adminClient, env.server.URL, fileID)
+	if !ok {
 		t.Skip("no capabilities for PNG, skipping batch admin actions")
 	}
-	firstCap := caps[0].(map[string]interface{})
-	capID, _ := firstCap["id"].(string)
-	outputFormat, _ := firstCap["outputFormat"].(string)
 
 	createJob := func() string {
-		resp, createdJob := doPostClient(adminClient, env.server.URL+"/api/files/"+fileID+"/convert", map[string]interface{}{
+		resp, createdJob := doPostClient(adminClient, env.server.URL+"/api/conversions", map[string]interface{}{
+			"fileId":       fileID,
 			"capabilityId": capID,
-			"outputFormat": outputFormat,
 		}, "")
 		if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusCreated {
-			t.Fatalf("convert: expected 201 or 202, got %d", resp.StatusCode)
+			t.Fatalf("convert: expected 201 or 202, got %d — %v", resp.StatusCode, createdJob)
 		}
 		jobID, _ := createdJob["id"].(string)
 		if jobID == "" {
@@ -3000,11 +3019,10 @@ func TestE2E_AdminSupportControls(t *testing.T) {
 		t.Fatalf("upload: expected 201, got %d — %v", resp.StatusCode, fileData)
 	}
 	fileID, _ := fileData["id"].(string)
-	caps, _ := fileData["capabilities"].([]interface{})
-	if len(caps) == 0 {
+	capID, ok := firstCapabilityForFile(t, adminClient, env.server.URL, fileID)
+	if !ok {
 		t.Skip("no capabilities for PNG in this runtime")
 	}
-	capID, _ := caps[0].(map[string]interface{})["id"].(string)
 
 	resp, jobData := doPostClient(adminClient, env.server.URL+"/api/conversions", map[string]string{
 		"fileId":       fileID,

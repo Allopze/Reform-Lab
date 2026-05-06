@@ -200,6 +200,7 @@
     "categoryFormats": "Convierte a {formats}.",
     "registeredLimit": "Tu limite actual es {limit} por archivo. Cuota usada: {used} de {quota}.",
     "guestLimit": "Como invitado puedes subir hasta {guestLimit} por archivo; con cuenta registrada, hasta {registeredLimit}. Cuota usada: {used} de {quota}.",
+    "privacyRetentionDetail": "Validamos el tipo real del archivo, no lo ejecutamos, y tanto originales como artefactos se eliminan por politica de retencion.",
     "registeredSupport": "hasta {limit} por archivo; quedan {remaining}",
     "guestSupport": "hasta {limit} por archivo como invitado; quedan {remaining}",
     "batchSummary": "{total} archivos en el lote · {ready} listos · {done} completados · {failed} con error.",

@@ -3,7 +3,9 @@ package orchestrator
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/allopze/reform-lab/apps/api/internal/database"
 	"github.com/allopze/reform-lab/apps/api/internal/domain"
@@ -11,6 +13,30 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
 	"github.com/google/uuid"
 )
+
+type spyQueue struct {
+	mu   sync.Mutex
+	opts []queue.TaskOptions
+}
+
+func (q *spyQueue) Enqueue(_ context.Context, _ string, _ queue.TaskPayload, opts queue.TaskOptions) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.opts = append(q.opts, opts)
+	return nil
+}
+
+func (q *spyQueue) EnqueueEmail(context.Context, queue.EmailTaskPayload, queue.TaskOptions) error {
+	return nil
+}
+
+func (q *spyQueue) EnqueueWebhook(context.Context, queue.WebhookTaskPayload, queue.TaskOptions) error {
+	return nil
+}
+
+func (q *spyQueue) Close() error {
+	return nil
+}
 
 func newTestOrchestrator(t *testing.T) (*Service, repository.JobRepository) {
 	t.Helper()
@@ -27,6 +53,24 @@ func newTestOrchestrator(t *testing.T) (*Service, repository.JobRepository) {
 	jobs := repository.NewJobRepository(db)
 	audit := repository.NewAuditRepository(db)
 	q := queue.NewInProcessQueueWithLimit(nil, 1) // nil handler: accepts tasks silently
+
+	return NewService(jobs, audit, q), jobs
+}
+
+func newTestOrchestratorWithQueue(t *testing.T, q queue.JobQueue) (*Service, repository.JobRepository) {
+	t.Helper()
+	db, err := database.Open(filepath.Join(t.TempDir(), "reform-test.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if err := database.Migrate(db, testMigrationsPath(t)); err != nil {
+		t.Fatalf("migrate sqlite: %v", err)
+	}
+
+	jobs := repository.NewJobRepository(db)
+	audit := repository.NewAuditRepository(db)
 
 	return NewService(jobs, audit, q), jobs
 }
@@ -70,6 +114,40 @@ func TestCreateAndEnqueue(t *testing.T) {
 	}
 	if persisted.Status != domain.JobQueued {
 		t.Fatalf("expected persisted job to be queued, got %s", persisted.Status)
+	}
+}
+
+func TestCreateAndEnqueueDisablesQueueAutoRetries(t *testing.T) {
+	q := &spyQueue{}
+	svc, _ := newTestOrchestratorWithQueue(t, q)
+	ctx := context.Background()
+
+	cap := domain.Capability{
+		ID:            "pdf-to-txt",
+		TargetFormat:  "txt",
+		SourceFormats: []string{"application/pdf"},
+		Engine:        "poppler",
+		ExecutionLimits: domain.ExecutionLimits{
+			TimeoutSeconds: 60,
+			MaxRetries:     3,
+		},
+	}
+
+	userID := uuid.New()
+	if _, err := svc.CreateAndEnqueue(ctx, &userID, uuid.New(), cap, "/tmp/fake.pdf", 1024); err != nil {
+		t.Fatalf("CreateAndEnqueue: %v", err)
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.opts) != 1 {
+		t.Fatalf("expected 1 enqueue, got %d", len(q.opts))
+	}
+	if q.opts[0].MaxRetries != 0 {
+		t.Fatalf("expected queue auto retries disabled, got %d", q.opts[0].MaxRetries)
+	}
+	if q.opts[0].Timeout != time.Minute {
+		t.Fatalf("expected timeout from capability, got %s", q.opts[0].Timeout)
 	}
 }
 

@@ -3,7 +3,9 @@ package ingestion
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -96,6 +98,56 @@ func TestExtractMetadataDetectsProtectedFixtureFiles(t *testing.T) {
 			}
 			if !meta.IsProtected {
 				t.Fatal("expected protected fixture to be marked protected")
+			}
+		})
+	}
+}
+
+func TestExtractMetadataRejectsCorruptedParserBackedFixtures(t *testing.T) {
+	testCases := []struct {
+		name   string
+		path   string
+		format domain.DetectedFormat
+		binary string
+	}{
+		{
+			name:   "truncated pdf",
+			path:   ingestionFixturePath("pdf", "corrupted-truncated.pdf"),
+			binary: "pdfinfo",
+			format: domain.DetectedFormat{
+				Family:   domain.FamilyPDF,
+				MIMEType: "application/pdf",
+			},
+		},
+		{
+			name:   "truncated wav",
+			path:   ingestionFixturePath("audio", "corrupted-truncated.wav"),
+			binary: "ffprobe",
+			format: domain.DetectedFormat{
+				Family:   domain.FamilyAudio,
+				MIMEType: "audio/wav",
+			},
+		},
+		{
+			name:   "truncated mp4",
+			path:   ingestionFixturePath("video", "corrupted-truncated.mp4"),
+			binary: "ffprobe",
+			format: domain.DetectedFormat{
+				Family:   domain.FamilyVideo,
+				MIMEType: "video/mp4",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := exec.LookPath(tc.binary); err != nil {
+				t.Skipf("%s not available: %v", tc.binary, err)
+			}
+
+			_, err := ExtractMetadata(context.Background(), tc.path, tc.format)
+			if !errors.Is(err, domain.ErrInvalidCorrupted) {
+				t.Fatalf("expected corrupted metadata error, got %v", err)
 			}
 		})
 	}

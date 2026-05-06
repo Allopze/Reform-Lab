@@ -462,7 +462,74 @@ func respondJSON(w http.ResponseWriter, status int, v interface{}) {
 	json.NewEncoder(w).Encode(v)
 }
 
+type errorResponse struct {
+	Error     string `json:"error"`
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	RequestID string `json:"requestId,omitempty"`
+	Retryable bool   `json:"retryable"`
+}
+
 // respondError writes a JSON error response.
 func respondError(w http.ResponseWriter, status int, message string) {
-	respondJSON(w, status, map[string]string{"error": message})
+	respondJSON(w, status, errorResponse{
+		Error:     message,
+		Code:      errorCodeFor(status, message),
+		Message:   message,
+		RequestID: w.Header().Get("X-Request-ID"),
+		Retryable: errorRetryable(status),
+	})
+}
+
+func errorCodeFor(status int, message string) string {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	replacer := strings.NewReplacer(
+		"'", "",
+		"\"", "",
+		".", "",
+		",", "",
+		":", "",
+		";", "",
+		"(", "",
+		")", "",
+		"/", " ",
+		"-", " ",
+	)
+	normalized = replacer.Replace(normalized)
+	fields := strings.Fields(normalized)
+	if len(fields) > 0 {
+		code := strings.Join(fields, "_")
+		if len(code) > 64 {
+			code = code[:64]
+			code = strings.TrimRight(code, "_")
+		}
+		return code
+	}
+	switch status {
+	case http.StatusBadRequest:
+		return "bad_request"
+	case http.StatusUnauthorized:
+		return "unauthorized"
+	case http.StatusForbidden:
+		return "forbidden"
+	case http.StatusNotFound:
+		return "not_found"
+	case http.StatusConflict:
+		return "conflict"
+	case http.StatusTooManyRequests:
+		return "rate_limited"
+	case http.StatusRequestEntityTooLarge:
+		return "limit_exceeded"
+	case http.StatusServiceUnavailable:
+		return "service_unavailable"
+	default:
+		if status >= 500 {
+			return "internal_error"
+		}
+		return "request_failed"
+	}
+}
+
+func errorRetryable(status int) bool {
+	return status == http.StatusTooManyRequests || status == http.StatusRequestTimeout || status >= 500
 }

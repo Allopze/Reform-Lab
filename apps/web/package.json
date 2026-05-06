@@ -6,7 +6,7 @@
     "dev": "sh -ac 'set -a; . ../../.env; set +a; exec next dev -p 5050'",
     "build": "next build",
     "start": "next start -p 5050",
-    "lint": "next lint",
+    "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test"

@@ -23,6 +23,8 @@ import (
 // maxUploadSize is the absolute maximum body size for uploads (500 MB).
 const maxUploadSize = 500 * 1024 * 1024
 
+var errUploadStagingLimitExceeded = errors.New("upload staging limit exceeded")
+
 // UploadHandler handles POST /api/files.
 type UploadHandler struct {
 	Settings                       repository.SiteSettingRepository
@@ -52,8 +54,30 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	effectiveUploadLimit := effectiveUploadLimitBytes(u, policy)
+	bodyLimit := uploadBodyLimitBytes(u, policy)
 
-	r.Body = http.MaxBytesReader(w, r.Body, uploadBodyLimitBytes(u, policy))
+	if err := h.ensureUploadDiskHeadroom(bodyLimit); err != nil {
+		if errors.Is(err, storage.ErrInsufficientDisk) {
+			respondError(w, http.StatusInsufficientStorage, "server storage is full")
+			return
+		}
+		h.Logger.Error().Err(err).Msg("upload disk headroom check failed")
+		respondError(w, http.StatusInternalServerError, "failed to check storage capacity")
+		return
+	}
+
+	remainingQuota, err := h.remainingCumulativeQuota(r.Context(), u, guestSessionID)
+	if err != nil {
+		h.Logger.Error().Err(err).Msg("cumulative quota precheck failed")
+		respondError(w, http.StatusInternalServerError, "failed to check storage quota")
+		return
+	}
+	if remainingQuota == 0 {
+		respondError(w, http.StatusRequestEntityTooLarge, "cumulative storage quota exceeded")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 
 	file, originalFileName, err := uploadFilePart(r)
 	if err != nil {
@@ -88,10 +112,22 @@ func (h *UploadHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Stream the upload into a temporary file so large bodies stay off-heap.
-	size, err := io.Copy(tempFile, file)
+	stagingLimit := effectiveUploadLimit
+	if remainingQuota > 0 && remainingQuota < stagingLimit {
+		stagingLimit = remainingQuota
+	}
+	size, err := copyUploadedFile(tempFile, file, stagingLimit)
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
+			respondError(w, http.StatusRequestEntityTooLarge, "file exceeds size limit")
+			return
+		}
+		if errors.Is(err, errUploadStagingLimitExceeded) {
+			if remainingQuota > 0 && remainingQuota < effectiveUploadLimit {
+				respondError(w, http.StatusRequestEntityTooLarge, "cumulative storage quota exceeded")
+				return
+			}
 			respondError(w, http.StatusRequestEntityTooLarge, "file exceeds size limit")
 			return
 		}
@@ -260,9 +296,34 @@ func uploadFilePart(r *http.Request) (*multipart.Part, string, error) {
 	}
 }
 
+func copyUploadedFile(dst io.Writer, src io.Reader, maxBytes int64) (int64, error) {
+	limited := &io.LimitedReader{R: src, N: maxBytes + 1}
+	size, err := io.Copy(dst, limited)
+	if err != nil {
+		return size, err
+	}
+	if size > maxBytes {
+		return size, errUploadStagingLimitExceeded
+	}
+	return size, nil
+}
+
 // enforceCumulativeQuota checks that adding fileSize bytes would not exceed the
 // cumulative disk quota for the given user or guest session.
 func (h *UploadHandler) enforceCumulativeQuota(ctx context.Context, u *domain.User, guestSessionID *uuid.UUID, fileSize int64) error {
+	remaining, err := h.remainingCumulativeQuota(ctx, u, guestSessionID)
+	if err != nil {
+		return err
+	}
+	if remaining >= 0 && fileSize > remaining {
+		return domain.ErrQuotaExceeded
+	}
+	return nil
+}
+
+// remainingCumulativeQuota returns remaining bytes for this identity, or -1
+// when cumulative quota enforcement is disabled or no stable identity exists.
+func (h *UploadHandler) remainingCumulativeQuota(ctx context.Context, u *domain.User, guestSessionID *uuid.UUID) (int64, error) {
 	var used int64
 	var quota int64
 	var err error
@@ -275,15 +336,39 @@ func (h *UploadHandler) enforceCumulativeQuota(ctx context.Context, u *domain.Us
 		used, err = h.Files.CumulativeBytesByGuestSession(ctx, *guestSessionID)
 	} else {
 		// No identity — allow the upload; rate-limits still apply.
-		return nil
+		return -1, nil
 	}
 
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	if quota > 0 && used+fileSize > quota {
-		return domain.ErrQuotaExceeded
+	if quota <= 0 {
+		return -1, nil
+	}
+	remaining := quota - used
+	if remaining < 0 {
+		return 0, nil
+	}
+	return remaining, nil
+}
+
+type diskStatsStore interface {
+	DiskStats() (free uint64, total uint64, err error)
+}
+
+func (h *UploadHandler) ensureUploadDiskHeadroom(estimatedBodyBytes int64) error {
+	stats, ok := h.Store.(diskStatsStore)
+	if !ok || estimatedBodyBytes <= 0 {
+		return nil
+	}
+	free, _, err := stats.DiskStats()
+	if err != nil {
+		return err
+	}
+	required := storage.MinFreeDiskBytes + uint64(estimatedBodyBytes)*2
+	if free < required {
+		return storage.ErrInsufficientDisk
 	}
 	return nil
 }

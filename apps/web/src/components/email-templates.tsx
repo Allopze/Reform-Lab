@@ -376,7 +376,6 @@ function TemplateEditor({
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const iframeRef = useRef<HTMLIFrameElement>(null);
   const bodyHtmlRef = useRef(bodyHtml);
   bodyHtmlRef.current = bodyHtml;
 
@@ -471,17 +470,6 @@ function TemplateEditor({
       setPreviewing(false);
     }
   }
-
-  useEffect(() => {
-    if (viewMode === "preview" && previewHtml && iframeRef.current) {
-      const doc = iframeRef.current.contentDocument;
-      if (doc) {
-        doc.open();
-        doc.write(previewHtml);
-        doc.close();
-      }
-    }
-  }, [viewMode, previewHtml]);
 
   return (
     <div className="px-5 py-4">
@@ -596,10 +584,11 @@ function TemplateEditor({
               )}
               <div className="flex justify-center bg-stone-100 py-4">
                 <iframe
-                  ref={iframeRef}
                   title={t("previewIframeTitle")}
                   className={`h-125 border border-stone-200 bg-white transition-all ${previewWidth === "mobile" ? "w-93.75" : "w-full max-w-175"}`}
-                  sandbox="allow-same-origin"
+                  referrerPolicy="no-referrer"
+                  sandbox=""
+                  srcDoc={previewHtml ?? ""}
                 />
               </div>
             </div>

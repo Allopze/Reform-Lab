@@ -244,6 +244,7 @@ export default function ConversionCard({ category }: ConversionCardProps) {
   const effectiveDetailLabel = [detailLabel, uploadPolicyDetail(uploadPolicy)]
     .filter(Boolean)
     .join(" ");
+  const trustDetailLabel = t("privacyRetentionDetail");
 
   return (
     <div
@@ -258,7 +259,7 @@ export default function ConversionCard({ category }: ConversionCardProps) {
             text={tc(`${effectiveCategoryId}.dropzoneText`)}
             hint={tc(`${effectiveCategoryId}.dropzoneHint`)}
             supportLabel={uploadSupportLabel(uploadPolicy)}
-            detailLabel={effectiveDetailLabel}
+            detailLabel={`${effectiveDetailLabel} ${trustDetailLabel}`}
             accept={effectiveCategory.acceptedMimeTypes}
             onFilesSelected={handleFilesSelected}
           />
