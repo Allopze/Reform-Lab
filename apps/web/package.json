@@ -30,7 +30,7 @@
     "next": "^15.5.15",
     "next-intl": "^4.9.1",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.2.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
