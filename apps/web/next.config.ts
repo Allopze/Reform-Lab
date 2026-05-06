@@ -4,10 +4,23 @@ import { withSentryConfig } from "@sentry/nextjs";
 import createNextIntlPlugin from "next-intl/plugin";
 
 const hasSentry = !!process.env.NEXT_PUBLIC_SENTRY_DSN;
+const internalApiUrl = process.env.INTERNAL_API_URL?.replace(/\/$/, "");
 
 const nextConfig: NextConfig = {
 	output: "standalone",
 	outputFileTracingRoot: path.resolve(process.cwd(), "../.."),
+	async rewrites() {
+		if (!internalApiUrl) {
+			return [];
+		}
+
+		return [
+			{
+				source: "/api/:path*",
+				destination: `${internalApiUrl}/api/:path*`,
+			},
+		];
+	},
 	async headers() {
 		return [
 			{
@@ -28,6 +41,17 @@ const nextConfig: NextConfig = {
 				],
 			},
 		];
+	},
+	webpack(config) {
+		config.ignoreWarnings = [
+			...(config.ignoreWarnings ?? []),
+			{
+				module: /@opentelemetry\/instrumentation/,
+				message:
+					/Critical dependency: the request of a dependency is an expression/,
+			},
+		];
+		return config;
 	},
 };
 

@@ -31,6 +31,8 @@ Los riesgos principales encontrados no son de estructura general, sino de consis
 | Completado | Baja | API/UX | Errores API devolvian solo strings sin codigo estable. | Respuestas mantienen `error` string y agregan `code`, `message`, `requestId`, `retryable`. |
 | Completado | Baja | Producto/UX | Faltaba copy visible de privacidad, retencion y limites cerca de la subida. | Dropzone muestra limites/cupo reales y texto de deteccion real, no ejecucion y retencion. |
 | Completado | Baja | Tooling | `next lint` estaba deprecado para Next.js 16. | `npm run lint` usa ESLint CLI con ignores explicitos para outputs generados. |
+| Completado | Baja | API/Docs | El nuevo envelope de errores necesitaba contrato publico documentado. | `docs/api/error-contract.md` formaliza campos, compatibilidad, codigos frecuentes y reglas para clientes. |
+| Completado | Baja | Release QA | Faltaba ejecutar Playwright E2E completo antes de release. | `npm run test:e2e` pasa: 6 tests Chromium completados. |
 
 ## Hallazgos detallados
 
@@ -245,6 +247,41 @@ Recomendacion:
 - Implementado: `eslint.config.mjs` ignora `.next`, `node_modules`, `test-results`, `playwright-report` y `next-env.d.ts`.
 - Verificado: `npm run lint` pasa sin advertencia de deprecacion.
 
+### 11. Contrato de errores API documentado
+
+**Severidad:** Baja
+
+**Archivos:** `docs/api/error-contract.md`, `docs/architecture/repo-map.md`
+
+**Estado:** Completado en la pasada 5.
+
+Tras normalizar las respuestas de error con `code`, `message`, `requestId` y `retryable`, faltaba dejar un contrato explicito para futuros clientes y una API publica.
+
+Recomendacion:
+
+- Implementado: documento nuevo `docs/api/error-contract.md`.
+- Implementado: `docs/architecture/repo-map.md` reconoce `docs/api` como zona de contratos HTTP y compatibilidad para clientes.
+- Implementado: el documento conserva `error` como alias legado y recomienda usar `code` para branching de cliente.
+- Implementado: se documentan reglas de compatibilidad, generacion actual de codigos, semantica de `retryable`, ejemplo TypeScript y codigos frecuentes.
+- Verificacion: cambio documental, sin test automatizado requerido.
+
+### 12. Playwright E2E completo antes de release
+
+**Severidad:** Baja
+
+**Archivo:** `apps/web/playwright.config.ts`
+
+**Estado:** Completado en la pasada 5.
+
+Se ejecuto la suite completa de Playwright del frontend como verificacion pre-release.
+
+Resultado:
+
+- Comando: `cd apps/web && npm run test:e2e`.
+- Resultado: pasan 6 tests en Chromium.
+- Cobertura E2E ejecutada: smoke de home, navegacion de categorias, login, not-found, conversion batch mockeada y flujo admin de webhooks.
+- Observacion: el dev server emitio warnings de Next/Sentry/Prisma instrumentation y `allowedDevOrigins`; no bloquearon la suite.
+
 ## Observaciones positivas
 
 - La deteccion de tipo real usa lectura de contenido y no confia solo en extension.
@@ -288,6 +325,7 @@ cd apps/web && npm test -- email-templates
 cd apps/web && npm run lint
 cd apps/api && go test ./internal/api/handlers -count=1
 cd apps/web && npm test -- conversion-card
+cd apps/web && npm run test:e2e
 ```
 
 Resultados:
@@ -307,17 +345,19 @@ Resultados:
 - Tras tocar frontend en la pasada 3, `npm test` completo volvio a pasar.
 - Tests focalizados de la pasada 4 para errores API, conversion-card y lint: pasan.
 - Tras los fixes de la pasada 4, `go test ./internal/... -count=1 -timeout=180s`, `go vet ./...`, `npm test` y `npm run lint` volvieron a pasar.
+- Pasada 5: `docs/api/error-contract.md` agregado para documentar el contrato de errores. Cambio documental, sin test automatizado requerido.
+- Pasada 5: Playwright E2E completo pasa, 6 tests en Chromium. El dev server muestra warnings no bloqueantes de Next/Sentry/Prisma instrumentation y `allowedDevOrigins`.
 
 Nota: tambien se ejecuto inicialmente `npm test -- --runInBand` en frontend; fallo porque `--runInBand` es una bandera de Jest, no de Vitest. Se corrigio ejecutando `npm test`.
 
 ## Plan de accion recomendado
 
-No quedan hallazgos abiertos del alcance de esta auditoria inicial. Siguientes mejoras naturales:
+No quedan hallazgos abiertos del alcance de esta auditoria inicial ni verificaciones de release pendientes de esta pasada. Siguientes mejoras naturales:
 
-1. Documentar formalmente el nuevo contrato de error en `docs/` para consumidores externos.
-2. Evaluar antivirus/sandbox como control complementario para formatos de mayor riesgo.
-3. Ejecutar Playwright E2E completo antes de release.
+1. Evaluar antivirus/sandbox como control complementario para formatos de mayor riesgo.
+2. Decidir si se agrega `allowedDevOrigins` para silenciar el warning de Next en E2E/dev server.
+3. Considerar un registro explicito de codigos API en Go si se quiere desacoplar `code` de los textos de `respondError`.
 
 ## Conclusion
 
-El repositorio esta bien orientado: las fronteras de capas son claras, la seguridad de archivos esta presente en el diseno, y las pruebas basicas pasan. La primera pasada cerro los riesgos mas directos de jobs, corrupcion de archivos y E2E obsoletos. La segunda pasada dejo documentado el bootstrap del primer admin como feature y cerro la atomicidad de settings admin. La tercera pasada redujo el riesgo de staging temporal bajo presion de disco/cuota y endurecio el preview HTML admin. La cuarta pasada normalizo errores API, hizo mas visible privacidad/retencion/limites en upload y migro lint a ESLint CLI.
+El repositorio esta bien orientado: las fronteras de capas son claras, la seguridad de archivos esta presente en el diseno, y las pruebas basicas pasan. La primera pasada cerro los riesgos mas directos de jobs, corrupcion de archivos y E2E obsoletos. La segunda pasada dejo documentado el bootstrap del primer admin como feature y cerro la atomicidad de settings admin. La tercera pasada redujo el riesgo de staging temporal bajo presion de disco/cuota y endurecio el preview HTML admin. La cuarta pasada normalizo errores API, hizo mas visible privacidad/retencion/limites en upload y migro lint a ESLint CLI. La quinta pasada documento el contrato de errores para consumidores externos y ejecuto Playwright E2E completo antes de release.

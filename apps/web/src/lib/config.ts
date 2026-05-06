@@ -1,4 +1,5 @@
 const DEFAULT_API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+const API_PATH_SUFFIX = /\/api\/?$/;
 
 function isLoopbackHost(hostname: string) {
   return hostname === "localhost" || hostname === "127.0.0.1";
@@ -15,8 +16,15 @@ function hostCategory(hostname: string): "loopback" | "private" | "public" {
 }
 
 function resolveSingleUrl(url: string, currentHostname?: string): string {
+  const trimmedUrl = url.trim();
+
+  if (trimmedUrl === "" || trimmedUrl === "/" || trimmedUrl === "/api" || trimmedUrl === "api") {
+    return "";
+  }
+
   try {
-    const parsedUrl = new URL(url);
+    const parsedUrl = new URL(trimmedUrl);
+    parsedUrl.pathname = parsedUrl.pathname.replace(API_PATH_SUFFIX, "") || "/";
 
     if (!currentHostname || isLoopbackHost(currentHostname) || !isLoopbackHost(parsedUrl.hostname)) {
       return parsedUrl.toString().replace(/\/$/, "");
@@ -25,7 +33,7 @@ function resolveSingleUrl(url: string, currentHostname?: string): string {
     parsedUrl.hostname = currentHostname;
     return parsedUrl.toString().replace(/\/$/, "");
   } catch {
-    return url.replace(/\/$/, "");
+    return trimmedUrl.replace(API_PATH_SUFFIX, "").replace(/\/$/, "");
   }
 }
 

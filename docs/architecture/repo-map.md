@@ -30,6 +30,7 @@ Es un documento de navegación y ownership técnico.
 │  ├─ security/
 │  ├─ testing/
 │  ├─ operations/
+│  ├─ api/
 │  └─ product/
 └─ .github/
    ├─ copilot-instructions.md
@@ -60,6 +61,12 @@ No debería contener:
 No debería contener:
 - lógica de conversión concreta
 - lógica duplicada del catálogo de capacidades
+
+### `docs/api`
+- contratos HTTP
+- envelopes de respuesta
+- reglas de compatibilidad para clientes
+- ejemplos de consumo de API
 
 ### `services/domain`
 - entidades

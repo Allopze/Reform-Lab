@@ -36,7 +36,9 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL must point to the public API URL}"
+        NEXT_PUBLIC_APP_URL: "${NEXT_PUBLIC_APP_URL:-}"
         NEXT_PUBLIC_SENTRY_DSN: "${NEXT_PUBLIC_SENTRY_DSN:-}"
+        INTERNAL_API_URL: "${INTERNAL_API_URL:-http://api:8080}"
         SENTRY_ORG: "${SENTRY_ORG:-}"
         SENTRY_PROJECT: "${SENTRY_PROJECT:-}"
     restart: unless-stopped
@@ -51,6 +53,7 @@ services:
       JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set to a strong value}"
       APP_URL: "${APP_URL:-http://localhost:${WEB_HOST_PORT:-5050}}"
       NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL must point to the public API URL}"
+      NEXT_PUBLIC_APP_URL: "${NEXT_PUBLIC_APP_URL:-}"
     networks:
       - public
 

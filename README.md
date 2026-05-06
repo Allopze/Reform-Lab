@@ -274,6 +274,7 @@ Notas operativas:
 | Variable | Obligatoria | Default de código | Qué hace |
 | --- | --- | --- | --- |
 | `NEXT_PUBLIC_API_URL` | no, pero recomendada | `http://localhost:8080` | base URL del API consumido por Next.js; en producción detrás de proxy suele ser la misma origin pública `https://...` |
+| `NEXT_PUBLIC_APP_URL` | no | vacío | override público opcional para metadata de Next; si está vacío, la web usa `APP_URL` y luego fallback seguro |
 | `NEXT_PUBLIC_SENTRY_DSN` | no | vacío | activa Sentry en cliente, edge y server cuando existe |
 | `SENTRY_ORG` | no | vacío | organización de Sentry usada en el build de Next cuando se habilita Sentry |
 | `SENTRY_PROJECT` | no | vacío | proyecto de Sentry usado en el build de Next cuando se habilita Sentry |
@@ -301,6 +302,7 @@ Estas variables no las consume directamente `config.go`; las usa el `docker-comp
 | `API_HOST_PORT` | no | `8080` | puerto expuesto para la API |
 | `API_MEMORY_LIMIT` | no | `1024m` | límite de memoria del contenedor `api` |
 | `API_CPUS` | no | `1.00` | límite de CPU del contenedor `api` |
+| `REDIS_MEMORY_LIMIT` | no | `512m` | límite de memoria del contenedor `redis` |
 | `WORKER_MEMORY_LIMIT` | no | `2048m` | límite de memoria del contenedor `worker` |
 | `WORKER_CPUS` | no | `2.00` | límite de CPU del contenedor `worker` |
 

@@ -11,7 +11,9 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/server ./cmd/server
 
 # --- Runtime stage ---
-FROM ubuntu:24.04
+FROM python:3.12-slim-bookworm
+
+ARG INCLUDE_CONVERSION_TOOLS=1
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/tmp/reform-home
@@ -23,22 +25,23 @@ RUN apt-get update && \
 		apt-get install -y --no-install-recommends \
 			ca-certificates \
 			curl \
-			python3 \
-			python3-venv \
 			tzdata \
-			ghostscript \
-			poppler-utils \
-			librsvg2-bin \
-			libreoffice-core \
-			libreoffice-calc \
-			libreoffice-impress \
-			libreoffice-writer \
-			ffmpeg \
-			libheif-examples \
-			tesseract-ocr \
-			tesseract-ocr-spa \
-		&& python3 -m venv /opt/reform-lab-python \
-		&& /opt/reform-lab-python/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
+		&& if [ "$INCLUDE_CONVERSION_TOOLS" = "1" ]; then \
+			apt-get install -y --no-install-recommends \
+				ghostscript \
+				poppler-utils \
+				librsvg2-bin \
+				libreoffice-core \
+				libreoffice-calc \
+				libreoffice-impress \
+				libreoffice-writer \
+				ffmpeg \
+				libheif-examples \
+				tesseract-ocr \
+				tesseract-ocr-spa \
+			&& python -m venv /opt/reform-lab-python \
+			&& /opt/reform-lab-python/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
+		; fi \
 		&& rm -rf /var/lib/apt/lists/* \
 		&& rm -f /tmp/requirements.txt \
 		&& groupadd --gid 10001 app \

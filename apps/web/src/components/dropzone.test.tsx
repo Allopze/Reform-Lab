@@ -5,7 +5,10 @@ import Dropzone from "./dropzone";
 import { IntlWrapper } from "@/test/intl-wrapper";
 
 vi.mock("next/image", () => ({
-	default: (props: Record<string, unknown>) => (
+	default: ({
+		priority: _priority,
+		...props
+	}: Record<string, unknown> & { priority?: boolean }) => (
 		// eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text
 		<img {...props} />
 	),

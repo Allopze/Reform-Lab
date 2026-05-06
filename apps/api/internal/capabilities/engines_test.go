@@ -33,6 +33,22 @@ func TestEngineProberAvailableEngines(t *testing.T) {
 	}
 }
 
+func TestDeclaredEngineProberMarksKnownEnginesAvailable(t *testing.T) {
+	p := NewDeclaredEngineProber()
+	if !p.IsAvailable("libreoffice") {
+		t.Fatal("declared prober should treat libreoffice as available")
+	}
+	if !p.IsAvailable("ffmpeg") {
+		t.Fatal("declared prober should treat ffmpeg as available")
+	}
+	if !p.IsAvailable("pdf2docx") {
+		t.Fatal("declared prober should treat pdf2docx as available")
+	}
+	if !p.IsAvailable("go-image") {
+		t.Fatal("declared prober should keep pure Go engines available")
+	}
+}
+
 func TestResolveFiltersUnavailableEngines(t *testing.T) {
 	// Create a prober with all engines marked unavailable except go-image.
 	p := &EngineProber{}

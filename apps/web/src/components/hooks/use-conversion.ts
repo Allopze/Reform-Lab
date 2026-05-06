@@ -40,6 +40,10 @@ export function getConvertedArtifactName(
   return `${stripExtension(inputFileName)}.${extension}`;
 }
 
+const INITIAL_POLL_DELAY_MS = 1000;
+const POLL_INTERVAL_MS = 1500;
+const MAX_STATUS_POLL_FAILURES = 3;
+
 export interface UseConversionReturn {
   activeJobIds: string[];
   downloadError: string | null;
@@ -61,6 +65,8 @@ export function useConversion(
   const [activeJobIds, setActiveJobIds] = useState<string[]>([]);
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollingFailuresRef = useRef<Map<string, number>>(new Map());
+  const terminalJobIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     return () => {
@@ -75,6 +81,8 @@ export function useConversion(
       clearTimeout(pollingRef.current);
       pollingRef.current = null;
     }
+    pollingFailuresRef.current.clear();
+    terminalJobIdsRef.current.clear();
   }, []);
 
   const isConverting = useMemo(
@@ -125,6 +133,10 @@ export function useConversion(
       const jobs = await createBatchConversion(fileIds, cap.id);
       const nextJobIds = jobs.map((job) => job.id);
       setActiveJobIds(nextJobIds);
+      pollingFailuresRef.current = new Map(
+        nextJobIds.map((jobId) => [jobId, 0]),
+      );
+      terminalJobIdsRef.current = new Set();
 
       setItems((current) =>
         current.map((item) => {
@@ -149,17 +161,79 @@ export function useConversion(
 
       const poll = async () => {
         try {
-          const updatedJobs = await Promise.all(
-            nextJobIds.map((jobId) => getJob(jobId)),
+          const pollJobIds = nextJobIds.filter(
+            (jobId) => !terminalJobIdsRef.current.has(jobId),
           );
+          if (pollJobIds.length === 0) {
+            pollingRef.current = null;
+            setActiveJobIds([]);
+            pollingFailuresRef.current.clear();
+            terminalJobIdsRef.current.clear();
+            return;
+          }
+
+          const statusResults = await Promise.allSettled(
+            pollJobIds.map(async (jobId) => ({
+              jobId,
+              job: await getJob(jobId),
+            })),
+          );
+
+          const updatedJobs = statusResults.flatMap((result) =>
+            result.status === "fulfilled" ? [result.value.job] : [],
+          );
+          const failedPollJobIds = statusResults.flatMap((result, index) =>
+            result.status === "rejected" ? [pollJobIds[index]] : [],
+          );
+          const permanentlyUnavailableJobIds: string[] = [];
+
+          for (const job of updatedJobs) {
+            pollingFailuresRef.current.set(job.id, 0);
+            if (
+              job.status === "succeeded" ||
+              job.status === "failed" ||
+              job.status === "cancelled" ||
+              job.status === "expired"
+            ) {
+              terminalJobIdsRef.current.add(job.id);
+            }
+          }
+
+          for (const jobId of failedPollJobIds) {
+            const nextFailures =
+              (pollingFailuresRef.current.get(jobId) ?? 0) + 1;
+            pollingFailuresRef.current.set(jobId, nextFailures);
+            if (nextFailures >= MAX_STATUS_POLL_FAILURES) {
+              permanentlyUnavailableJobIds.push(jobId);
+            }
+          }
+
           const pendingJobs = updatedJobs.filter(
             (job) => job.status === "queued" || job.status === "running",
           );
+          const retryablePollJobIds = failedPollJobIds.filter(
+            (jobId) => !permanentlyUnavailableJobIds.includes(jobId),
+          );
+          const unresolvedJobIds = [
+            ...pendingJobs.map((job) => job.id),
+            ...retryablePollJobIds,
+          ];
 
           setItems((current) =>
             current.map((item) => {
               if (!item.jobId) {
                 return item;
+              }
+
+              if (
+                item.status === "converting" &&
+                permanentlyUnavailableJobIds.includes(item.jobId)
+              ) {
+                return {
+                  ...item,
+                  status: "error",
+                  message: t("pollingError"),
+                };
               }
 
               const job = updatedJobs.find(
@@ -216,16 +290,21 @@ export function useConversion(
             }),
           );
 
-          if (pendingJobs.length > 0) {
-            pollingRef.current = setTimeout(poll, 1500);
+          if (unresolvedJobIds.length > 0) {
+            setActiveJobIds(unresolvedJobIds);
+            pollingRef.current = setTimeout(poll, POLL_INTERVAL_MS);
             return;
           }
 
           pollingRef.current = null;
           setActiveJobIds([]);
+          pollingFailuresRef.current.clear();
+          terminalJobIdsRef.current.clear();
         } catch {
           pollingRef.current = null;
           setActiveJobIds([]);
+          pollingFailuresRef.current.clear();
+          terminalJobIdsRef.current.clear();
           setItems((current) =>
             current.map((item) =>
               item.status === "converting"
@@ -236,7 +315,7 @@ export function useConversion(
         }
       };
 
-      pollingRef.current = setTimeout(poll, 1000);
+      pollingRef.current = setTimeout(poll, INITIAL_POLL_DELAY_MS);
     } catch (err: unknown) {
       setItems((current) =>
         current.map((item) =>

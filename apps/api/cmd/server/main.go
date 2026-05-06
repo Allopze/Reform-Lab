@@ -38,6 +38,10 @@ func main() {
 	logger := observability.NewLogger(cfg.LogLevel)
 	metrics := observability.NewMetrics()
 
+	if cfg.RedisURL != "" {
+		capabilities.DefaultProber = capabilities.NewDeclaredEngineProber()
+	}
+
 	shutdownTracer, err := observability.InitTracer(context.Background(), "reform-api", "1.0.0")
 	if err != nil {
 		logger.Fatal().Err(err).Msg("init tracer")
@@ -50,7 +54,9 @@ func main() {
 		logger.Warn().Strs("disabled_capabilities", flags.DisabledCapabilities).Strs("disabled_engines", flags.DisabledEngines).Msg("feature flags configured")
 	}
 
-	// Probe runtime engine availability once at startup.
+	// Probe runtime engine availability once at startup unless we are in
+	// production API mode, where capabilities are declared and execution runs in
+	// the worker container.
 	capabilities.DefaultProber.Probe()
 	unavailableEngines := []string{}
 	for engine, ok := range capabilities.DefaultProber.AvailableEngines() {

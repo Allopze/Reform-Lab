@@ -522,6 +522,66 @@ describe("ConversionCard", () => {
     );
   });
 
+  it("keeps polling after a transient job status request failure", async () => {
+    getJobMock
+      .mockRejectedValueOnce(new Error("network blip"))
+      .mockResolvedValueOnce({
+        id: "job-2",
+        fileId: "file-2",
+        capabilityId: "presentation-to-jpg",
+        outputFormat: "jpg",
+        status: "running",
+        progress: 40,
+        createdAt: "2026-04-09T10:00:01Z",
+      })
+      .mockResolvedValueOnce({
+        id: "job-1",
+        fileId: "file-1",
+        capabilityId: "presentation-to-jpg",
+        outputFormat: "jpg",
+        status: "succeeded",
+        progress: 100,
+        artifactId: "artifact-1",
+        artifactFileName: "slides-1.zip",
+        artifactMimeType: "application/zip",
+        artifactSize: 4096,
+        createdAt: "2026-04-09T10:00:01Z",
+      })
+      .mockResolvedValueOnce({
+        id: "job-2",
+        fileId: "file-2",
+        capabilityId: "presentation-to-jpg",
+        outputFormat: "jpg",
+        status: "succeeded",
+        progress: 100,
+        artifactId: "artifact-2",
+        artifactFileName: "slides-2.jpg",
+        artifactMimeType: "image/jpeg",
+        artifactSize: 4096,
+        createdAt: "2026-04-09T10:00:01Z",
+      });
+
+    const user = userEvent.setup();
+    render(
+      <IntlWrapper>
+        <ConversionCard category={getCategoryById("auto")} />
+      </IntlWrapper>,
+    );
+
+    await uploadAndStartConversion(user);
+
+    expect(
+      await screen.findByText(
+        "2 artefactos del lote quedaron listos para descarga individual.",
+        {},
+        { timeout: 5000 },
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Error al consultar el estado de la conversión."),
+    ).not.toBeInTheDocument();
+  });
+
   it("cancels active batch jobs", async () => {
     getJobMock
       .mockResolvedValueOnce({

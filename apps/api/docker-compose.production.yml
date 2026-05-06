@@ -10,6 +10,9 @@
 
 services:
   api:
+    build:
+      args:
+        INCLUDE_CONVERSION_TOOLS: "0"
     environment:
       APP_ENV: "production"
       REDIS_URL: "redis://redis:6379"

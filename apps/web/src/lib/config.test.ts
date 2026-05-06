@@ -34,4 +34,14 @@ describe("resolveApiUrl", () => {
   it("replaces loopback host with current public hostname for single URL", () => {
     expect(resolveApiUrl("http://localhost:8080", "reform.allopze.dev")).toBe("http://reform.allopze.dev:8080");
   });
+
+  it("treats same-origin API path values as an empty origin", () => {
+    expect(resolveApiUrl("/api", "reform.allopze.dev")).toBe("");
+    expect(resolveApiUrl("api", "reform.allopze.dev")).toBe("");
+  });
+
+  it("strips a trailing /api path because callers append the API prefix", () => {
+    expect(resolveApiUrl("https://reform.allopze.dev/api", "reform.allopze.dev")).toBe("https://reform.allopze.dev");
+    expect(resolveApiUrl("http://localhost:8080/api", "localhost")).toBe("http://localhost:8080");
+  });
 });
