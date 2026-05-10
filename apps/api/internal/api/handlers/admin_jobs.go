@@ -115,6 +115,10 @@ func (h *AdminJobsHandler) RetryBatch(w http.ResponseWriter, r *http.Request) {
 				respondError(w, http.StatusTooManyRequests, "too many active jobs for one or more users")
 				return
 			}
+			if errors.Is(retryErr, domain.ErrRetryLimitExceeded) {
+				respondError(w, http.StatusConflict, "retry limit reached for one or more jobs")
+				return
+			}
 			respondError(w, http.StatusConflict, "failed to retry one or more jobs")
 			return
 		}

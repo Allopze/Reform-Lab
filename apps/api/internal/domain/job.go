@@ -30,18 +30,20 @@ func (s JobStatus) IsTerminal() bool {
 
 // Job represents an async work unit for a conversion.
 type Job struct {
-	ID           uuid.UUID  `json:"id"`
-	UserID       *uuid.UUID `json:"userId,omitempty"`
-	FileID       uuid.UUID  `json:"fileId"`
-	CapabilityID string     `json:"capabilityId"`
-	OutputFormat string     `json:"outputFormat"`
-	Status       JobStatus  `json:"status"`
-	Progress     int        `json:"progress"`
-	Error        *string    `json:"error,omitempty"`
-	ArtifactID   *uuid.UUID `json:"artifactId,omitempty"`
-	StartedAt    *time.Time `json:"startedAt,omitempty"`
-	CompletedAt  *time.Time `json:"completedAt,omitempty"`
-	CreatedAt    time.Time  `json:"createdAt"`
+	ID            uuid.UUID  `json:"id"`
+	UserID        *uuid.UUID `json:"userId,omitempty"`
+	FileID        uuid.UUID  `json:"fileId"`
+	SourceJobID   *uuid.UUID `json:"sourceJobId,omitempty"`
+	CapabilityID  string     `json:"capabilityId"`
+	OutputFormat  string     `json:"outputFormat"`
+	AttemptNumber int        `json:"attemptNumber"`
+	Status        JobStatus  `json:"status"`
+	Progress      int        `json:"progress"`
+	Error         *string    `json:"error,omitempty"`
+	ArtifactID    *uuid.UUID `json:"artifactId,omitempty"`
+	StartedAt     *time.Time `json:"startedAt,omitempty"`
+	CompletedAt   *time.Time `json:"completedAt,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
 }
 
 // ValidTransition checks whether moving from current status to next is allowed.

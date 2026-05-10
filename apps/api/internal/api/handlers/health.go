@@ -311,9 +311,15 @@ func (h *DetailedHealthHandler) workerSnapshot(ctx context.Context) map[string]i
 			workers = items
 		}
 	}
+	apiEngineMode := "probed"
+	if normalizedQueueMode(h.QueueMode) == "redis" {
+		apiEngineMode = "declared"
+	}
 	return map[string]interface{}{
-		"count":   len(workers),
-		"workers": workers,
+		"count":                 len(workers),
+		"workers":               workers,
+		"apiEngineMode":         apiEngineMode,
+		"apiEngineAvailability": capabilities.DefaultProber.AvailableEngines(),
 	}
 }
 

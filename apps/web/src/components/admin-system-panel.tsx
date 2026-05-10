@@ -20,6 +20,12 @@ const ALERT_STYLES: Record<string, string> = {
   info: "border-sky-200 bg-sky-50 text-sky-800",
 };
 
+type WorkerEngineDivergence = {
+  workerId: string;
+  missingOnWorker: string[];
+  workerOnly: string[];
+};
+
 function formatBytes(value?: number): string {
   if (typeof value !== "number" || Number.isNaN(value) || value < 0) {
     return "-";
@@ -166,6 +172,28 @@ export default function AdminSystemPanel() {
     () => engines?.capabilities ?? [],
     [engines],
   );
+  const workerEngineDivergences = useMemo<WorkerEngineDivergence[]>(() => {
+    const apiEngines = health?.runtime.workers.apiEngineAvailability ?? {};
+    const apiEngineNames = Object.keys(apiEngines);
+    if (!health || apiEngineNames.length === 0) {
+      return [];
+    }
+    return health.runtime.workers.workers
+      .map((worker) => {
+        const workerEngines = worker.engines ?? {};
+        return {
+          workerId: worker.id,
+          missingOnWorker: apiEngineNames
+            .filter((engine) => apiEngines[engine] && workerEngines[engine] === false)
+            .sort((a, b) => a.localeCompare(b)),
+          workerOnly: Object.entries(workerEngines)
+            .filter(([engine, available]) => available && apiEngines[engine] === false)
+            .map(([engine]) => engine)
+            .sort((a, b) => a.localeCompare(b)),
+        };
+      })
+      .filter((item) => item.missingOnWorker.length > 0 || item.workerOnly.length > 0);
+  }, [health]);
 
   if (loading || (!health && !engines && !error)) {
     return <p className="mt-6 text-sm text-stone-500">{t("loading")}</p>;
@@ -191,6 +219,7 @@ export default function AdminSystemPanel() {
   const alerts = health.alerts ?? [];
   const stalledJobs = typeof queue.stalledJobs === "number" ? queue.stalledJobs : 0;
   const workers = health.runtime.workers;
+  const apiEngineMode = workers.apiEngineMode ?? "unknown";
   const queueHistory = queue.history ?? [];
   const queueControls = queue.controls ?? {};
   const intakePaused = queueControls.jobIntakePaused === true;
@@ -376,6 +405,24 @@ export default function AdminSystemPanel() {
         <div className="rounded-2xl border border-stone-200 bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
           <h2 className="text-base font-semibold text-stone-900">{t("workersTitle")}</h2>
           <p className="mt-2 text-sm text-stone-500">{t("workersSummary", { count: workers.count })}</p>
+          <div className="mt-3 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-600">
+            <p className="font-medium text-stone-800">{t("apiEngineMode", { mode: apiEngineMode })}</p>
+            {workerEngineDivergences.length === 0 ? (
+              <p className="mt-1">{t("engineParityOk")}</p>
+            ) : (
+              <div className="mt-2 space-y-1">
+                {workerEngineDivergences.map((item) => (
+                  <p key={item.workerId} className="text-amber-700">
+                    {t("engineDivergence", {
+                      worker: item.workerId,
+                      missing: item.missingOnWorker.length > 0 ? item.missingOnWorker.join(", ") : "-",
+                      extra: item.workerOnly.length > 0 ? item.workerOnly.join(", ") : "-",
+                    })}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="mt-3 space-y-3">
             {workers.workers.length === 0 ? (
               <p className="text-sm text-stone-500">{t("noWorkers")}</p>
@@ -395,6 +442,24 @@ export default function AdminSystemPanel() {
                     {worker.lastJobId && <p>{t("workerJob", { value: worker.lastJobId.slice(0, 8) })}</p>}
                     {worker.lastError && <p className="text-rose-600">{worker.lastError}</p>}
                   </div>
+                  {worker.engines && Object.keys(worker.engines).length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-1.5 border-t border-stone-200 pt-3">
+                      {Object.entries(worker.engines)
+                        .sort(([a], [b]) => a.localeCompare(b))
+                        .map(([engine, available]) => (
+                          <span
+                            key={engine}
+                            className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                              available
+                                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                : "border-rose-200 bg-rose-50 text-rose-700"
+                            }`}
+                          >
+                            {engine}
+                          </span>
+                        ))}
+                    </div>
+                  )}
                   {worker.recentFailures.length > 0 && (
                     <div className="mt-3 space-y-1 border-t border-stone-200 pt-3 text-xs text-stone-600">
                       {worker.recentFailures.map((failure) => (

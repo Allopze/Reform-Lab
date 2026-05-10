@@ -58,6 +58,13 @@ func TestValidateOutputArtifactValidatesZipOutputs(t *testing.T) {
 		t.Fatalf("expected non-empty zip output to be accepted: %v", err)
 	}
 
+	htmlZip := writeZipValidationFile(t, "html-export.zip", map[string]string{
+		"index.html": "<html><body>ok</body></html>",
+	})
+	if _, err := validateOutputArtifact(htmlZip, "zip", 1024); err != nil {
+		t.Fatalf("expected html package zip output to be accepted: %v", err)
+	}
+
 	emptyZip := writeZipValidationFile(t, "empty.zip", nil)
 	if _, err := validateOutputArtifact(emptyZip, "zip", 1024); err == nil {
 		t.Fatal("expected empty zip output to be rejected")
@@ -118,11 +125,48 @@ func TestValidateOutputArtifactRejectsTruncatedPDF(t *testing.T) {
 	}
 }
 
+func TestValidateOutputArtifactAcceptsPDFWithEOFPastInitialSample(t *testing.T) {
+	data := make([]byte, outputValidationSampleLimit+1024)
+	copy(data, []byte("%PDF-1.7\n"))
+	copy(data[64:], []byte("1 0 obj<<>>endobj\n"))
+	tail := []byte("\nstartxref\n0\n%%EOF\n")
+	copy(data[len(data)-len(tail):], tail)
+	path := writeValidationFile(t, "large-valid.pdf", data)
+
+	if _, err := validateOutputArtifact(path, "pdf", int64(len(data))); err != nil {
+		t.Fatalf("expected PDF with EOF near file tail to be accepted: %v", err)
+	}
+}
+
 func TestValidateOutputArtifactAllowsSmallExtractOutputs(t *testing.T) {
 	path := writeValidationFile(t, "small.txt", []byte("ok text\n"))
 
 	if _, err := validateOutputArtifact(path, "txt", 10*1024*1024, domain.OpExtract); err != nil {
 		t.Fatalf("expected small extraction output to be accepted: %v", err)
+	}
+}
+
+func TestValidateOutputArtifactAllowsSmallPreviewOutputs(t *testing.T) {
+	path := writeValidationFile(t, "preview.png", minimalPNG())
+
+	if _, err := validateOutputArtifact(path, "png", 10*1024*1024, domain.OpPreview); err != nil {
+		t.Fatalf("expected small preview output to be accepted: %v", err)
+	}
+}
+
+func TestValidateOutputArtifactAllowsSmallOptimizeOutputs(t *testing.T) {
+	path := writeValidationFile(t, "optimized.png", minimalPNG())
+
+	if _, err := validateOutputArtifact(path, "png", 10*1024*1024, domain.OpOptimize); err != nil {
+		t.Fatalf("expected small optimized output to be accepted: %v", err)
+	}
+}
+
+func TestValidateOutputArtifactStillRejectsTinyConvertOutputs(t *testing.T) {
+	path := writeValidationFile(t, "converted.png", minimalPNG())
+
+	if _, err := validateOutputArtifact(path, "png", 10*1024*1024, domain.OpConvert); err == nil {
+		t.Fatal("expected tiny convert output to remain suspicious")
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 )
 
 const outputValidationSampleLimit = 128 * 1024
+const pdfEOFValidationTailLimit = 64 * 1024
 const maxZipOutputEntries = 2000
 
 var allowedOutputMIMEs = map[string][]string{
@@ -186,7 +187,7 @@ func validateZipOutput(path string) error {
 	defer reader.Close()
 
 	files := 0
-	validatedImage := false
+	validatedEntry := false
 	for _, file := range reader.File {
 		if err := validateZipEntryName(file.Name); err != nil {
 			return err
@@ -198,11 +199,11 @@ func validateZipOutput(path string) error {
 			return fmt.Errorf("zip output contains empty file %q", file.Name)
 		}
 		files++
-		if !validatedImage {
-			if err := validateZipImageEntry(file); err != nil {
+		if !validatedEntry {
+			if err := validateZipContentEntry(file); err != nil {
 				return err
 			}
-			validatedImage = true
+			validatedEntry = true
 		}
 		if files > maxZipOutputEntries {
 			return fmt.Errorf("zip output contains too many files")
@@ -214,24 +215,24 @@ func validateZipOutput(path string) error {
 	return nil
 }
 
-func validateZipImageEntry(file *zip.File) error {
+func validateZipContentEntry(file *zip.File) error {
 	rc, err := file.Open()
 	if err != nil {
-		return fmt.Errorf("open zip image entry %q: %w", file.Name, err)
+		return fmt.Errorf("open zip entry %q: %w", file.Name, err)
 	}
 	defer rc.Close()
 
 	sample, err := io.ReadAll(io.LimitReader(rc, outputValidationSampleLimit))
 	if err != nil {
-		return fmt.Errorf("read zip image entry %q: %w", file.Name, err)
+		return fmt.Errorf("read zip entry %q: %w", file.Name, err)
 	}
 	detected := mimetype.Detect(sample)
 	mime := normalizeOutputMIME(detected.String())
 	switch mime {
-	case "image/jpeg", "image/png":
+	case "image/jpeg", "image/png", "text/html":
 		return nil
 	default:
-		return fmt.Errorf("zip output contains non-image preview entry %q with MIME %s", file.Name, mime)
+		return fmt.Errorf("zip output contains unsupported preview entry %q with MIME %s", file.Name, mime)
 	}
 }
 
@@ -250,14 +251,18 @@ func validatePDFOutput(path string) error {
 	if err := validateBinaryOutputFormat(path, "pdf"); err != nil {
 		return err
 	}
-	sample, err := readOutputValidationSample(path)
+	headerSample, err := readOutputValidationSample(path)
 	if err != nil {
 		return fmt.Errorf("read pdf output: %w", err)
 	}
-	if !bytes.HasPrefix(sample, []byte("%PDF-")) {
+	if !bytes.HasPrefix(headerSample, []byte("%PDF-")) {
 		return fmt.Errorf("pdf output is missing PDF header")
 	}
-	if !bytes.Contains(sample, []byte("%%EOF")) {
+	tailSample, err := readOutputValidationTail(path, pdfEOFValidationTailLimit)
+	if err != nil {
+		return fmt.Errorf("read pdf output tail: %w", err)
+	}
+	if !bytes.Contains(tailSample, []byte("%%EOF")) {
 		return fmt.Errorf("pdf output is missing EOF marker")
 	}
 	return nil
@@ -295,6 +300,27 @@ func readOutputValidationSample(path string) ([]byte, error) {
 	defer file.Close()
 
 	return io.ReadAll(io.LimitReader(file, outputValidationSampleLimit))
+}
+
+func readOutputValidationTail(path string, limit int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	offset := info.Size() - limit
+	if offset < 0 {
+		offset = 0
+	}
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(io.LimitReader(file, limit))
 }
 
 func normalizeOutputMIME(mime string) string {
@@ -358,7 +384,7 @@ func validateMinimumOutputSize(outputSize int64, expectedFormat string, inputSiz
 
 	if len(operationTypes) > 0 {
 		switch operationTypes[0] {
-		case domain.OpExtract, domain.OpCompress:
+		case domain.OpExtract, domain.OpCompress, domain.OpOptimize, domain.OpPreview:
 			return nil
 		}
 	}

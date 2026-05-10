@@ -97,7 +97,7 @@ func BuildDefaultRegistry() *Registry {
 	registry.Register("doc-to-pdf", &document.ToPDFEngine{})
 	registry.Register("doc-to-txt", &document.ToTxtEngine{})
 	registry.Register("doc-to-docx", &document.ToDocxEngine{})
-	registry.Register("doc-to-html", &document.ToHTMLEngine{})
+	registry.Register("doc-to-html", &document.ToHTMLEngine{PackageCompanions: true})
 	registry.Register("docx-to-markdown", &document.DOCXToMarkdownEngine{})
 	registry.Register("txt-to-pdf", &document.ToPDFEngine{})
 	registry.Register("html-to-pdf", &document.ToPDFEngine{})
@@ -111,7 +111,7 @@ func BuildDefaultRegistry() *Registry {
 	registry.Register("spreadsheet-to-pdf", &document.ToPDFEngine{})
 	registry.Register("spreadsheet-to-csv", &document.ToCSVEngine{})
 	registry.Register("spreadsheet-to-xlsx", &document.ToXLSXEngine{})
-	registry.Register("spreadsheet-to-html", &document.ToHTMLEngine{})
+	registry.Register("spreadsheet-to-html", &document.ToHTMLEngine{PackageCompanions: true})
 
 	audioConvert := &audio.ConvertEngine{}
 	registry.Register("audio-to-mp3", audioConvert)

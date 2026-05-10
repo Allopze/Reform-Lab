@@ -154,6 +154,10 @@ func (h *JobHandler) Retry(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusTooManyRequests, "too many active jobs for this user")
 			return
 		}
+		if errors.Is(err, domain.ErrRetryLimitExceeded) {
+			respondError(w, http.StatusConflict, "retry limit reached for this job")
+			return
+		}
 		respondError(w, http.StatusConflict, "failed to retry job")
 		return
 	}
@@ -191,7 +195,7 @@ func (h *JobHandler) RetryBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requests := make([]orchestrator.BatchRequest, 0, len(jobs))
+	retriedJobs := make([]domain.Job, 0, len(jobs))
 	for _, job := range jobs {
 		if job.Status != domain.JobFailed {
 			respondError(w, http.StatusConflict, "only failed jobs can be retried in batch")
@@ -216,31 +220,30 @@ func (h *JobHandler) RetryBatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		requests = append(requests, orchestrator.BatchRequest{
-			FileID:     job.FileID,
-			Capability: *capability,
-			InputPath:  inputPath,
-		})
-	}
-
-	var retriedJobs []domain.Job
-	var retryErr error
-	if fileOwner == nil && batchGuestSessionID != nil {
-		retriedJobs, retryErr = h.Orchestrator.CreateAndEnqueueBatchForGuest(r.Context(), *batchGuestSessionID, requests)
-	} else {
-		retriedJobs, retryErr = h.Orchestrator.CreateAndEnqueueBatch(r.Context(), fileOwner, requests)
-	}
-	if retryErr != nil {
-		if errors.Is(retryErr, domain.ErrJobIntakePaused) {
-			respondError(w, http.StatusServiceUnavailable, "job intake is temporarily paused by admin")
+		var retried *domain.Job
+		var retryErr error
+		if fileOwner == nil && batchGuestSessionID != nil {
+			retried, retryErr = h.Orchestrator.RetryFailedJobForGuest(r.Context(), *batchGuestSessionID, job, *capability, inputPath, file.Size)
+		} else {
+			retried, retryErr = h.Orchestrator.RetryFailedJob(r.Context(), job, *capability, inputPath, file.Size)
+		}
+		if retryErr != nil {
+			if errors.Is(retryErr, domain.ErrJobIntakePaused) {
+				respondError(w, http.StatusServiceUnavailable, "job intake is temporarily paused by admin")
+				return
+			}
+			if errors.Is(retryErr, domain.ErrTooManyActiveJobs) {
+				respondError(w, http.StatusTooManyRequests, "too many active jobs for this user")
+				return
+			}
+			if errors.Is(retryErr, domain.ErrRetryLimitExceeded) {
+				respondError(w, http.StatusConflict, "retry limit reached for one or more jobs")
+				return
+			}
+			respondError(w, http.StatusConflict, "failed to retry jobs")
 			return
 		}
-		if errors.Is(retryErr, domain.ErrTooManyActiveJobs) {
-			respondError(w, http.StatusTooManyRequests, "too many active jobs for this user")
-			return
-		}
-		respondError(w, http.StatusConflict, "failed to retry jobs")
-		return
+		retriedJobs = append(retriedJobs, *retried)
 	}
 
 	respondJSON(w, http.StatusCreated, map[string]interface{}{"jobs": retriedJobs})

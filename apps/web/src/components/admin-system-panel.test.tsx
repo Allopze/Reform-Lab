@@ -94,6 +94,11 @@ function buildHealthInfo(overrides?: Partial<HealthInfo>): HealthInfo {
       },
       workers: {
         count: 1,
+        apiEngineMode: "declared",
+        apiEngineAvailability: {
+          imagemagick: true,
+          libreoffice: true,
+        },
         workers: [
           {
             id: "worker-1",
@@ -102,6 +107,10 @@ function buildHealthInfo(overrides?: Partial<HealthInfo>): HealthInfo {
             lastHeartbeatAt: "2026-04-16T10:00:00Z",
             lastTaskStatus: "idle",
             lastTaskType: "conversion:image-to-webp",
+            engines: {
+              imagemagick: true,
+              libreoffice: true,
+            },
             recentFailures: [],
           },
         ],
@@ -184,9 +193,72 @@ describe("AdminSystemPanel", () => {
     });
 
     expect(screen.getByText("Cola y workers")).toBeInTheDocument();
+    expect(screen.getByText("Modo de engines API: declared")).toBeInTheDocument();
+    expect(screen.getByText("No se detectan divergencias entre API y workers reportados.")).toBeInTheDocument();
     expect(screen.getByText("Historico")).toBeInTheDocument();
     expect(screen.getByText("Disponibilidad por capability")).toBeInTheDocument();
     expect(screen.getByText("Image to WebP")).toBeInTheDocument();
+  });
+
+  it("surfaces API and worker engine divergences", async () => {
+    vi.mocked(getHealthInfo).mockResolvedValue(
+      buildHealthInfo({
+        runtime: {
+          queue: {
+            mode: "redis",
+            workerConcurrency: 2,
+            queuedJobs: 4,
+            runningJobs: 1,
+            stalledJobs: 0,
+            stalledQueuedJobs: 0,
+            stalledRunningJobs: 0,
+            controls: {
+              jobIntakePaused: false,
+              pauseReason: "",
+              updatedAt: "2026-04-16T10:00:00Z",
+            },
+            history: [],
+          },
+          storage: {
+            status: "up",
+            path: "/tmp/reform-lab",
+            freeBytes: 2_000_000,
+            totalBytes: 4_000_000,
+            usedPercent: 50,
+          },
+          workers: {
+            count: 1,
+            apiEngineMode: "declared",
+            apiEngineAvailability: {
+              ffmpeg: true,
+              libreoffice: true,
+              tesseract: false,
+            },
+            workers: [
+              {
+                id: "worker-1",
+                runtimeMode: "standalone",
+                queueMode: "redis",
+                lastHeartbeatAt: "2026-04-16T10:00:00Z",
+                lastTaskStatus: "idle",
+                engines: {
+                  ffmpeg: true,
+                  libreoffice: false,
+                  tesseract: true,
+                },
+                recentFailures: [],
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("worker-1: faltan en worker [libreoffice], solo worker [tesseract]")).toBeInTheDocument();
+    });
   });
 
   it("validates reason before pausing intake", async () => {

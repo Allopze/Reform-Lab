@@ -7,7 +7,7 @@ import (
 	"github.com/allopze/reform-lab/apps/api/internal/repository"
 )
 
-func StartHeartbeatLoop(ctx context.Context, repo repository.WorkerStatusRepository, workerID, runtimeMode, queueMode string, interval time.Duration) {
+func StartHeartbeatLoop(ctx context.Context, repo repository.WorkerStatusRepository, workerID, runtimeMode, queueMode string, engines map[string]bool, interval time.Duration) {
 	if repo == nil || workerID == "" {
 		return
 	}
@@ -22,6 +22,7 @@ func StartHeartbeatLoop(ctx context.Context, repo repository.WorkerStatusReposit
 			QueueMode:       queueMode,
 			LastHeartbeatAt: now,
 			LastTaskStatus:  "idle",
+			Engines:         engines,
 		})
 	}
 	beat()

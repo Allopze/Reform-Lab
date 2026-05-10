@@ -40,6 +40,18 @@ Este documento define reglas mínimas para:
 8. persistir en storage controlado
 9. registrar evento de auditoría
 
+## Dependencias de inspección en ingestión
+
+La detección no debe confiar en extensiones, y la extracción de metadatos puede necesitar binarios aun antes de resolver capacidades:
+
+- PDF: `pdfinfo`, con timeout, para paginas y proteccion.
+- Audio/video: `ffprobe`, con timeout, para duracion.
+- HEIC/HEIF u otras imagenes que `image.DecodeConfig` no cubre: `ffprobe` como fallback de dimensiones.
+- SVG: parseo acotado del root `<svg>` para dimensiones; no ejecutar SVG.
+- OOXML/ODF: inspeccion ZIP/XML para señales de cifrado o proteccion.
+
+Estos binarios pertenecen al contrato de la API de ingestion, no solo al contrato del worker de conversion.
+
 ---
 
 ## Validaciones mínimas de entrada

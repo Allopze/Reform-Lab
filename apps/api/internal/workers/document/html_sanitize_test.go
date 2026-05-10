@@ -1,6 +1,7 @@
 package document
 
 import (
+	"archive/zip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,5 +184,60 @@ func TestLooksLikeHTMLRejectsPlainText(t *testing.T) {
 
 	if looksLikeHTML(path) {
 		t.Fatal("expected plain text not to be recognized as HTML")
+	}
+}
+
+func TestPackageHTMLWithCompanionsReturnsEmptyWithoutAssets(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "document.html")
+	if err := os.WriteFile(outputPath, []byte("<html><body>ok</body></html>"), 0o600); err != nil {
+		t.Fatalf("write html: %v", err)
+	}
+
+	packagedPath, err := packageHTMLWithCompanions(outputPath, dir, "document")
+	if err != nil {
+		t.Fatalf("package html: %v", err)
+	}
+	if packagedPath != "" {
+		t.Fatalf("expected no package without companion assets, got %q", packagedPath)
+	}
+}
+
+func TestPackageHTMLWithCompanionsIncludesAssets(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "document.html")
+	if err := os.WriteFile(outputPath, []byte("<html><body><img src=\"document_files/image.png\"></body></html>"), 0o600); err != nil {
+		t.Fatalf("write html: %v", err)
+	}
+	assetDir := filepath.Join(dir, "document_files")
+	if err := os.Mkdir(assetDir, 0o700); err != nil {
+		t.Fatalf("mkdir asset dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(assetDir, "image.png"), []byte("image-bytes"), 0o600); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+
+	packagedPath, err := packageHTMLWithCompanions(outputPath, dir, "document")
+	if err != nil {
+		t.Fatalf("package html: %v", err)
+	}
+	if filepath.Base(packagedPath) != "document.zip" {
+		t.Fatalf("expected document.zip, got %q", packagedPath)
+	}
+
+	reader, err := zip.OpenReader(packagedPath)
+	if err != nil {
+		t.Fatalf("open package: %v", err)
+	}
+	defer reader.Close()
+
+	entries := map[string]bool{}
+	for _, file := range reader.File {
+		entries[file.Name] = true
+	}
+	for _, want := range []string{"document.html", "document_files/image.png"} {
+		if !entries[want] {
+			t.Fatalf("expected package entry %q, got %#v", want, entries)
+		}
 	}
 }

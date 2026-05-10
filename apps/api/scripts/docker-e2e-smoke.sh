@@ -373,17 +373,27 @@ PY
 
 create_video_fixture() {
 	local video_path=$1
+	if command -v ffmpeg >/dev/null 2>&1; then
+		ffmpeg -y -hide_banner -loglevel error \
+			-f lavfi -i testsrc=size=160x120:rate=12 \
+			-t 2 \
+			-c:v mpeg4 \
+			-pix_fmt yuv420p \
+			"$video_path"
+		return 0
+	fi
+
 	local container_path="/tmp/reform-lab-smoke-video.mp4"
 	(
 		cd "$API_DIR"
-		docker compose -f docker-compose.yml exec -T api \
+		JWT_SECRET="$JWT_SECRET" docker compose -f docker-compose.yml exec -T api \
 			ffmpeg -y -hide_banner -loglevel error \
 			-f lavfi -i testsrc=size=160x120:rate=12 \
 			-t 2 \
 			-c:v mpeg4 \
 			-pix_fmt yuv420p \
 			"$container_path"
-		docker compose -f docker-compose.yml cp "api:$container_path" "$video_path" >/dev/null
+		JWT_SECRET="$JWT_SECRET" docker compose -f docker-compose.yml cp "api:$container_path" "$video_path" >/dev/null
 	)
 }
 

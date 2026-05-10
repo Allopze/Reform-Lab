@@ -25,6 +25,7 @@ var (
 	ErrPasswordResetTokenInvalid     = errors.New("password reset token invalid")
 	ErrEmailVerificationTokenInvalid = errors.New("email verification token invalid")
 	ErrJobIntakePaused               = errors.New("job intake paused")
+	ErrRetryLimitExceeded            = errors.New("retry limit exceeded")
 	ErrForbidden                     = errors.New("forbidden")
 	ErrArtifactExpired               = errors.New("artifact expired")
 	ErrQuotaExceeded                 = errors.New("quota exceeded")

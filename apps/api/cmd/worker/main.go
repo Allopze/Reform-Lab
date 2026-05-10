@@ -51,6 +51,8 @@ func main() {
 	if len(flags.DisabledCapabilities) > 0 || len(flags.DisabledEngines) > 0 {
 		logger.Warn().Strs("disabled_capabilities", flags.DisabledCapabilities).Strs("disabled_engines", flags.DisabledEngines).Msg("feature flags configured")
 	}
+	capabilities.DefaultProber.Probe()
+	workerEngines := capabilities.DefaultProber.AvailableEngines()
 
 	// SQLite database
 	db, err := database.Open(cfg.DatabasePath)
@@ -159,7 +161,7 @@ func main() {
 	// Graceful shutdown
 	heartbeatCtx, stopHeartbeat := context.WithCancel(context.Background())
 	defer stopHeartbeat()
-	workers.StartHeartbeatLoop(heartbeatCtx, workerStatusRepo, workerID, "standalone", "redis", 10*time.Second)
+	workers.StartHeartbeatLoop(heartbeatCtx, workerStatusRepo, workerID, "standalone", "redis", workerEngines, 10*time.Second)
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

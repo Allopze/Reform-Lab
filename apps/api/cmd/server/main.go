@@ -206,7 +206,7 @@ func main() {
 	defer stopRetention()
 	if workerHandler != nil {
 		workerHandler.Orch = orch
-		workers.StartHeartbeatLoop(retentionCtx, workerStatusRepo, workerID, runtimeMode, queueMode, 10*time.Second)
+		workers.StartHeartbeatLoop(retentionCtx, workerStatusRepo, workerID, runtimeMode, queueMode, capabilities.DefaultProber.AvailableEngines(), 10*time.Second)
 	}
 	retention := orchestrator.NewRetentionService(artifactRepo, jobRepo, logger)
 	go retention.Start(retentionCtx, 15*time.Minute)

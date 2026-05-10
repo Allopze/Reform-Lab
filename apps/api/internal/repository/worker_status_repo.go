@@ -3,7 +3,9 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +31,7 @@ type WorkerStatusSnapshot struct {
 	LastTaskStartedAt  *time.Time      `json:"lastTaskStartedAt,omitempty"`
 	LastTaskFinishedAt *time.Time      `json:"lastTaskFinishedAt,omitempty"`
 	LastError          *string         `json:"lastError,omitempty"`
+	Engines            map[string]bool `json:"engines"`
 	RecentFailures     []WorkerFailure `json:"recentFailures"`
 }
 
@@ -49,15 +52,23 @@ func NewWorkerStatusRepository(db *sql.DB) WorkerStatusRepository {
 }
 
 func (r *sqliteWorkerStatusRepo) Heartbeat(ctx context.Context, snapshot WorkerStatusSnapshot) error {
-	_, err := r.db.ExecContext(ctx,
+	if snapshot.Engines == nil {
+		snapshot.Engines = map[string]bool{}
+	}
+	enginesJSON, err := json.Marshal(snapshot.Engines)
+	if err != nil {
+		return fmt.Errorf("marshal worker engines: %w", err)
+	}
+	_, err = r.db.ExecContext(ctx,
 		`INSERT INTO worker_status (
 			id, runtime_mode, queue_mode, last_heartbeat_at, last_task_type, last_job_id,
-			last_task_status, last_task_started_at, last_task_finished_at, last_error, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			last_task_status, last_task_started_at, last_task_finished_at, last_error, engines_json, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			runtime_mode = excluded.runtime_mode,
 			queue_mode = excluded.queue_mode,
 			last_heartbeat_at = excluded.last_heartbeat_at,
+			engines_json = excluded.engines_json,
 			updated_at = excluded.updated_at`,
 		snapshot.ID,
 		snapshot.RuntimeMode,
@@ -69,6 +80,7 @@ func (r *sqliteWorkerStatusRepo) Heartbeat(ctx context.Context, snapshot WorkerS
 		fmtTimePtr(snapshot.LastTaskStartedAt),
 		fmtTimePtr(snapshot.LastTaskFinishedAt),
 		nullableString(snapshot.LastError),
+		string(enginesJSON),
 		snapshot.LastHeartbeatAt.Format(timeLayout),
 	)
 	if err != nil {
@@ -160,7 +172,7 @@ func (r *sqliteWorkerStatusRepo) List(ctx context.Context, recentFailuresPerWork
 	}
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, runtime_mode, queue_mode, last_heartbeat_at, last_task_type, last_job_id,
-		        last_task_status, last_task_started_at, last_task_finished_at, last_error
+		        last_task_status, last_task_started_at, last_task_finished_at, last_error, engines_json
 		 FROM worker_status
 		 ORDER BY updated_at DESC, id ASC`,
 	)
@@ -174,6 +186,7 @@ func (r *sqliteWorkerStatusRepo) List(ctx context.Context, recentFailuresPerWork
 		var item WorkerStatusSnapshot
 		var heartbeatAt string
 		var lastTaskType, lastJobID, lastTaskStartedAt, lastTaskFinishedAt, lastError sql.NullString
+		var enginesRaw string
 		if err := rows.Scan(
 			&item.ID,
 			&item.RuntimeMode,
@@ -185,6 +198,7 @@ func (r *sqliteWorkerStatusRepo) List(ctx context.Context, recentFailuresPerWork
 			&lastTaskStartedAt,
 			&lastTaskFinishedAt,
 			&lastError,
+			&enginesRaw,
 		); err != nil {
 			return nil, fmt.Errorf("scan worker status: %w", err)
 		}
@@ -207,6 +221,10 @@ func (r *sqliteWorkerStatusRepo) List(ctx context.Context, recentFailuresPerWork
 		}
 		if lastError.Valid {
 			item.LastError = &lastError.String
+		}
+		item.Engines = map[string]bool{}
+		if strings.TrimSpace(enginesRaw) != "" {
+			_ = json.Unmarshal([]byte(enginesRaw), &item.Engines)
 		}
 		workers = append(workers, item)
 	}

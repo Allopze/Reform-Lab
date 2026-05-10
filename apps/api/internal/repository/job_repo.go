@@ -89,10 +89,10 @@ func NewJobRepository(db *sql.DB) JobRepository {
 
 func (r *sqliteJobRepo) Create(ctx context.Context, j *domain.Job) error {
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO jobs (id, user_id, file_id, capability_id, output_format, status, progress, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		j.ID.String(), nullableUUIDString(j.UserID), j.FileID.String(), j.CapabilityID, j.OutputFormat,
-		string(j.Status), j.Progress, j.CreatedAt.Format(timeLayout),
+		`INSERT INTO jobs (id, user_id, file_id, source_job_id, capability_id, output_format, attempt_number, status, progress, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		j.ID.String(), nullableUUIDString(j.UserID), j.FileID.String(), nullableUUIDString(j.SourceJobID),
+		j.CapabilityID, j.OutputFormat, j.AttemptNumber, string(j.Status), j.Progress, j.CreatedAt.Format(timeLayout),
 	)
 	return err
 }
@@ -160,10 +160,10 @@ func (r *sqliteJobRepo) createManyIfUnderLimit(ctx context.Context, jobs []*doma
 
 	for _, job := range jobs {
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO jobs (id, user_id, file_id, capability_id, output_format, status, progress, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			job.ID.String(), nullableUUIDString(job.UserID), job.FileID.String(), job.CapabilityID, job.OutputFormat,
-			string(job.Status), job.Progress, job.CreatedAt.Format(timeLayout),
+			`INSERT INTO jobs (id, user_id, file_id, source_job_id, capability_id, output_format, attempt_number, status, progress, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			job.ID.String(), nullableUUIDString(job.UserID), job.FileID.String(), nullableUUIDString(job.SourceJobID),
+			job.CapabilityID, job.OutputFormat, job.AttemptNumber, string(job.Status), job.Progress, job.CreatedAt.Format(timeLayout),
 		)
 		if err != nil {
 			return fmt.Errorf("insert job: %w", err)
@@ -176,14 +176,15 @@ func (r *sqliteJobRepo) createManyIfUnderLimit(ctx context.Context, jobs []*doma
 func (r *sqliteJobRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Job, error) {
 	var j domain.Job
 	var status, idStr, fileIDStr, createdAt string
-	var userIDStr *string
+	var userIDStr, sourceJobIDStr *string
 	var errMsg, artifactIDStr, startedAt, completedAt *string
 
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, user_id, file_id, capability_id, output_format, status, progress, error, artifact_id, started_at, completed_at, created_at
+		`SELECT id, user_id, file_id, source_job_id, capability_id, output_format, attempt_number,
+		        status, progress, error, artifact_id, started_at, completed_at, created_at
 		 FROM jobs WHERE id = ?`, id.String(),
 	).Scan(
-		&idStr, &userIDStr, &fileIDStr, &j.CapabilityID, &j.OutputFormat,
+		&idStr, &userIDStr, &fileIDStr, &sourceJobIDStr, &j.CapabilityID, &j.OutputFormat, &j.AttemptNumber,
 		&status, &j.Progress, &errMsg, &artifactIDStr,
 		&startedAt, &completedAt, &createdAt,
 	)
@@ -199,6 +200,12 @@ func (r *sqliteJobRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Job,
 		}
 	}
 	j.FileID, _ = uuid.Parse(fileIDStr)
+	if sourceJobIDStr != nil && *sourceJobIDStr != "" {
+		sourceID, parseErr := uuid.Parse(*sourceJobIDStr)
+		if parseErr == nil {
+			j.SourceJobID = &sourceID
+		}
+	}
 	j.Status = domain.JobStatus(status)
 	j.Error = errMsg
 	if artifactIDStr != nil && *artifactIDStr != "" {

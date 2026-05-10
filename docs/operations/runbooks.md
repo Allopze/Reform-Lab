@@ -26,7 +26,8 @@ Es una guía para actuar sin improvisar.
 ## Smoke de runtime
 
 - existe un smoke reproducible en `apps/api/scripts/docker-e2e-smoke.sh`
-- el smoke valida familias críticas contra la stack real de Docker Compose:
+- existe un smoke local contra una API ya levantada en `apps/api/scripts/conversion-smoke.sh`
+- el smoke Docker valida familias críticas contra la stack real de Docker Compose:
   - `PDF -> TXT`
   - `PNG -> WebP`
   - `WAV -> MP3`
@@ -39,6 +40,20 @@ Es una guía para actuar sin improvisar.
 - el script espera `/api/health`, crea usuarios aislados por escenario y evita confundir cuotas anti-abuso con fallos funcionales
 - los fixtures simples de PDF, PNG, WAV, MP4 y DOCX se generan en runtime para no guardar binarios pesados o frágiles en el repo
 - usar un `JWT_SECRET` válido y suficientemente largo al ejecutarlo fuera de un entorno ya configurado
+
+Uso local contra una API ya disponible:
+
+```bash
+BASE_URL=http://127.0.0.1:4040 apps/api/scripts/conversion-smoke.sh
+```
+
+El smoke local:
+
+- no levanta ni destruye Docker
+- genera fixtures pequeños en un directorio temporal
+- usa fixtures versionados para HEIF, PPTX y XLSX cuando existen
+- marca `SKIP` si el runtime no acepta el upload o no ofrece una capability
+- falla si una conversion ofrecida termina en estado terminal distinto de `succeeded`
 
 ## Despliegue: Docker Compose en servidor
 
@@ -78,11 +93,26 @@ Es una guía para actuar sin improvisar.
 ### Contrato de engines API/worker
 
 - La API resuelve `Capability` consultando la disponibilidad local de engines en su propio proceso.
-- En despliegues con worker standalone, API y worker deben construirse con el mismo set efectivo de binarios y `PATH` compatible.
+- En modo in-process, la API reporta engines probados porque el worker vive en el mismo proceso.
+- En despliegues con worker standalone y Redis, la API puede usar engines declarados para no depender de binarios pesados en el contenedor API; el worker reporta su disponibilidad efectiva en `/api/admin/health`.
+- Revisar `runtime.workers.apiEngineMode`: `probed` significa que la API verifico binarios locales; `declared` significa que la API esta declarando capacidades y la ejecucion real depende del worker.
+- Revisar `runtime.workers.workers[].engines` para confirmar el set efectivo de engines visto por cada worker.
 - Si falta un engine en la API, la UI puede ocultar una capacidad aunque el worker pudiera ejecutarla.
 - Si falta un engine en el worker, la API puede mostrar una capacidad que luego fallará en ejecución.
 - Tras cada despliegue, revisar `/api/admin/engines` y al menos un smoke de conversión real para las familias críticas del entorno.
 - Si se decide separar runtimes livianos/pesados, cambiar antes el modelo de disponibilidad para que provenga de configuración explícita o health reportado por workers.
+
+### Binarios de ingestion
+
+La API no solo necesita binarios para conversiones. Algunas familias dependen de herramientas de inspeccion durante la subida:
+
+- PDF: `pdfinfo` para paginas y proteccion.
+- Audio/video: `ffprobe` para duracion.
+- Imagenes no cubiertas por decoders Go, como HEIC/HEIF: `ffprobe` como fallback de dimensiones.
+- SVG: lectura segura del root `<svg>` sin ejecutar el archivo; no requiere binario para metadata basica.
+- OOXML/ODF: inspeccion ZIP/XML para detectar proteccion; no requiere LibreOffice en ingestion.
+
+Si el contenedor API se deja "liviano", validar que esos binarios de ingestion sigan presentes para las familias que se quieran aceptar.
 
 ### Advertencia conocida: Sentry/OpenTelemetry en build web
 

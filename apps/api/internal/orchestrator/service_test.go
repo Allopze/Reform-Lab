@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -148,6 +149,105 @@ func TestCreateAndEnqueueDisablesQueueAutoRetries(t *testing.T) {
 	}
 	if q.opts[0].Timeout != time.Minute {
 		t.Fatalf("expected timeout from capability, got %s", q.opts[0].Timeout)
+	}
+}
+
+func TestRetryFailedJobPersistsAttemptLineage(t *testing.T) {
+	svc, jobs := newTestOrchestrator(t)
+	ctx := context.Background()
+
+	cap := domain.Capability{
+		ID:            "pdf-to-txt",
+		TargetFormat:  "txt",
+		SourceFormats: []string{"application/pdf"},
+		Engine:        "poppler",
+		ExecutionLimits: domain.ExecutionLimits{
+			TimeoutSeconds: 60,
+			MaxRetries:     1,
+		},
+	}
+
+	userID := uuid.New()
+	job, err := svc.CreateAndEnqueue(ctx, &userID, uuid.New(), cap, "/tmp/fake.pdf", 1024)
+	if err != nil {
+		t.Fatalf("CreateAndEnqueue: %v", err)
+	}
+	if err := svc.MarkRunning(ctx, job.ID); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if err := svc.MarkFailed(ctx, job.ID, "engine crashed"); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+
+	sourceJob, err := jobs.GetByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetByID source job: %v", err)
+	}
+	retryJob, err := svc.RetryFailedJob(ctx, sourceJob, cap, "/tmp/fake.pdf", 1024)
+	if err != nil {
+		t.Fatalf("RetryFailedJob: %v", err)
+	}
+
+	persistedRetry, err := jobs.GetByID(ctx, retryJob.ID)
+	if err != nil {
+		t.Fatalf("GetByID retry job: %v", err)
+	}
+	if persistedRetry.SourceJobID == nil || *persistedRetry.SourceJobID != job.ID {
+		t.Fatalf("expected source job %s, got %v", job.ID, persistedRetry.SourceJobID)
+	}
+	if persistedRetry.AttemptNumber != 1 {
+		t.Fatalf("expected attempt number 1, got %d", persistedRetry.AttemptNumber)
+	}
+}
+
+func TestRetryFailedJobRejectsWhenMaxRetriesReached(t *testing.T) {
+	svc, jobs := newTestOrchestrator(t)
+	ctx := context.Background()
+
+	cap := domain.Capability{
+		ID:            "pdf-to-txt",
+		TargetFormat:  "txt",
+		SourceFormats: []string{"application/pdf"},
+		Engine:        "poppler",
+		ExecutionLimits: domain.ExecutionLimits{
+			TimeoutSeconds: 60,
+			MaxRetries:     1,
+		},
+	}
+
+	userID := uuid.New()
+	job, err := svc.CreateAndEnqueue(ctx, &userID, uuid.New(), cap, "/tmp/fake.pdf", 1024)
+	if err != nil {
+		t.Fatalf("CreateAndEnqueue: %v", err)
+	}
+	if err := svc.MarkRunning(ctx, job.ID); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if err := svc.MarkFailed(ctx, job.ID, "engine crashed"); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+
+	sourceJob, err := jobs.GetByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetByID source job: %v", err)
+	}
+	retryJob, err := svc.RetryFailedJob(ctx, sourceJob, cap, "/tmp/fake.pdf", 1024)
+	if err != nil {
+		t.Fatalf("first retry should be accepted: %v", err)
+	}
+	if err := svc.MarkRunning(ctx, retryJob.ID); err != nil {
+		t.Fatalf("mark retry running: %v", err)
+	}
+	if err := svc.MarkFailed(ctx, retryJob.ID, "engine crashed again"); err != nil {
+		t.Fatalf("mark retry failed: %v", err)
+	}
+
+	failedRetry, err := jobs.GetByID(ctx, retryJob.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed retry: %v", err)
+	}
+	if _, err := svc.RetryFailedJob(ctx, failedRetry, cap, "/tmp/fake.pdf", 1024); !errors.Is(err, domain.ErrRetryLimitExceeded) {
+		t.Fatalf("expected ErrRetryLimitExceeded, got %v", err)
 	}
 }
 

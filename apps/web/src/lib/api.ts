@@ -859,6 +859,8 @@ export interface HealthInfo {
     };
     workers: {
       count: number;
+      apiEngineMode?: "probed" | "declared" | string;
+      apiEngineAvailability?: Record<string, boolean>;
       workers: Array<{
         id: string;
         runtimeMode: string;
@@ -870,6 +872,7 @@ export interface HealthInfo {
         lastTaskStartedAt?: string;
         lastTaskFinishedAt?: string;
         lastError?: string;
+        engines?: Record<string, boolean>;
         recentFailures: Array<{
           id: string;
           workerId: string;

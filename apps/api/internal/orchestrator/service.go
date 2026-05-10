@@ -117,6 +117,10 @@ func (s *Service) CreateAndEnqueueForGuest(ctx context.Context, guestSessionID u
 }
 
 func (s *Service) createAndEnqueue(ctx context.Context, userID *uuid.UUID, guestSessionID *uuid.UUID, fileID uuid.UUID, cap domain.Capability, inputPath string, inputSize int64) (*domain.Job, error) {
+	return s.createAndEnqueueWithAttempt(ctx, userID, guestSessionID, fileID, cap, inputPath, inputSize, nil, 0)
+}
+
+func (s *Service) createAndEnqueueWithAttempt(ctx context.Context, userID *uuid.UUID, guestSessionID *uuid.UUID, fileID uuid.UUID, cap domain.Capability, inputPath string, inputSize int64, sourceJobID *uuid.UUID, attemptNumber int) (*domain.Job, error) {
 	if s.runtimeControls != nil {
 		state, err := s.runtimeControls.Get(ctx)
 		if err != nil {
@@ -129,14 +133,16 @@ func (s *Service) createAndEnqueue(ctx context.Context, userID *uuid.UUID, guest
 
 	now := time.Now().UTC()
 	job := domain.Job{
-		ID:           uuid.New(),
-		UserID:       userID,
-		FileID:       fileID,
-		CapabilityID: cap.ID,
-		OutputFormat: cap.TargetFormat,
-		Status:       domain.JobQueued,
-		Progress:     0,
-		CreatedAt:    now,
+		ID:            uuid.New(),
+		UserID:        userID,
+		FileID:        fileID,
+		SourceJobID:   sourceJobID,
+		CapabilityID:  cap.ID,
+		OutputFormat:  cap.TargetFormat,
+		AttemptNumber: attemptNumber,
+		Status:        domain.JobQueued,
+		Progress:      0,
+		CreatedAt:     now,
 	}
 
 	// Atomically check the active job limit and create the job in a single transaction.
@@ -351,13 +357,22 @@ func (s *Service) retryFailedJob(ctx context.Context, sourceJob *domain.Job, gue
 	if sourceJob.Status != domain.JobFailed {
 		return nil, fmt.Errorf("%w: retry only allowed for failed jobs", domain.ErrInvalidTransition)
 	}
+	if sourceJob.AttemptNumber >= cap.ExecutionLimits.MaxRetries {
+		return nil, fmt.Errorf("%w: retry attempt %d reached max retries %d", domain.ErrRetryLimitExceeded, sourceJob.AttemptNumber, cap.ExecutionLimits.MaxRetries)
+	}
+
+	sourceJobID := sourceJob.ID
+	if sourceJob.SourceJobID != nil {
+		sourceJobID = *sourceJob.SourceJobID
+	}
+	attemptNumber := sourceJob.AttemptNumber + 1
 
 	var retryJob *domain.Job
 	var err error
 	if guestSessionID != nil {
-		retryJob, err = s.CreateAndEnqueueForGuest(ctx, *guestSessionID, sourceJob.FileID, cap, inputPath, inputSize)
+		retryJob, err = s.createAndEnqueueWithAttempt(ctx, nil, guestSessionID, sourceJob.FileID, cap, inputPath, inputSize, &sourceJobID, attemptNumber)
 	} else {
-		retryJob, err = s.CreateAndEnqueue(ctx, sourceJob.UserID, sourceJob.FileID, cap, inputPath, inputSize)
+		retryJob, err = s.createAndEnqueueWithAttempt(ctx, sourceJob.UserID, nil, sourceJob.FileID, cap, inputPath, inputSize, &sourceJobID, attemptNumber)
 	}
 	if err != nil {
 		return nil, err
@@ -369,8 +384,11 @@ func (s *Service) retryFailedJob(ctx context.Context, sourceJob *domain.Job, gue
 		FileID:    &sourceJob.FileID,
 		JobID:     &retryJob.ID,
 		Details: map[string]interface{}{
-			"sourceJobId":  sourceJob.ID.String(),
-			"capabilityId": sourceJob.CapabilityID,
+			"sourceJobId":     sourceJob.ID.String(),
+			"rootSourceJobId": sourceJobID.String(),
+			"attemptNumber":   attemptNumber,
+			"maxRetries":      cap.ExecutionLimits.MaxRetries,
+			"capabilityId":    sourceJob.CapabilityID,
 		},
 		CreatedAt: time.Now().UTC(),
 	})
