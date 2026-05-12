@@ -11,7 +11,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/server ./cmd/server
 
 # --- Runtime stage ---
-FROM python:3.12-slim-bookworm
+FROM python:3.14-slim-bookworm
 
 ARG INCLUDE_CONVERSION_TOOLS=1
 
